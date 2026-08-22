@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-auto-upload"
+version = "1.0.0"
+description = "Safe, resumable Telegram file uploader for Windows and Linux"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6>=6.7,<7",
+  "Telethon>=1.36,<2",
+  "PyYAML>=6.0,<7",
+]
+
+[project.scripts]
+telegram-auto-upload = "app.main:main"
+telegram-auto-upload-cli = "uploader:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

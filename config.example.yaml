@@ -1,0 +1,31 @@
+telegram:
+  api_id: 123456
+  api_hash: "YOUR_API_HASH"
+  # phone is optional; Telethon may still ask interactively on first login
+  phone: "<YOUR_PHONE_NUMBER>"
+  # Temporary safe target for first test: your Saved Messages.
+  # Later change this to your private channel username or numeric channel ID.
+  target: "me"
+  session_path: "data/telethon_user"
+
+upload:
+  source_dir: "./uploads"
+  allowed_extensions: [] # empty means all files
+  max_file_size_mb: 0 # 0 means no size limit
+  sleep_min_seconds: 60
+  sleep_max_seconds: 90
+  max_files_per_run: 3
+  max_files_per_day: 100
+  retry_attempts: 5
+  backoff_base_seconds: 10
+  floodwait_buffer_seconds: 5
+  caption_template: "{name}"
+  # document = file attachment, media = Telegram photo/video, auto = Telethon default
+  send_mode: "document"
+
+state:
+  db_path: "data/state.db"
+
+logging:
+  log_path: "logs/uploader.log"
+  level: "INFO"

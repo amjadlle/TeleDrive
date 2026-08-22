@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+dist-installer/
+*.spec
+.test-appdata/
+.venv/
+venv/
+data/
+auth/
+config.yaml
+*.session
+*.session-journal
+*.log
