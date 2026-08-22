@@ -113,6 +113,45 @@ a Linux executable from Windows.
 6. Save settings and scan the folder.
 7. Run one upload batch.
 
+## Recommended settings
+
+For a steady, conservative personal backup, start with:
+
+| Setting | Recommended value | Meaning |
+| --- | ---: | --- |
+| Files per run | `20` | Maximum files uploaded in one batch. |
+| Files per day | `500` | Daily upload cap across all batches. |
+| Delay between uploads (minimum) | `20 sec` | Shortest wait after a successful upload. |
+| Delay between uploads (maximum) | `60 sec` | Longest wait after a successful upload; TeleDrive chooses a random wait in this range. |
+| Delay between automatic runs | `60 min` | Wait between batches when automatic loop mode is enabled. |
+| Retry attempts per file | `3` | Total attempts for a file after temporary errors, including the first attempt. |
+| Retry backoff base | `30 sec` | Starting retry delay; later retries increase to 60, 120 seconds, and so on. |
+| Flood-wait buffer | `30 sec` | Extra time added when Telegram tells TeleDrive to wait. |
+| Send files as | `Document` | Keeps files as file attachments rather than converting media. |
+
+These values are a conservative starting point for a private personal archive. Telegram
+limits are dynamic, so no configuration can guarantee that an account will never receive
+a flood wait or other restriction. If Telegram reports a `FLOOD_WAIT`, let TeleDrive
+finish the server-requested wait instead of restarting repeatedly or running multiple
+copies of the app.
+
+### How the timing settings work
+
+- **Delay between uploads:** After each successful file, TeleDrive waits a random time
+  between the minimum and maximum values before continuing.
+- **Delay between automatic runs:** A batch starts immediately when the loop is enabled;
+  this value controls the wait before the next batch begins.
+- **Retry attempts per file:** Temporary network or Telegram errors trigger retries. A
+  file is not uploaded repeatedly when it succeeds.
+- **Retry backoff base:** Failed retries wait progressively longer: with a 30-second base,
+  the delays are 30, 60, and 120 seconds.
+- **Flood-wait buffer:** If Telegram returns `FLOOD_WAIT_60` and the buffer is 30 seconds,
+  TeleDrive waits 90 seconds before continuing.
+
+For the safest operation, upload only to your own private channel or Saved Messages,
+keep one TeleDrive process running, and avoid using the same account for bulk messaging
+while a backup is active.
+
 The first login requests the Telegram code and, if enabled, the two-step verification
 password. The session is stored locally and reused on later runs.
 
