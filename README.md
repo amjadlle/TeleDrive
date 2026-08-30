@@ -72,18 +72,16 @@ wizard.
 
 ### Quick install on Linux
 
-Open a terminal and paste:
+Close TeleDrive first, then open a terminal and paste:
 
 ```bash
-curl -fL --progress-bar -o /tmp/TeleDrive-linux-x86_64.tar.gz \
-  "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.5/TeleDrive-linux-x86_64.tar.gz" && \
-mkdir -p "$HOME/TeleDrive" && \
-tar -xzf /tmp/TeleDrive-linux-x86_64.tar.gz -C "$HOME/TeleDrive" && \
-"$HOME/TeleDrive/TeleDrive/TeleDrive"
+pkill -x TeleDrive 2>/dev/null || true; curl -fL --progress-bar -o /tmp/TeleDrive.tar.gz "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.5/TeleDrive-linux-x86_64.tar.gz" && tar -xzf /tmp/TeleDrive.tar.gz -C "$HOME" && "$HOME/TeleDrive/TeleDrive"
 ```
 
-This downloads the Linux package, extracts it to `~/TeleDrive`, and launches
-TeleDrive.
+This works for both a fresh installation and an update. It closes a running
+TeleDrive process, downloads the Linux package, extracts it to `~/TeleDrive`,
+and launches the new version. Stop any active upload before running it. Your
+settings, login, queue, and history remain in `~/.local/share/Telegram Auto Upload`.
 
 These commands are platform-specific: Windows uses the `.exe` installer, while
 Linux uses the `.tar.gz` archive.
