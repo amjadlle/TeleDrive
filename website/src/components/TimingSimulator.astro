@@ -28,7 +28,7 @@
               <span class="slider-val" id="val-batch">20 files</span>
             </div>
             <input type="range" id="input-batch" min="5" max="100" step="5" value="20" class="sim-slider" />
-            <div class="slider-hint">Conservative starting point for batches</div>
+            <div class="slider-hint">Conservative starting point: 10–25 files/run</div>
           </div>
 
           <div class="slider-group">
@@ -56,6 +56,10 @@
             <div class="safety-indicator">
               <span class="safety-badge" id="safety-badge">🛡️ High Safety</span>
               <span class="safety-rating" id="safety-rating">98 / 100</span>
+            </div>
+            <!-- Visual Meter Bar -->
+            <div class="meter-track">
+              <div class="meter-fill" id="meter-fill" style="width: 98%;"></div>
             </div>
             <p class="safety-desc" id="safety-desc">
               Excellent. Natural upload jitter prevents Telegram flood-waits and protects your session.
@@ -247,7 +251,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
   }
 
   .safety-badge {
@@ -261,6 +265,30 @@
     font-weight: 800;
     font-size: 1.15rem;
     color: #34d399;
+  }
+
+  .meter-track {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 0.75rem;
+  }
+
+  .meter-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #10b981, #34d399);
+    border-radius: 3px;
+    transition: width 0.3s ease, background 0.3s ease;
+  }
+
+  .safety-score-card.moderate .meter-fill {
+    background: linear-gradient(90deg, #f59e0b, #fbbf24);
+  }
+
+  .safety-score-card.aggressive .meter-fill {
+    background: linear-gradient(90deg, #ef4444, #f87171);
   }
 
   .safety-score-card.moderate .safety-badge,
@@ -340,6 +368,7 @@
   const safetyBadge = document.getElementById('safety-badge');
   const safetyRating = document.getElementById('safety-rating');
   const safetyDesc = document.getElementById('safety-desc');
+  const meterFill = document.getElementById('meter-fill');
 
   const presetBtns = document.querySelectorAll('.preset-btn');
 
@@ -365,8 +394,6 @@
 
     // Safety scoring
     let score = 100;
-    let risk = "Low Risk";
-
     if (delay < 15) score -= 40;
     else if (delay < 25) score -= 20;
 
@@ -376,6 +403,10 @@
     if (loop < 30) score -= 15;
 
     score = Math.max(20, Math.min(100, score));
+
+    if (meterFill) {
+      meterFill.style.width = `${score}%`;
+    }
 
     if (safetyCard && safetyBadge && safetyRating && safetyDesc && resFloodRisk) {
       safetyCard.classList.remove('moderate', 'aggressive');
