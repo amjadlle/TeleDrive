@@ -1,0 +1,435 @@
+---
+---
+
+<section class="simulator-section" id="simulator">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-tag">Interactive Calculator</span>
+      <h2 class="section-title">Timing & Safety Simulator</h2>
+      <p class="section-desc">
+        Calculate your backup throughput and simulate Telegram rate-limit safety scores before running your first batch.
+      </p>
+    </div>
+
+    <div class="simulator-box glass-card">
+      <div class="sim-presets-bar">
+        <span class="preset-label">Quick Presets:</span>
+        <button class="preset-btn active" data-preset="conservative">🛡️ Conservative (Recommended)</button>
+        <button class="preset-btn" data-preset="balanced">⚡ Balanced Sync</button>
+        <button class="preset-btn" data-preset="rapid">🚀 Rapid Archive</button>
+      </div>
+
+      <div class="sim-layout">
+        <!-- Controls Column -->
+        <div class="sim-controls">
+          <div class="slider-group">
+            <div class="slider-header">
+              <label for="input-batch" class="slider-label">Files per batch</label>
+              <span class="slider-val" id="val-batch">20 files</span>
+            </div>
+            <input type="range" id="input-batch" min="5" max="100" step="5" value="20" class="sim-slider" />
+            <div class="slider-hint">Conservative starting point for batches</div>
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-header">
+              <label for="input-delay" class="slider-label">Average delay between files</label>
+              <span class="slider-val" id="val-delay">40 sec</span>
+            </div>
+            <input type="range" id="input-delay" min="5" max="120" step="5" value="40" class="sim-slider" />
+            <div class="slider-hint">Randomized jitter window (20–60s)</div>
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-header">
+              <label for="input-loop" class="slider-label">Loop interval between runs</label>
+              <span class="slider-val" id="val-loop">60 min</span>
+            </div>
+            <input type="range" id="input-loop" min="15" max="240" step="15" value="60" class="sim-slider" />
+            <div class="slider-hint">Wait time before TeleDrive begins the next batch</div>
+          </div>
+        </div>
+
+        <!-- Dynamic Results Card -->
+        <div class="sim-results glass-card">
+          <div class="safety-score-card" id="safety-card">
+            <div class="safety-indicator">
+              <span class="safety-badge" id="safety-badge">🛡️ High Safety</span>
+              <span class="safety-rating" id="safety-rating">98 / 100</span>
+            </div>
+            <p class="safety-desc" id="safety-desc">
+              Excellent. Natural upload jitter prevents Telegram flood-waits and protects your session.
+            </p>
+          </div>
+
+          <div class="sim-metrics-grid">
+            <div class="metric-item">
+              <div class="metric-num" id="res-batch-time">~13 mins</div>
+              <div class="metric-sub">Single Batch Duration</div>
+            </div>
+
+            <div class="metric-item">
+              <div class="metric-num" id="res-daily-cap">~390 files</div>
+              <div class="metric-sub">Daily 24h Capacity</div>
+            </div>
+
+            <div class="metric-item">
+              <div class="metric-num" id="res-hourly-rate">~16 files/hr</div>
+              <div class="metric-sub">Sustained Pace</div>
+            </div>
+
+            <div class="metric-item">
+              <div class="metric-num" id="res-flood-risk">Low Risk</div>
+              <div class="metric-sub">Flood-Wait Probability</div>
+            </div>
+          </div>
+
+          <div class="safety-tip">
+            💡 <strong>TeleDrive Tip:</strong> Uploading directly to <em>Saved Messages</em> has the highest rate tolerance compared to public groups.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .simulator-section {
+    padding: 6rem 0;
+    position: relative;
+  }
+
+  .simulator-box {
+    padding: 2.5rem;
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-xl);
+    background: rgba(10, 14, 23, 0.85);
+  }
+
+  .sim-presets-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    margin-bottom: 2.5rem;
+    flex-wrap: wrap;
+  }
+
+  .preset-label {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+
+  .preset-btn {
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-md);
+    background: var(--bg-surface-raised);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
+    font-family: var(--font-sans);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .preset-btn:hover {
+    border-color: var(--accent-primary);
+    background: var(--bg-surface-hover);
+  }
+
+  .preset-btn.active {
+    background: rgba(36, 161, 222, 0.2);
+    border-color: var(--accent-primary);
+    color: #ffffff;
+    box-shadow: 0 0 15px rgba(36, 161, 222, 0.3);
+  }
+
+  .sim-layout {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 2.5rem;
+    align-items: center;
+  }
+
+  .sim-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .slider-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .slider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .slider-label {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--text-main);
+  }
+
+  .slider-val {
+    font-family: var(--font-mono);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.1);
+    padding: 0.2rem 0.6rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+  }
+
+  .sim-slider {
+    width: 100%;
+    -webkit-appearance: none;
+    height: 8px;
+    border-radius: 4px;
+    background: #1e293b;
+    outline: none;
+    cursor: pointer;
+  }
+
+  .sim-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    box-shadow: 0 0 10px var(--accent-primary);
+    cursor: pointer;
+    transition: transform var(--transition-fast);
+  }
+
+  .sim-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+  }
+
+  .slider-hint {
+    font-size: 0.785rem;
+    color: var(--text-faint);
+  }
+
+  .sim-results {
+    background: rgba(14, 20, 34, 0.9);
+    border: 1px solid var(--border-medium);
+    padding: 2rem;
+    border-radius: var(--radius-lg);
+  }
+
+  .safety-score-card {
+    padding: 1.25rem;
+    border-radius: var(--radius-md);
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    margin-bottom: 1.75rem;
+    transition: all var(--transition-smooth);
+  }
+
+  .safety-score-card.moderate {
+    background: rgba(245, 158, 11, 0.1);
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+
+  .safety-score-card.aggressive {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+
+  .safety-indicator {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .safety-badge {
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: #34d399;
+  }
+
+  .safety-rating {
+    font-family: var(--font-mono);
+    font-weight: 800;
+    font-size: 1.15rem;
+    color: #34d399;
+  }
+
+  .safety-score-card.moderate .safety-badge,
+  .safety-score-card.moderate .safety-rating {
+    color: #fbbf24;
+  }
+
+  .safety-score-card.aggressive .safety-badge,
+  .safety-score-card.aggressive .safety-rating {
+    color: #f87171;
+  }
+
+  .safety-desc {
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  .sim-metrics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .metric-item {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 1rem;
+    text-align: left;
+  }
+
+  .metric-num {
+    font-family: var(--font-mono);
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #f8fafc;
+    margin-bottom: 0.25rem;
+  }
+
+  .metric-sub {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .safety-tip {
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  @media (max-width: 900px) {
+    .sim-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<script>
+  const batchSlider = document.getElementById('input-batch') as HTMLInputElement;
+  const delaySlider = document.getElementById('input-delay') as HTMLInputElement;
+  const loopSlider = document.getElementById('input-loop') as HTMLInputElement;
+
+  const valBatch = document.getElementById('val-batch');
+  const valDelay = document.getElementById('val-delay');
+  const valLoop = document.getElementById('val-loop');
+
+  const resBatchTime = document.getElementById('res-batch-time');
+  const resDailyCap = document.getElementById('res-daily-cap');
+  const resHourlyRate = document.getElementById('res-hourly-rate');
+  const resFloodRisk = document.getElementById('res-flood-risk');
+
+  const safetyCard = document.getElementById('safety-card');
+  const safetyBadge = document.getElementById('safety-badge');
+  const safetyRating = document.getElementById('safety-rating');
+  const safetyDesc = document.getElementById('safety-desc');
+
+  const presetBtns = document.querySelectorAll('.preset-btn');
+
+  function updateCalculations() {
+    const batch = parseInt(batchSlider.value, 10);
+    const delay = parseInt(delaySlider.value, 10);
+    const loop = parseInt(loopSlider.value, 10);
+
+    if (valBatch) valBatch.textContent = `${batch} files`;
+    if (valDelay) valDelay.textContent = `${delay} sec`;
+    if (valLoop) valLoop.textContent = `${loop} min`;
+
+    // Calculations
+    const batchMinutes = (batch * delay) / 60;
+    const cycleMinutes = batchMinutes + loop;
+    const runsPerDay = Math.floor(1440 / cycleMinutes);
+    const totalDailyFiles = runsPerDay * batch;
+    const hourlyFiles = Math.round(totalDailyFiles / 24);
+
+    if (resBatchTime) resBatchTime.textContent = `~${Math.round(batchMinutes)} mins`;
+    if (resDailyCap) resDailyCap.textContent = `~${totalDailyFiles} files`;
+    if (resHourlyRate) resHourlyRate.textContent = `~${hourlyFiles} files/hr`;
+
+    // Safety scoring
+    let score = 100;
+    let risk = "Low Risk";
+
+    if (delay < 15) score -= 40;
+    else if (delay < 25) score -= 20;
+
+    if (batch > 60) score -= 30;
+    else if (batch > 30) score -= 15;
+
+    if (loop < 30) score -= 15;
+
+    score = Math.max(20, Math.min(100, score));
+
+    if (safetyCard && safetyBadge && safetyRating && safetyDesc && resFloodRisk) {
+      safetyCard.classList.remove('moderate', 'aggressive');
+
+      if (score >= 85) {
+        safetyBadge.textContent = "🛡️ High Safety (Optimal)";
+        safetyRating.textContent = `${score} / 100`;
+        safetyDesc.textContent = "Excellent. Natural upload jitter prevents Telegram flood-waits and protects your session.";
+        resFloodRisk.textContent = "Minimal Risk";
+      } else if (score >= 60) {
+        safetyCard.classList.add('moderate');
+        safetyBadge.textContent = "⚠️ Moderate Pace";
+        safetyRating.textContent = `${score} / 100`;
+        safetyDesc.textContent = "Moderate throughput. May occasionally trigger standard server FLOOD_WAIT cooldowns.";
+        resFloodRisk.textContent = "Moderate";
+      } else {
+        safetyCard.classList.add('aggressive');
+        safetyBadge.textContent = "🚨 Aggressive Pace";
+        safetyRating.textContent = `${score} / 100`;
+        safetyDesc.textContent = "High speed setting. Telegram will likely throttle connections with extended wait times.";
+        resFloodRisk.textContent = "High Risk";
+      }
+    }
+  }
+
+  [batchSlider, delaySlider, loopSlider].forEach(slider => {
+    slider?.addEventListener('input', () => {
+      presetBtns.forEach(b => b.classList.remove('active'));
+      updateCalculations();
+    });
+  });
+
+  presetBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      presetBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const preset = btn.getAttribute('data-preset');
+      if (preset === 'conservative') {
+        batchSlider.value = "20";
+        delaySlider.value = "40";
+        loopSlider.value = "60";
+      } else if (preset === 'balanced') {
+        batchSlider.value = "35";
+        delaySlider.value = "25";
+        loopSlider.value = "45";
+      } else if (preset === 'rapid') {
+        batchSlider.value = "60";
+        delaySlider.value = "15";
+        loopSlider.value = "30";
+      }
+      updateCalculations();
+    });
+  });
+
+  updateCalculations();
+</script>

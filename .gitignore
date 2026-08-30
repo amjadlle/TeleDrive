@@ -13,3 +13,9 @@ config.yaml
 *.session
 *.session-journal
 *.log
+
+# Website build and dependencies
+website/node_modules/
+website/dist/
+website/.astro/
+

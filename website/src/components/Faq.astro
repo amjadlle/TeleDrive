@@ -1,0 +1,128 @@
+---
+const faqs = [
+  {
+    q: "Is it safe for my Telegram account to upload files?",
+    a: "Yes. TeleDrive uses official Telethon client sessions via Telegram's standard MTProto protocol. Unlike aggressive mass-uploaders, TeleDrive is deliberately designed with slow, randomized delays (e.g. 20-60s) and respects every FLOOD_WAIT signal with extra buffers to prevent rate-limit penalties."
+  },
+  {
+    q: "Where are my Telegram session keys and database stored?",
+    a: "Everything is stored 100% locally on your machine. On Windows: %LOCALAPPDATA%\\Telegram Auto Upload, and on Linux: ~/.local/share/Telegram Auto Upload. TeleDrive contains zero analytics, zero external API pings, and zero telemetry."
+  },
+  {
+    q: "Do I need Python installed to run TeleDrive?",
+    a: "No! The Windows release comes with a standalone per-user installer (.exe) that bundles everything. The Linux release includes a portable x86_64 pre-compiled package. Python is only needed if you wish to hack on the source code."
+  },
+  {
+    q: "What happens if my computer restarts during an upload?",
+    a: "TeleDrive uses a persistent SQLite database. Every scanned file and upload state is tracked with ACID transactions. When you reboot and restart TeleDrive, it immediately resumes exactly where it left off without duplicate re-uploads."
+  },
+  {
+    q: "Can I upload to a private Channel instead of Saved Messages?",
+    a: "Yes! In TeleDrive Settings, you can set the target to any channel username (e.g., @my_backup_channel) or channel ID where your account has permission to post."
+  },
+  {
+    q: "Is Two-Step Verification (2FA) supported?",
+    a: "Yes. When logging in for the first time, TeleDrive prompts you in the desktop app for your phone code and, if enabled, your 2FA cloud password securely."
+  }
+];
+---
+
+<section class="faq-section" id="faq">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-tag">Frequently Asked Questions</span>
+      <h2 class="section-title">Everything You Need to Know</h2>
+      <p class="section-desc">
+        Detailed answers on security, storage locations, account limits, and platform compatibility.
+      </p>
+    </div>
+
+    <div class="faq-container">
+      {faqs.map((item, idx) => (
+        <details class="faq-item glass-card" open={idx === 0}>
+          <summary class="faq-summary">
+            <span class="faq-question">{item.q}</span>
+            <span class="faq-arrow">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </span>
+          </summary>
+          <div class="faq-answer">
+            <p>{item.a}</p>
+          </div>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .faq-section {
+    padding: 6rem 0;
+    position: relative;
+  }
+
+  .faq-container {
+    max-width: 820px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .faq-item {
+    border-radius: var(--radius-md);
+    background: rgba(14, 19, 31, 0.7);
+    border: 1px solid var(--border-subtle);
+    transition: all var(--transition-fast);
+  }
+
+  .faq-item[open] {
+    border-color: var(--border-accent);
+    background: rgba(14, 19, 31, 0.9);
+  }
+
+  .faq-summary {
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+
+  .faq-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .faq-question {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text-main);
+    text-align: left;
+  }
+
+  .faq-arrow {
+    color: var(--accent-primary);
+    transition: transform var(--transition-fast);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+  }
+
+  .faq-item[open] .faq-arrow {
+    transform: rotate(180deg);
+  }
+
+  .faq-answer {
+    padding: 0 1.5rem 1.5rem;
+    text-align: left;
+  }
+
+  .faq-answer p {
+    font-size: 0.9375rem;
+    color: var(--text-muted);
+    line-height: 1.65;
+  }
+</style>

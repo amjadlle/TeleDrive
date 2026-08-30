@@ -1,0 +1,163 @@
+---
+---
+
+<section class="features-section" id="features">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-tag">Core Architecture</span>
+      <h2 class="section-title">Built for Safety, Built for Scale</h2>
+      <p class="section-desc">
+        Unlike generic upload scripts that get accounts restricted, TeleDrive was engineered from day one to treat Telegram API limits with extreme care.
+      </p>
+    </div>
+
+    <div class="features-grid">
+      <!-- Card 1 -->
+      <div class="feature-card glass-card">
+        <div class="feature-icon" style="background: rgba(36, 161, 222, 0.15); color: #24a1de;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        </div>
+        <h3 class="feature-title">Adaptive Flood-Wait Shield</h3>
+        <p class="feature-text">
+          When Telegram returns <code>FLOOD_WAIT_X</code>, TeleDrive honors the exact cooldown plus an extra configurable safety buffer (e.g. +30s) instead of failing or hammering the server.
+        </p>
+        <div class="feature-pill">Dynamic Server Backoff</div>
+      </div>
+
+      <!-- Card 2 -->
+      <div class="feature-card glass-card">
+        <div class="feature-icon" style="background: rgba(16, 185, 129, 0.15); color: #10b981;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+        </div>
+        <h3 class="feature-title">Resumable SQLite Engine</h3>
+        <p class="feature-text">
+          All scanned files, queue states, and batch audit logs are committed to an ACID-compliant local SQLite database. Restart your PC anytime without losing progress.
+        </p>
+        <div class="feature-pill">Zero State Loss</div>
+      </div>
+
+      <!-- Card 3 -->
+      <div class="feature-card glass-card">
+        <div class="feature-icon" style="background: rgba(139, 92, 246, 0.15); color: #a78bfa;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+        </div>
+        <h3 class="feature-title">Randomized Jitter Delays</h3>
+        <p class="feature-text">
+          Avoid robotic request signatures. Configurable minimum and maximum intervals (e.g., 20–60 sec) ensure uploads mimic natural human pacing.
+        </p>
+        <div class="feature-pill">Anti-Bot Signature</div>
+      </div>
+
+      <!-- Card 4 -->
+      <div class="feature-card glass-card">
+        <div class="feature-icon" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        </div>
+        <h3 class="feature-title">Direct to Saved Messages</h3>
+        <p class="feature-text">
+          Upload directly to your private "Saved Messages" or a private backup channel. No third-party relay servers, no telemetry, and no middleware subscriptions.
+        </p>
+        <div class="feature-pill">100% Peer-to-Peer</div>
+      </div>
+
+      <!-- Card 5 -->
+      <div class="feature-card glass-card">
+        <div class="feature-icon" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+        </div>
+        <h3 class="feature-title">Zero Dependency Binary</h3>
+        <p class="feature-text">
+          Available as a standalone Windows <code>.exe</code> installer and portable Linux x86_64 bundle. No Python setup, pip packages, or virtual environments needed.
+        </p>
+        <div class="feature-pill">Self-Contained Executable</div>
+      </div>
+
+      <!-- Card 6 -->
+      <div class="feature-card glass-card">
+        <div class="feature-icon" style="background: rgba(244, 63, 94, 0.15); color: #fb7185;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+        </div>
+        <h3 class="feature-title">Automatic Loop & Scheduler</h3>
+        <p class="feature-text">
+          Set TeleDrive on autopilot with hourly or daily batch intervals. Single-process locking ensures multiple instances never clash or overlap.
+        </p>
+        <div class="feature-pill">Background Daemon</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .features-section {
+    padding: 6rem 0;
+    position: relative;
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 1.75rem;
+  }
+
+  .feature-card {
+    padding: 2.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .feature-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--border-subtle);
+  }
+
+  .feature-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+    color: var(--text-main);
+    letter-spacing: -0.01em;
+  }
+
+  .feature-text {
+    font-size: 0.9375rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+    margin-bottom: 1.5rem;
+    flex-grow: 1;
+  }
+
+  .feature-text code {
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    color: #7dd3fc;
+    font-size: 0.85em;
+  }
+
+  .feature-pill {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent-primary);
+    background: rgba(36, 161, 222, 0.1);
+    border: 1px solid rgba(36, 161, 222, 0.25);
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--radius-full);
+  }
+
+  @media (max-width: 768px) {
+    .features-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

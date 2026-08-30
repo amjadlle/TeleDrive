@@ -1,0 +1,252 @@
+---
+---
+
+<section class="showcase-section" id="showcase">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-tag">Visual Walkthrough</span>
+      <h2 class="section-title">Engineered for Transparency</h2>
+      <p class="section-desc">
+        Take a look inside the PySide6 production desktop client. Real-time metrics, granular queue control, and full configuration transparency.
+      </p>
+    </div>
+
+    <!-- Interactive Screenshot Tab Navigator -->
+    <div class="showcase-tabs">
+      <button class="showcase-tab active" data-target="dash">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"></rect><rect x="14" y="3" width="7" height="5"></rect><rect x="14" y="12" width="7" height="9"></rect><rect x="3" y="16" width="7" height="5"></rect></svg>
+        <span>1. Main Dashboard</span>
+      </button>
+
+      <button class="showcase-tab" data-target="queue">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+        <span>2. Resumable Upload Queue</span>
+      </button>
+
+      <button class="showcase-tab" data-target="settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>3. Fine-Grained Timing Settings</span>
+      </button>
+    </div>
+
+    <!-- Screenshot Display Panels -->
+    <div class="showcase-viewport glass-card">
+      <!-- Panel 1: Dashboard -->
+      <div class="showcase-panel active" id="panel-dash">
+        <div class="panel-meta">
+          <div class="meta-tag">Command Center</div>
+          <h3 class="meta-title">Real-Time Progress & Batch Control</h3>
+          <p class="meta-desc">
+            Monitor current scan count, uploaded volume, countdown timers to the next upload batch, and live logs with color-coded severity.
+          </p>
+          <div class="meta-features">
+            <div class="meta-feat-item">✨ 1-Click Scan & Upload Trigger</div>
+            <div class="meta-feat-item">⏱️ Live Countdown to Next Run</div>
+            <div class="meta-feat-item">📊 Instant Queue Status Overview</div>
+          </div>
+        </div>
+        <div class="panel-image-wrap">
+          <img src="/images/dashboard.png" alt="TeleDrive Dashboard Screenshot" class="showcase-image" loading="lazy" />
+        </div>
+      </div>
+
+      <!-- Panel 2: Queue -->
+      <div class="showcase-panel hidden" id="panel-queue">
+        <div class="panel-meta">
+          <div class="meta-tag">State Persistence</div>
+          <h3 class="meta-title">Resumable SQLite File Queue</h3>
+          <p class="meta-desc">
+            Every file found during folder scanning is stored in a local SQLite database with its relative path, file size, hash, and retry count.
+          </p>
+          <div class="meta-features">
+            <div class="meta-feat-item">🔄 Auto-resumes after PC shutdown</div>
+            <div class="meta-feat-item">🛡️ Detects changed or deleted files</div>
+            <div class="meta-feat-item">📝 Clear per-file retry audit logs</div>
+          </div>
+        </div>
+        <div class="panel-image-wrap">
+          <img src="/images/upload-queue.png" alt="TeleDrive Upload Queue Screenshot" class="showcase-image" loading="lazy" />
+        </div>
+      </div>
+
+      <!-- Panel 3: Settings -->
+      <div class="showcase-panel hidden" id="panel-settings">
+        <div class="panel-meta">
+          <div class="meta-tag">Rate Limit Protection</div>
+          <h3 class="meta-title">Complete Control Over Timing & API</h3>
+          <p class="meta-desc">
+            Configure randomized delays between uploads (e.g. 20-60s), retry backoff curves, daily caps, and extra flood-wait safety buffers.
+          </p>
+          <div class="meta-features">
+            <div class="meta-feat-item">🎲 Randomized Jitter Delays</div>
+            <div class="meta-feat-item">📈 Exponential Backoff on Errors</div>
+            <div class="meta-feat-item">🔒 Telegram API ID & Hash Vault</div>
+          </div>
+        </div>
+        <div class="panel-image-wrap">
+          <img src="/images/settings.png" alt="TeleDrive Settings Screenshot" class="showcase-image" loading="lazy" />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .showcase-section {
+    padding: 6rem 0;
+    position: relative;
+  }
+
+  .showcase-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 2.5rem;
+    flex-wrap: wrap;
+  }
+
+  .showcase-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.85rem 1.5rem;
+    border-radius: var(--radius-md);
+    background: var(--bg-surface-raised);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-smooth);
+  }
+
+  .showcase-tab:hover {
+    color: var(--text-main);
+    background: var(--bg-surface-hover);
+    border-color: var(--border-medium);
+  }
+
+  .showcase-tab.active {
+    background: rgba(36, 161, 222, 0.15);
+    color: #ffffff;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 20px rgba(36, 161, 222, 0.25);
+  }
+
+  .showcase-tab.active svg {
+    color: var(--accent-primary);
+  }
+
+  .showcase-viewport {
+    background: rgba(10, 14, 23, 0.9);
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+  }
+
+  .showcase-panel {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 2.5rem;
+    padding: 2.5rem;
+    align-items: center;
+  }
+
+  .showcase-panel.hidden {
+    display: none;
+  }
+
+  .panel-meta {
+    text-align: left;
+  }
+
+  .meta-tag {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent-primary);
+    margin-bottom: 0.5rem;
+  }
+
+  .meta-title {
+    font-size: 1.65rem;
+    font-weight: 800;
+    line-height: 1.25;
+    margin-bottom: 1rem;
+    letter-spacing: -0.02em;
+  }
+
+  .meta-desc {
+    font-size: 0.95rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+    margin-bottom: 1.5rem;
+  }
+
+  .meta-features {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .meta-feat-item {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    padding: 0.45rem 0.75rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+  }
+
+  .panel-image-wrap {
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    border: 1px solid var(--border-medium);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7);
+    background: #000;
+  }
+
+  .showcase-image {
+    width: 100%;
+    height: auto;
+    display: block;
+    object-fit: cover;
+    transition: transform 0.5s ease;
+  }
+
+  .showcase-image:hover {
+    transform: scale(1.02);
+  }
+
+  @media (max-width: 980px) {
+    .showcase-panel {
+      grid-template-columns: 1fr;
+      padding: 1.75rem;
+    }
+  }
+</style>
+
+<script>
+  const sTabs = document.querySelectorAll('.showcase-tab');
+  const panels = document.querySelectorAll('.showcase-panel');
+
+  sTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      sTabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+
+      const target = tab.getAttribute('data-target');
+      panels.forEach(panel => {
+        if (panel.id === `panel-${target}`) {
+          panel.classList.remove('hidden');
+        } else {
+          panel.classList.add('hidden');
+        }
+      });
+    });
+  });
+</script>

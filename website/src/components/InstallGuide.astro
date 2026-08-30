@@ -1,0 +1,111 @@
+---
+const steps = [
+  {
+    step: "01",
+    title: "Obtain Telegram API Keys",
+    desc: "Log in to my.telegram.org with your phone number. Under API Development Tools, grab your api_id and api_hash. This takes less than 60 seconds.",
+    code: "https://my.telegram.org/apps"
+  },
+  {
+    step: "02",
+    title: "Configure Target & Timing",
+    desc: "In TeleDrive Settings, input your keys and set the target to 'me' (Saved Messages) for a safe test. Select your source folder to back up.",
+    code: "Target: me (Saved Messages)"
+  },
+  {
+    step: "03",
+    title: "Recursive Folder Scan",
+    desc: "Click 'Scan Folder'. TeleDrive recursively indexes all files into its local SQLite database, generating deduplicated file hashes.",
+    code: "SQLite queue indexed instantly"
+  },
+  {
+    step: "04",
+    title: "Launch Autonomous Backup",
+    desc: "Click 'Run Batch' or toggle the 'Loop Scheduler'. TeleDrive uploads file-by-file with randomized delays, automatically logging every event.",
+    code: "Auto-resumes across reboots"
+  }
+];
+---
+
+<section class="install-guide-section" id="guide">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-tag">Quick Start</span>
+      <h2 class="section-title">Up and Running in 4 Steps</h2>
+      <p class="section-desc">
+        No technical configuration hurdles. Get your personal automated cloud backup running in minutes.
+      </p>
+    </div>
+
+    <div class="steps-grid">
+      {steps.map((item) => (
+        <div class="step-card glass-card">
+          <div class="step-badge">{item.step}</div>
+          <h3 class="step-title">{item.title}</h3>
+          <p class="step-desc">{item.desc}</p>
+          <div class="step-code">
+            <code>{item.code}</code>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .install-guide-section {
+    padding: 6rem 0;
+    position: relative;
+  }
+
+  .steps-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1.75rem;
+  }
+
+  .step-card {
+    padding: 2.25rem 1.75rem;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+  }
+
+  .step-badge {
+    font-family: var(--font-mono);
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--accent-primary);
+    opacity: 0.8;
+    margin-bottom: 1rem;
+    line-height: 1;
+  }
+
+  .step-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+    color: var(--text-main);
+  }
+
+  .step-desc {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+    margin-bottom: 1.25rem;
+    flex-grow: 1;
+  }
+
+  .step-code {
+    background: #06090e;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: #7dd3fc;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+</style>

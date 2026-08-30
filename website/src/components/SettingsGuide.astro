@@ -1,0 +1,219 @@
+---
+const settings = [
+  {
+    name: "Files per run",
+    value: "20",
+    desc: "Maximum files processed in one continuous execution batch.",
+    tag: "Batch Control"
+  },
+  {
+    name: "Files per day",
+    value: "500",
+    desc: "Hard daily cap across all automatic and manual batches combined.",
+    tag: "Daily Quota"
+  },
+  {
+    name: "Delay between uploads (min / max)",
+    value: "20s – 60s",
+    desc: "TeleDrive selects a random wait time within this window after each file.",
+    tag: "Jitter Interval"
+  },
+  {
+    name: "Delay between automatic runs",
+    value: "60 min",
+    desc: "Rest period before the scheduler initiates the next queue scan and upload.",
+    tag: "Scheduler"
+  },
+  {
+    name: "Retry attempts per file",
+    value: "3",
+    desc: "Number of automated retry attempts after transient network disconnects.",
+    tag: "Resilience"
+  },
+  {
+    name: "Retry backoff base",
+    value: "30 sec",
+    desc: "Exponential delay scale (30s, 60s, 120s) between failed retries.",
+    tag: "Backoff"
+  },
+  {
+    name: "Flood-wait buffer",
+    value: "+30 sec",
+    desc: "Extra cushion added to server-mandated cooldowns to guarantee safety.",
+    tag: "Protection"
+  },
+  {
+    name: "Send files as",
+    value: "Document",
+    desc: "Preserves raw bit-for-bit file integrity without Telegram compression.",
+    tag: "Storage Format"
+  }
+];
+---
+
+<section class="settings-section" id="settings">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-tag">Reference Guide</span>
+      <h2 class="section-title">Recommended Safety Presets</h2>
+      <p class="section-desc">
+        Field-tested default configurations crafted for private personal backup archives without triggering Telegram spam filters.
+      </p>
+    </div>
+
+    <div class="settings-table-wrapper glass-card">
+      <table class="settings-table">
+        <thead>
+          <tr>
+            <th>Setting Name</th>
+            <th>Recommended Value</th>
+            <th>Operational Purpose</th>
+            <th>Type</th>
+          </tr>
+        </thead>
+        <tbody>
+          {settings.map((item) => (
+            <tr>
+              <td class="col-name">
+                <span class="name-text">{item.name}</span>
+              </td>
+              <td class="col-val">
+                <code class="val-badge">{item.value}</code>
+              </td>
+              <td class="col-desc">{item.desc}</td>
+              <td class="col-tag">
+                <span class="tag-pill">{item.tag}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="security-callout glass-card">
+      <div class="callout-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+      </div>
+      <div class="callout-content">
+        <h4>Why Telegram limits matter</h4>
+        <p>
+          Telegram dynamically enforces sliding-window rate limits based on account age and destination. Always keep one TeleDrive process running at a time, upload directly to your private <code>me</code> (Saved Messages) or private channel, and avoid using the same phone number for bulk chat messaging while an archive batch is active.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .settings-section {
+    padding: 6rem 0;
+    position: relative;
+  }
+
+  .settings-table-wrapper {
+    overflow-x: auto;
+    margin-bottom: 2rem;
+    border: 1px solid var(--border-medium);
+  }
+
+  .settings-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 0.9375rem;
+  }
+
+  .settings-table th {
+    background: rgba(255, 255, 255, 0.04);
+    padding: 1.15rem 1.25rem;
+    font-weight: 700;
+    color: var(--text-main);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 0.8125rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .settings-table td {
+    padding: 1.1rem 1.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+    vertical-align: middle;
+  }
+
+  .settings-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .settings-table tr:hover td {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .col-name {
+    font-weight: 600;
+    color: #f1f5f9;
+  }
+
+  .val-badge {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.1);
+    padding: 0.25rem 0.6rem;
+    border-radius: 6px;
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    white-space: nowrap;
+  }
+
+  .col-desc {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+
+  .tag-pill {
+    font-size: 0.75rem;
+    color: var(--text-faint);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .security-callout {
+    display: flex;
+    gap: 1.25rem;
+    padding: 1.5rem 1.75rem;
+    background: rgba(36, 161, 222, 0.06);
+    border: 1px solid rgba(36, 161, 222, 0.25);
+    border-radius: var(--radius-lg);
+    align-items: flex-start;
+  }
+
+  .callout-icon {
+    color: var(--accent-primary);
+    flex-shrink: 0;
+    margin-top: 0.15rem;
+  }
+
+  .callout-content h4 {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.35rem;
+    color: #e0f2fe;
+  }
+
+  .callout-content p {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .callout-content code {
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    color: #7dd3fc;
+  }
+</style>
