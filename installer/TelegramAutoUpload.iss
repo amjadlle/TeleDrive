@@ -1,5 +1,5 @@
 #define MyAppName "TeleDrive"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyAppPublisher "TeleDrive"
 #define MyAppExeName "TeleDrive.exe"
 #define MyAppDescription "Turn Telegram into your personal unlimited cloud storage."

@@ -66,6 +66,7 @@ QPushButton#menuButton:hover { background: transparent; color: #25252a; }
 """
 
 TABLE_ROW_LIMIT = 100
+APP_VERSION = "1.0.3"
 
 
 class MainWindow(QMainWindow):
@@ -73,7 +74,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setWindowTitle("TeleDrive")
+        self.setWindowTitle(f"TeleDrive v{APP_VERSION}")
         self.resize(1220, 780)
         self.setMinimumSize(980, 650)
         self.setStyleSheet(STYLE)
@@ -117,7 +118,7 @@ class MainWindow(QMainWindow):
         menu = QPushButton("≡", objectName="menuButton"); menu.setToolTip("Toggle sidebar")
         menu.clicked.connect(lambda: self._toggle_sidebar())
         layout.addWidget(menu)
-        title = QLabel("TeleDrive"); title.setStyleSheet("font-weight: 700; color: #25252a;")
+        title = QLabel(f"TeleDrive v{APP_VERSION}"); title.setStyleSheet("font-weight: 700; color: #25252a;")
         layout.addStretch(); layout.addWidget(title); layout.addStretch()
         minimize = QPushButton("-", objectName="windowButton"); minimize.clicked.connect(self.showMinimized); layout.addWidget(minimize)
         maximize = QPushButton("□", objectName="maximizeButton"); maximize.clicked.connect(self._toggle_maximized); layout.addWidget(maximize)

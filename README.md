@@ -57,14 +57,14 @@ To create the installer, install Inno Setup 6 and run:
 
 The installer is per-user and does not require administrator privileges.
 
-The installer output is `dist-installer\TeleDrive-Setup-1.0.2.exe`.
+The installer output is `dist-installer\TeleDrive-Setup-1.0.3.exe`.
 
 ### Quick install on Windows
 
 Open Command Prompt and paste:
 
 ```bat
-mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.2.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.2/TeleDrive-Setup-1.0.2.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.2.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.2.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.2.exe" & echo TeleDrive setup launched.)
+mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.3.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.3/TeleDrive-Setup-1.0.3.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.3.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.3.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.3.exe" & echo TeleDrive setup launched.)
 ```
 
 This downloads the Windows installer with visible progress and opens the setup
@@ -76,7 +76,7 @@ Open a terminal and paste:
 
 ```bash
 curl -fL --progress-bar -o /tmp/TeleDrive-linux-x86_64.tar.gz \
-  "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.2/TeleDrive-linux-x86_64.tar.gz" && \
+  "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.3/TeleDrive-linux-x86_64.tar.gz" && \
 mkdir -p "$HOME/TeleDrive" && \
 tar -xzf /tmp/TeleDrive-linux-x86_64.tar.gz -C "$HOME/TeleDrive" && \
 "$HOME/TeleDrive/TeleDrive/TeleDrive"
