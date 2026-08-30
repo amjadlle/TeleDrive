@@ -73,9 +73,9 @@
 
       <div class="terminal-body">
         <div class="command-view" id="cmd-windows">
-          <span class="cmd-prompt">PS &gt;</span>
+          <span class="cmd-prompt">C:\&gt;</span>
           <div class="cmd-scroll">
-            <code class="cmd-text">irm "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.5/TeleDrive-Setup-1.0.5.exe" -OutFile "$env:TEMP\TeleDrive-Setup.exe"; Start-Process "$env:TEMP\TeleDrive-Setup.exe"</code>
+            <code class="cmd-text">mkdir "%TEMP%\TeleDrive" 2&gt;nul &amp; curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.5.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.5/TeleDrive-Setup-1.0.5.exe" &amp; if errorlevel 1 (echo Download failed. &amp; exit /b 1) else (start "" "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.5.exe")</code>
           </div>
         </div>
         <div class="command-view hidden" id="cmd-linux">
