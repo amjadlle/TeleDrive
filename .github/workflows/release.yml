@@ -1,0 +1,76 @@
+name: Build and publish release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: TeleDrive-linux-x86_64
+            asset_path: dist-installer/TeleDrive-linux-x86_64.tar.gz
+          - os: windows-latest
+            artifact_name: TeleDrive-windows
+            asset_path: dist-installer/*.exe
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build Linux package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash build-linux.sh
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $iss = Get-Content installer\TelegramAutoUpload.iss -Raw
+          $iss = [regex]::Replace($iss, '#define MyAppVersion ".*?"', ('#define MyAppVersion "' + $version + '"'))
+          Set-Content installer\TelegramAutoUpload.iss $iss -NoNewline
+          .\build.ps1
+          .\build-installer.ps1
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.asset_path }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release and attach packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes \
+            --title "TeleDrive $GITHUB_REF_NAME"
