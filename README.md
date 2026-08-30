@@ -57,14 +57,14 @@ To create the installer, install Inno Setup 6 and run:
 
 The installer is per-user and does not require administrator privileges.
 
-The installer output is `dist-installer\TeleDrive-Setup-1.0.0.exe`.
+The installer output is `dist-installer\TeleDrive-Setup-1.0.1.exe`.
 
 ### Quick install on Windows
 
 Open Command Prompt and paste:
 
 ```bat
-mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.0.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.0/TeleDrive-Setup-1.0.0.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.0.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.0.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.0.exe" & echo TeleDrive setup launched.)
+mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.1.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.1/TeleDrive-Setup-1.0.1.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.1.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.1.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.1.exe" & echo TeleDrive setup launched.)
 ```
 
 This downloads the Windows installer with visible progress and opens the setup
@@ -76,7 +76,7 @@ Open a terminal and paste:
 
 ```bash
 curl -fL --progress-bar -o /tmp/TeleDrive-linux-x86_64.tar.gz \
-  "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.0/TeleDrive-linux-x86_64.tar.gz" && \
+  "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.1/TeleDrive-linux-x86_64.tar.gz" && \
 mkdir -p "$HOME/TeleDrive" && \
 tar -xzf /tmp/TeleDrive-linux-x86_64.tar.gz -C "$HOME/TeleDrive" && \
 "$HOME/TeleDrive/TeleDrive/TeleDrive"
@@ -131,6 +131,15 @@ tar -czf TeleDrive-linux-x86_64.tar.gz -C dist "Telegram Auto Upload"
 
 Linux users need to build on Linux (or inside WSL); PyInstaller does not cross-compile
 a Linux executable from Windows.
+
+### Large files on free Telegram accounts
+
+TeleDrive automatically splits files at 1.9 GB before uploading them. The parts are
+created as lossless byte-for-byte pieces, so no video re-encoding is performed and
+the original file is never changed. Split parts are uploaded as documents and are
+removed from the source drive after every part uploads successfully. To reconstruct
+an original file after downloading all parts, join them in order with a binary file
+concatenation tool.
 
 ## First use
 

@@ -65,6 +65,8 @@ QPushButton#menuButton { width: 42px; font-size: 22px; font-weight: 500; }
 QPushButton#menuButton:hover { background: transparent; color: #25252a; }
 """
 
+TABLE_ROW_LIMIT = 100
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -165,7 +167,7 @@ class MainWindow(QMainWindow):
         for index, label in enumerate(("Dashboard", "Upload Queue", "History", "Settings", "Activity Log")):
             button = QPushButton(label)
             button.setObjectName("secondary")
-            button.clicked.connect(lambda _=False, i=index: self.pages.setCurrentIndex(i))
+            button.clicked.connect(lambda _=False, i=index: self._show_page(i))
             layout.addWidget(button)
             self.nav_buttons.append(button)
         layout.addStretch()
@@ -375,6 +377,13 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Choose source folder", self.source.text())
         if folder: self.source.setText(folder)
 
+    def _show_page(self, index: int) -> None:
+        self.pages.setCurrentIndex(index)
+        if index == 1:
+            self._refresh_table(self.queue_table, "status IN ('pending', 'failed')")
+        elif index == 2:
+            self._refresh_table(self.history_table, "status = 'uploaded'")
+
     def _command(self, mode: str) -> list[str]:
         if getattr(sys, "frozen", False):
             return [sys.executable, "--cli", "--config", str(config_path()), "--auth-dir", str(self.auth_dir), mode]
@@ -484,7 +493,12 @@ class MainWindow(QMainWindow):
         self._refresh_all()
 
     def _refresh_all(self) -> None:
-        self._refresh_stats(); self._refresh_table(self.queue_table, "status IN ('pending', 'failed')"); self._refresh_table(self.history_table, "status = 'uploaded'")
+        self._refresh_stats()
+        current_page = self.pages.currentIndex()
+        if current_page == 1:
+            self._refresh_table(self.queue_table, "status IN ('pending', 'failed')")
+        elif current_page == 2:
+            self._refresh_table(self.history_table, "status = 'uploaded'")
 
     def _connection(self) -> sqlite3.Connection | None:
         if not state_path().exists(): return None
@@ -510,20 +524,29 @@ class MainWindow(QMainWindow):
         conn = self._connection()
         if conn is None: table.setRowCount(0); return
         try:
-            rows = conn.execute(f"SELECT path, status, attempts, datetime(last_update_ts, 'unixepoch', 'localtime') FROM files WHERE {condition} ORDER BY last_update_ts DESC LIMIT 250").fetchall()
+            rows = conn.execute(f"SELECT path, status, attempts, datetime(last_update_ts, 'unixepoch', 'localtime') FROM files WHERE {condition} ORDER BY last_update_ts DESC LIMIT ?", (TABLE_ROW_LIMIT,)).fetchall()
         except sqlite3.Error:
             return
         finally:
             conn.close()
-        table.setRowCount(len(rows))
-        for row_index, row in enumerate(rows):
-            for column, value in enumerate(row):
-                item = QTableWidgetItem(str(value or ""))
-                if column == 0:
-                    item.setToolTip(str(value or ""))
-                elif column == 1:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    status_colors = {"pending": "#9a661d", "failed": "#b63838", "uploaded": "#327454"}
-                    if str(value or "").lower() in status_colors:
-                        item.setForeground(QBrush(QColor(status_colors[str(value or "").lower()])))
-                table.setItem(row_index, column, item)
+        table.setUpdatesEnabled(False)
+        table.blockSignals(True)
+        try:
+            table.clearContents()
+            table.setRowCount(len(rows))
+            status_colors = {"pending": "#9a661d", "failed": "#b63838", "uploaded": "#327454"}
+            for row_index, row in enumerate(rows):
+                for column, value in enumerate(row):
+                    text = str(value or "")
+                    item = QTableWidgetItem(text)
+                    if column == 0:
+                        item.setToolTip(text)
+                    elif column == 1:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        color = status_colors.get(text.lower())
+                        if color:
+                            item.setForeground(QBrush(QColor(color)))
+                    table.setItem(row_index, column, item)
+        finally:
+            table.blockSignals(False)
+            table.setUpdatesEnabled(True)

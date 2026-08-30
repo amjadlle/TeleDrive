@@ -5,7 +5,9 @@ from contextlib import contextmanager
 import logging
 import os
 import random
+import shutil
 import sqlite3
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +16,12 @@ from typing import Iterable, Optional, Union
 import yaml
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError
+
+
+# Telegram's free-account limit is 4,000 parts.  Telethon uses 512 KiB parts,
+# so keep split files below the resulting ~2 GiB boundary with some headroom.
+TELEGRAM_FREE_FILE_LIMIT = 1_900_000_000
+SPLIT_BUFFER_SIZE = 1024 * 1024
 
 
 @dataclass
@@ -347,6 +355,41 @@ async def upload_one(client: TelegramClient, target, path: str, caption: str, se
     )
 
 
+def split_for_telegram(path: str, max_bytes: int = TELEGRAM_FREE_FILE_LIMIT) -> tuple[str, list[str]]:
+    """Create raw, lossless parts for a file that exceeds Telegram's free limit."""
+    source = Path(path)
+    total_size = source.stat().st_size
+    part_count = (total_size + max_bytes - 1) // max_bytes
+    temp_dir = tempfile.mkdtemp(prefix=".teledrive-parts-", dir=str(source.parent))
+    width = max(2, len(str(part_count)))
+    part_paths: list[str] = []
+
+    try:
+        with source.open("rb") as source_file:
+            for part_number in range(1, part_count + 1):
+                part_path = Path(temp_dir) / f"{source.stem}.part{part_number:0{width}d}{source.suffix}"
+                remaining = min(max_bytes, total_size - (part_number - 1) * max_bytes)
+                with part_path.open("wb") as part_file:
+                    while remaining:
+                        block = source_file.read(min(SPLIT_BUFFER_SIZE, remaining))
+                        if not block:
+                            raise OSError(f"Unexpected end of file while splitting {path}")
+                        part_file.write(block)
+                        remaining -= len(block)
+                part_paths.append(str(part_path))
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+    logging.info("Split oversized file into %s parts: %s", len(part_paths), path)
+    return temp_dir, part_paths
+
+
+def is_file_parts_invalid(error: BaseException) -> bool:
+    message = str(error).lower()
+    return "file_parts_invalid" in message or "number of file parts is invalid" in message
+
+
 async def process_uploads(cfg: AppConfig, conn: sqlite3.Connection, login_code: Optional[str] = None, login_password: Optional[str] = None, auth_dir: Optional[str] = None) -> None:
     client = await ensure_client(cfg, login_code=login_code, login_password=login_password, auth_dir=auth_dir)
     async with client:
@@ -397,10 +440,28 @@ async def process_uploads(cfg: AppConfig, conn: sqlite3.Connection, login_code: 
 
             caption = build_caption(path, cfg.caption_template)
             ok = False
+            split_dir: Optional[str] = None
             for attempt in range(1, cfg.retry_attempts + 1):
                 try:
-                    msg = await upload_one(client, target, path, caption, cfg.send_mode)
-                    msg_id = getattr(msg, "id", None)
+                    upload_paths = [path]
+                    if expected_size >= TELEGRAM_FREE_FILE_LIMIT:
+                        if split_dir is None:
+                            split_dir, upload_paths = split_for_telegram(path)
+                        else:
+                            upload_paths = sorted(str(p) for p in Path(split_dir).iterdir())
+
+                    msg_id = None
+                    for part_number, upload_path in enumerate(upload_paths, start=1):
+                        part_caption = caption
+                        send_mode = cfg.send_mode
+                        if len(upload_paths) > 1:
+                            part_caption = f"{caption} [part {part_number}/{len(upload_paths)}]"
+                            # Raw byte parts are not independently playable media.
+                            send_mode = "document"
+                        msg = await upload_one(client, target, upload_path, part_caption, send_mode)
+                        msg_id = getattr(msg, "id", None)
+
+                    assert msg_id is not None
                     mark_uploaded(conn, path, msg_id)
                     done_this_run += 1
                     today_count += 1
@@ -420,6 +481,10 @@ async def process_uploads(cfg: AppConfig, conn: sqlite3.Connection, login_code: 
                     await asyncio.sleep(wait_s)
                     break
                 except (RPCError, OSError, TimeoutError) as e:
+                    if is_file_parts_invalid(e):
+                        mark_failed(conn, path, f"Too large for Telegram free-account limit: {e}")
+                        logging.error("Skipped oversized file %s: %s", path, e)
+                        break
                     if attempt >= cfg.retry_attempts:
                         mark_failed(conn, path, f"{type(e).__name__}: {e}")
                         logging.error("Permanent failure %s: %s", path, e)
@@ -438,6 +503,9 @@ async def process_uploads(cfg: AppConfig, conn: sqlite3.Connection, login_code: 
                     mark_failed(conn, path, f"Unexpected: {type(e).__name__}: {e}")
                     logging.exception("Unexpected error for %s: %s", path, e)
                     break
+
+            if split_dir is not None:
+                shutil.rmtree(split_dir, ignore_errors=True)
 
             if ok:
                 sleep_s = random.randint(cfg.sleep_min_seconds, cfg.sleep_max_seconds)
