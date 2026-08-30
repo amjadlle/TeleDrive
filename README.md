@@ -57,14 +57,14 @@ To create the installer, install Inno Setup 6 and run:
 
 The installer is per-user and does not require administrator privileges.
 
-The installer output is `dist-installer\TeleDrive-Setup-1.0.3.exe`.
+The installer output is `dist-installer\TeleDrive-Setup-1.0.4.exe`.
 
 ### Quick install on Windows
 
 Open Command Prompt and paste:
 
 ```bat
-mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.3.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.3/TeleDrive-Setup-1.0.3.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.3.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.3.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.3.exe" & echo TeleDrive setup launched.)
+mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.4.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.4/TeleDrive-Setup-1.0.4.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.4.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.4.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.4.exe" & echo TeleDrive setup launched.)
 ```
 
 This downloads the Windows installer with visible progress and opens the setup
@@ -76,7 +76,7 @@ Open a terminal and paste:
 
 ```bash
 curl -fL --progress-bar -o /tmp/TeleDrive-linux-x86_64.tar.gz \
-  "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.3/TeleDrive-linux-x86_64.tar.gz" && \
+  "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.4/TeleDrive-linux-x86_64.tar.gz" && \
 mkdir -p "$HOME/TeleDrive" && \
 tar -xzf /tmp/TeleDrive-linux-x86_64.tar.gz -C "$HOME/TeleDrive" && \
 "$HOME/TeleDrive/TeleDrive/TeleDrive"
@@ -140,6 +140,53 @@ the original file is never changed. Split parts are uploaded as documents and ar
 removed from the source drive after every part uploads successfully. To reconstruct
 an original file after downloading all parts, join them in order with a binary file
 concatenation tool.
+
+## Telegram setup and destinations
+
+TeleDrive signs in as the user's Telegram account through the official Telegram API
+(MTProto). It needs the user's `api_id` and `api_hash`, not a BotFather token.
+
+### Create Telegram API credentials
+
+1. Create or use a normal Telegram account in the official Telegram app.
+2. Open [my.telegram.org](https://my.telegram.org) and sign in with that account's phone number.
+3. Open **API development tools**.
+4. Create an application and copy the displayed `api_id` and `api_hash` into TeleDrive Settings.
+5. Keep the `api_hash` private. During the first upload, TeleDrive asks for the Telegram login
+   code and, if enabled, the two-step verification password.
+
+Do not create a bot or paste a BotFather token into TeleDrive: Bot API tokens are for bot-based
+programs, while TeleDrive uploads as the logged-in user account.
+
+### Choose where files are uploaded
+
+The **Target channel / Saved Messages** setting accepts:
+
+- `me` — your personal Saved Messages; recommended for the first test.
+- A public username such as `@my_backup_channel` — the logged-in account must be a member
+  and have permission to post.
+- A numeric chat ID such as `-1001234567890` — useful for private channels and supergroups.
+
+For a private channel or group, first join it with the same Telegram account used by TeleDrive.
+For a channel, make that account an administrator with permission to post. Keep the destination
+private if it contains personal backups.
+
+### Find a private channel or group ID
+
+The easiest option is to use the destination's public username when one exists. For a private
+channel or supergroup, open a message from it in Telegram Desktop and choose **Copy Message Link**.
+A link like `https://t.me/c/1234567890/123` contains the internal ID `1234567890`; enter it in
+TeleDrive as `-1001234567890`.
+
+If the chat is a basic group or the message-link method is unavailable, an ID-reporting bot such
+as `@userinfobot` or `@RawDataBot` may show the chat ID after you send a message or add the bot.
+Only use a third-party bot if you trust it, and do not send private files or credentials to it.
+
+### Bot API note
+
+Creating a bot with [@BotFather](https://t.me/BotFather) and obtaining a bot token is not required
+for the current TeleDrive application. A future bot-based mode would require separate code and
+different permissions; the instructions above are for the current user-account mode.
 
 ## First use
 

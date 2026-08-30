@@ -3,14 +3,14 @@ const steps = [
   {
     step: "01",
     title: "Obtain Telegram API Keys",
-    desc: "Log in to my.telegram.org with your phone number. Under API Development Tools, grab your api_id and api_hash. This takes less than 60 seconds.",
+    desc: "Log in to my.telegram.org and create an application under API Development Tools. Copy the api_id and api_hash. A BotFather token is not needed.",
     code: "https://my.telegram.org/apps"
   },
   {
     step: "02",
     title: "Configure Target & Timing",
-    desc: "In TeleDrive Settings, input your keys and set the target to 'me' (Saved Messages) for a safe test. Select your source folder to back up.",
-    code: "Target: me (Saved Messages)"
+    desc: "In Settings, enter your keys and choose me, a public @username, or a private channel/group ID. Start with Saved Messages for a safe test.",
+    code: "Target: me / @channel / -100..."
   },
   {
     step: "03",

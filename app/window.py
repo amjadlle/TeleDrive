@@ -69,7 +69,7 @@ QPushButton#menuButton:hover { background: transparent; color: #25252a; }
 """
 
 TABLE_ROW_LIMIT = 100
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 RELEASES_API_URL = "https://api.github.com/repos/amjadlle/TeleDrive/releases/latest"
 UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 

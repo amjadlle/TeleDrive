@@ -18,7 +18,11 @@ const faqs = [
   },
   {
     q: "Can I upload to a private Channel instead of Saved Messages?",
-    a: "Yes! In TeleDrive Settings, you can set the target to any channel username (e.g., @my_backup_channel) or channel ID where your account has permission to post."
+    a: "Yes. Set the target to a public username such as @my_backup_channel or a numeric ID such as -1001234567890. The logged-in account must be a member and have permission to post. For a private channel or supergroup, copy a Telegram Desktop message link and convert t.me/c/1234567890/... to -1001234567890."
+  },
+  {
+    q: "Do I need to create a bot or get a BotFather token?",
+    a: "No. TeleDrive currently signs in as your normal Telegram user account through the MTProto API. Get api_id and api_hash from my.telegram.org, then complete the normal phone-code login. BotFather tokens are not used by the current application."
   },
   {
     q: "Is Two-Step Verification (2FA) supported?",

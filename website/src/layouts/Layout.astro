@@ -10,6 +10,8 @@ const {
   title = "TeleDrive — Safe, Resumable Telegram Cloud Backup",
   description = "Turn Telegram into your personal, safe, and unlimited cloud backup. Standalone desktop app with SQLite queue, flood-wait protection, and automated scheduling for Windows & Linux.",
 } = Astro.props;
+
+const socialImage = "https://teledrive.mapki.in/logo.png";
 ---
 
 <!doctype html>
@@ -31,11 +33,13 @@ const {
     <meta property="og:type" content="website" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
-    <meta property="og:image" content="/images/dashboard.png" />
-    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="og:image" content={socialImage} />
+    <meta property="og:image:alt" content="TeleDrive logo" />
+    <meta property="twitter:card" content="summary" />
     <meta property="twitter:title" content={title} />
     <meta property="twitter:description" content={description} />
-    <meta property="twitter:image" content="/images/dashboard.png" />
+    <meta property="twitter:image" content={socialImage} />
+    <meta property="twitter:image:alt" content="TeleDrive logo" />
 
     <!-- Google Fonts Preconnect -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
