@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sqlite3
 import sys
+from urllib.request import Request, urlopen
 
 import yaml
-from PySide6.QtCore import QProcess, QTimer, Qt, QPoint
+from PySide6.QtCore import QProcess, QTimer, Qt, QPoint, QThread, Signal, QUrl
 from PySide6.QtGui import QFont, QColor, QBrush
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
@@ -13,6 +15,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QInputDialog, QComboBox, QScrollArea, QHeaderView, QGridLayout,
 )
+from PySide6.QtGui import QDesktopServices
 
 from .paths import app_data_dir, config_path, state_path
 
@@ -67,6 +70,32 @@ QPushButton#menuButton:hover { background: transparent; color: #25252a; }
 
 TABLE_ROW_LIMIT = 100
 APP_VERSION = "1.0.3"
+RELEASES_API_URL = "https://api.github.com/repos/amjadlle/TeleDrive/releases/latest"
+UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+
+class UpdateCheckWorker(QThread):
+    update_available = Signal(str, str)
+
+    def run(self) -> None:
+        try:
+            request = Request(RELEASES_API_URL, headers={"Accept": "application/vnd.github+json", "User-Agent": "TeleDrive"})
+            with urlopen(request, timeout=5) as response:
+                release = json.load(response)
+            latest = str(release.get("tag_name", "")).strip().lstrip("v")
+            release_url = str(release.get("html_url", "")).strip()
+            if latest and release_url and self._version_key(latest) > self._version_key(APP_VERSION):
+                self.update_available.emit(latest, release_url)
+        except Exception:
+            # Update checks are optional and must never affect app startup.
+            return
+
+    @staticmethod
+    def _version_key(version: str) -> tuple[int, ...]:
+        try:
+            return tuple(int(part) for part in version.split("."))
+        except ValueError:
+            return ()
 
 
 class MainWindow(QMainWindow):
@@ -92,9 +121,14 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load_settings()
         self._refresh_all()
+        self._update_worker: UpdateCheckWorker | None = None
+        QTimer.singleShot(2000, self._check_for_updates)
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self._refresh_all)
         self.refresh_timer.start(3000)
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self._check_for_updates)
+        self.update_timer.start(UPDATE_CHECK_INTERVAL_MS)
 
     def _build_ui(self) -> None:
         root = QWidget(objectName="appShell")
@@ -384,6 +418,31 @@ class MainWindow(QMainWindow):
             self._refresh_table(self.queue_table, "status IN ('pending', 'failed')")
         elif index == 2:
             self._refresh_table(self.history_table, "status = 'uploaded'")
+
+    def _check_for_updates(self) -> None:
+        if self._update_worker is not None and self._update_worker.isRunning():
+            return
+        self._update_worker = UpdateCheckWorker(self)
+        self._update_worker.update_available.connect(self._show_update_available)
+        self._update_worker.finished.connect(self._update_worker.deleteLater)
+        self._update_worker.start()
+
+    def _show_update_available(self, version: str, release_url: str) -> None:
+        answer = QMessageBox.information(
+            self,
+            "TeleDrive update available",
+            f"TeleDrive v{version} is available. You are using v{APP_VERSION}.",
+            QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Open,
+        )
+        if answer == QMessageBox.StandardButton.Open:
+            QDesktopServices.openUrl(QUrl(release_url))
+
+    def closeEvent(self, event) -> None:
+        if self._update_worker is not None and self._update_worker.isRunning():
+            self._update_worker.requestInterruption()
+            self._update_worker.wait(6000)
+        super().closeEvent(event)
 
     def _command(self, mode: str) -> list[str]:
         if getattr(sys, "frozen", False):
