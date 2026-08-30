@@ -1,0 +1,293 @@
+---
+const socials = [
+  {
+    name: "GitHub",
+    url: "https://github.com/amjadlle",
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>`
+  },
+  {
+    name: "YouTube",
+    url: "https://www.youtube.com/@reputedculprit",
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`
+  },
+  {
+    name: "LinkedIn",
+    url: "https://www.linkedin.com/in/amjadlle",
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/></svg>`
+  },
+  {
+    name: "X (Twitter)",
+    url: "https://x.com/amjadlle",
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`
+  },
+  {
+    name: "Threads",
+    url: "https://www.threads.net/@amjadlle",
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm3.64 13.52c-.68 1.4-1.92 2.16-3.64 2.16-2.52 0-4.44-1.72-4.44-4.28 0-2.6 2-4.32 4.6-4.32 1.64 0 2.84.68 3.44 1.76l-1.32.76c-.4-.68-1.2-1.08-2.12-1.08-1.76 0-3.08 1.16-3.08 2.88 0 1.76 1.32 2.84 3 2.84 1.12 0 1.92-.48 2.36-1.32l1.2.68z"/></svg>`
+  },
+  {
+    name: "Instagram",
+    url: "https://www.instagram.com/amjadlle",
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>`
+  },
+  {
+    name: "Reddit",
+    url: "https://www.reddit.com/user/reputed_culprit/",
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12c0 3.314 1.343 6.314 3.515 8.485l-2.286 2.286A.75.75 0 0 0 1.758 24H12c6.627 0 12-5.373 12-12S18.627 0 12 0zm6.24 14.88c-.14.28-.46.4-.74.26-.98-.48-2.26-.74-3.5-.74s-2.52.26-3.5.74c-.28.14-.6.02-.74-.26-.14-.28-.02-.6.26-.74 1.16-.58 2.6-.88 3.98-.88s2.82.3 3.98.88c.28.14.4.46.26.74zM9.5 11c-.83 0-1.5-.67-1.5-1.5S8.67 8 9.5 8s1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 8 14.5 8s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>`
+  }
+];
+---
+
+<section class="author-section" id="author">
+  <div class="container">
+    <div class="author-card glass-card">
+      <div class="author-layout">
+        <!-- Headshot & Identity -->
+        <div class="author-identity">
+          <div class="avatar-frame">
+            <img
+              src="https://doting-octopus-124.convex.cloud/api/storage/730e2173-8a2f-4d38-8976-7624a53bbc88"
+              alt="Amjad P A"
+              class="avatar-photo"
+              width="110"
+              height="110"
+              loading="lazy"
+            />
+          </div>
+
+          <div class="identity-text">
+            <div class="author-role-badge">Creator & Developer</div>
+            <h3 class="author-name">Amjad P A</h3>
+            <p class="author-handle">@amjadlle</p>
+          </div>
+        </div>
+
+        <!-- Bio & Contact -->
+        <div class="author-body">
+          <p class="author-bio">
+            Passionate software engineer and systems builder. Creator of <strong>TeleDrive</strong>, exploring autonomous backup architectures, cloud toolings, and high-performance modern web experiences.
+          </p>
+
+          <!-- Action buttons -->
+          <div class="author-actions">
+            <a href="mailto:hire.amjad@gmail.com" class="btn btn-primary btn-sm author-email-btn">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                <polyline points="22,6 12,13 2,6"></polyline>
+              </svg>
+              <span>hire.amjad@gmail.com</span>
+            </a>
+
+            <a href="https://amjad.mapki.in" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm author-portfolio-btn">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
+              <span>Portfolio</span>
+            </a>
+          </div>
+
+          <!-- Social Links Matrix -->
+          <div class="author-socials">
+            {socials.map((social) => (
+              <a
+                href={social.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="social-pill"
+                aria-label={social.name}
+              >
+                <span class="social-icon" set:html={social.icon} />
+                <span class="social-name">{social.name}</span>
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .author-section {
+    padding: 3rem 0 6rem;
+    position: relative;
+  }
+
+  .author-card {
+    padding: 2.75rem;
+    border-radius: var(--radius-xl);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(10, 15, 26, 0.85);
+    box-shadow: 0 20px 45px rgba(0, 0, 0, 0.6), 0 0 30px rgba(36, 161, 222, 0.1);
+  }
+
+  .author-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 3rem;
+    align-items: center;
+  }
+
+  .author-identity {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 1.25rem;
+    border-right: 1px solid var(--border-subtle);
+    padding-right: 2rem;
+  }
+
+  .avatar-frame {
+    width: 104px;
+    height: 104px;
+    border-radius: 20px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: #080c14;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), 0 0 20px rgba(36, 161, 222, 0.15);
+    transition: transform var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .avatar-frame:hover {
+    transform: translateY(-2px);
+    border-color: rgba(36, 161, 222, 0.5);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6), 0 0 25px rgba(36, 161, 222, 0.25);
+  }
+
+  .avatar-photo {
+    width: 100%;
+    height: 100%;
+    border-radius: 20px;
+    object-fit: cover;
+    display: block;
+  }
+
+  .author-role-badge {
+    font-family: var(--font-mono);
+    font-size: 0.725rem;
+    font-weight: 700;
+    color: var(--accent-primary);
+    background: rgba(36, 161, 222, 0.12);
+    border: 1px solid rgba(36, 161, 222, 0.3);
+    padding: 0.2rem 0.6rem;
+    border-radius: var(--radius-full);
+    display: inline-block;
+    margin-bottom: 0.4rem;
+  }
+
+  .author-name {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--text-main);
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  .author-handle {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .author-body {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .author-bio {
+    font-size: 1.05rem;
+    color: var(--text-muted);
+    line-height: 1.65;
+  }
+
+  .author-bio strong {
+    color: #f1f5f9;
+  }
+
+  .author-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .author-email-btn, .author-portfolio-btn {
+    border-radius: var(--radius-md);
+  }
+
+  .author-socials {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .social-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.4rem 0.85rem;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all var(--transition-fast);
+  }
+
+  .social-pill:hover {
+    color: #ffffff;
+    background: rgba(36, 161, 222, 0.15);
+    border-color: var(--accent-primary);
+    transform: translateY(-1px);
+  }
+
+  .social-icon {
+    display: flex;
+    align-items: center;
+    color: var(--accent-primary);
+  }
+
+  @media (max-width: 880px) {
+    .author-layout {
+      grid-template-columns: 1fr;
+      gap: 2rem;
+      text-align: center;
+    }
+
+    .author-identity {
+      border-right: none;
+      padding-right: 0;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 2rem;
+    }
+
+    .author-body {
+      text-align: center;
+      align-items: center;
+    }
+
+    .author-actions {
+      justify-content: center;
+    }
+
+    .author-socials {
+      justify-content: center;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .author-card {
+      padding: 1.5rem;
+    }
+  }
+</style>

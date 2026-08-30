@@ -73,15 +73,15 @@
 
       <div class="terminal-body">
         <div class="command-view" id="cmd-windows">
-          <span class="cmd-prompt">&gt;</span>
+          <span class="cmd-prompt">PS &gt;</span>
           <div class="cmd-scroll">
-            <code class="cmd-text">mkdir "%TEMP%\TeleDrive" 2&gt;nul &amp; curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.0.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.0/TeleDrive-Setup-1.0.0.exe" &amp; powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.0.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.0.exe"</code>
+            <code class="cmd-text">irm "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.0/TeleDrive-Setup-1.0.0.exe" -OutFile "$env:TEMP\TeleDrive-Setup.exe"; Start-Process "$env:TEMP\TeleDrive-Setup.exe"</code>
           </div>
         </div>
         <div class="command-view hidden" id="cmd-linux">
           <span class="cmd-prompt">$</span>
           <div class="cmd-scroll">
-            <code class="cmd-text">curl -fL --progress-bar -o /tmp/TeleDrive-linux-x86_64.tar.gz "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.0/TeleDrive-linux-x86_64.tar.gz" &amp;&amp; mkdir -p "$HOME/TeleDrive" &amp;&amp; tar -xzf /tmp/TeleDrive-linux-x86_64.tar.gz -C "$HOME/TeleDrive" &amp;&amp; "$HOME/TeleDrive/TeleDrive/TeleDrive"</code>
+            <code class="cmd-text">curl -fL -o /tmp/TeleDrive.tar.gz "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.0/TeleDrive-linux-x86_64.tar.gz" &amp;&amp; tar -xzf /tmp/TeleDrive.tar.gz -C "$HOME" &amp;&amp; "$HOME/TeleDrive/TeleDrive/TeleDrive"</code>
           </div>
         </div>
 
@@ -99,7 +99,7 @@
     <div class="hero-preview-wrapper">
       <div class="hero-preview-container">
         <div class="preview-glow"></div>
-        <div class="hero-mockup glass-card">
+        <a href="#showcase" class="hero-mockup glass-card" aria-label="Inspect TeleDrive Dashboard in detail">
           <div class="mockup-header">
             <div class="mockup-circles">
               <span></span><span></span><span></span>
@@ -111,30 +111,13 @@
             </div>
           </div>
           <div class="mockup-image-frame">
+            <div class="hero-zoom-badge">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+              <span>Click to view details</span>
+            </div>
             <img src="/images/dashboard.png" alt="TeleDrive Desktop Dashboard" class="mockup-img" width="1200" height="750" loading="eager" />
           </div>
-        </div>
-
-        <!-- Floating Stat Badges -->
-        <div class="float-stat float-stat-left glass-card">
-          <div class="stat-icon-wrap" style="background: rgba(16, 185, 129, 0.15); color: #10b981;">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-          </div>
-          <div>
-            <div class="stat-val">100% Resumable</div>
-            <div class="stat-lbl">SQLite State Machine</div>
-          </div>
-        </div>
-
-        <div class="float-stat float-stat-right glass-card">
-          <div class="stat-icon-wrap" style="background: rgba(36, 161, 222, 0.15); color: #24a1de;">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-          </div>
-          <div>
-            <div class="stat-val">Flood-Wait Shield</div>
-            <div class="stat-lbl">Adaptive Rate Limiting</div>
-          </div>
-        </div>
+        </a>
       </div>
     </div>
 
@@ -162,7 +145,7 @@
 
 <style>
   .hero-section {
-    padding: 4.5rem 0 3rem;
+    padding: 9.5rem 0 3.5rem;
     text-align: center;
     position: relative;
   }
@@ -319,8 +302,13 @@
   .cmd-scroll {
     overflow-x: auto;
     white-space: nowrap;
-    scrollbar-width: thin;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
     padding: 0.25rem 0;
+  }
+
+  .cmd-scroll::-webkit-scrollbar {
+    display: none;
   }
 
   .cmd-text {
@@ -431,8 +419,36 @@
   }
 
   .mockup-image-frame {
+    position: relative;
     width: 100%;
     line-height: 0;
+  }
+
+  .hero-zoom-badge {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    z-index: 10;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-full);
+    background: rgba(8, 12, 20, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #e2e8f0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    opacity: 0;
+    transform: translateY(-5px);
+    transition: all 0.2s ease;
+  }
+
+  .hero-mockup:hover .hero-zoom-badge {
+    opacity: 1;
+    transform: translateY(0);
   }
 
   .mockup-img {
@@ -440,58 +456,6 @@
     height: auto;
     display: block;
     object-fit: cover;
-  }
-
-  /* Floating Stats */
-  .float-stat {
-    position: absolute;
-    z-index: 3;
-    display: flex;
-    align-items: center;
-    gap: 0.85rem;
-    padding: 0.75rem 1.15rem;
-    border-radius: var(--radius-lg);
-    background: rgba(12, 17, 28, 0.92);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(36, 161, 222, 0.1);
-    text-align: left;
-    backdrop-filter: blur(16px);
-    transition: transform var(--transition-fast);
-  }
-
-  .float-stat:hover {
-    transform: translateY(-2px);
-  }
-
-  .float-stat-left {
-    bottom: 24px;
-    left: 24px;
-  }
-
-  .float-stat-right {
-    top: 60px;
-    right: 24px;
-  }
-
-  .stat-icon-wrap {
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .stat-val {
-    font-size: 0.875rem;
-    font-weight: 700;
-    color: var(--text-main);
-  }
-
-  .stat-lbl {
-    font-size: 0.7rem;
-    color: var(--text-muted);
   }
 
   /* Trust Row */
@@ -519,13 +483,24 @@
     color: var(--accent-primary);
   }
 
-  @media (max-width: 768px) {
-    .float-stat {
-      display: none;
+  @media (max-width: 640px) {
+    .hero-section {
+      padding: 6.5rem 0 2rem;
     }
-  }
-
-  @media (max-width: 600px) {
+    .hero-title {
+      font-size: clamp(2rem, 7.5vw, 2.75rem);
+    }
+    .hero-cta-group {
+      flex-direction: column;
+      width: 100%;
+      max-width: 380px;
+      margin-left: auto;
+      margin-right: auto;
+      gap: 1rem;
+    }
+    .hero-cta-btn {
+      width: 100%;
+    }
     .terminal-header {
       flex-direction: column;
       align-items: flex-start;

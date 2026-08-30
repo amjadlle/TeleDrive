@@ -5,9 +5,9 @@
   <div class="container">
     <div class="section-header">
       <span class="section-tag">Visual Walkthrough</span>
-      <h2 class="section-title">Engineered for Transparency</h2>
+      <h2 class="section-title">Engineered for Complete Transparency</h2>
       <p class="section-desc">
-        Take a look inside the PySide6 production desktop client. Real-time metrics, granular queue control, and full configuration transparency.
+        Explore the PySide6 desktop client interface. Click any screenshot below to inspect high-resolution details in full view.
       </p>
     </div>
 
@@ -29,63 +29,116 @@
       </button>
     </div>
 
-    <!-- Screenshot Display Panels -->
+    <!-- Screenshot Display Panels (Cinematic Stage) -->
     <div class="showcase-viewport glass-card">
       <!-- Panel 1: Dashboard -->
       <div class="showcase-panel active" id="panel-dash">
-        <div class="panel-meta">
-          <div class="meta-tag">Command Center</div>
-          <h3 class="meta-title">Real-Time Progress & Batch Control</h3>
-          <p class="meta-desc">
-            Monitor current scan count, uploaded volume, countdown timers to the next upload batch, and live logs with color-coded severity.
-          </p>
-          <div class="meta-features">
-            <div class="meta-feat-item">✨ 1-Click Scan & Upload Trigger</div>
-            <div class="meta-feat-item">⏱️ Live Countdown to Next Run</div>
-            <div class="meta-feat-item">📊 Instant Queue Status Overview</div>
+        <div class="panel-layout">
+          <!-- Main Image Canvas with Zoom Button -->
+          <div class="panel-stage" data-img="/images/dashboard.png" data-title="TeleDrive — Main Dashboard">
+            <div class="zoom-hint">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+              <span>Click to view in Full HD</span>
+            </div>
+            <img src="/images/dashboard.png" alt="TeleDrive Dashboard Screenshot" class="showcase-img" loading="lazy" />
           </div>
-        </div>
-        <div class="panel-image-wrap">
-          <img src="/images/dashboard.png" alt="TeleDrive Dashboard Screenshot" class="showcase-image" loading="lazy" />
+
+          <!-- Crisp Key Highlights Bar -->
+          <div class="highlights-grid">
+            <div class="highlight-box">
+              <div class="hl-tag">Batch Progress</div>
+              <div class="hl-val">1 uploaded • 4 remaining</div>
+              <div class="hl-sub">Real-time percentage progress bar</div>
+            </div>
+            <div class="highlight-box">
+              <div class="hl-tag">One-Click Actions</div>
+              <div class="hl-val">Run Batch • Scan • Loop</div>
+              <div class="hl-sub">Immediate control buttons</div>
+            </div>
+            <div class="highlight-box">
+              <div class="hl-tag">Live Activity Audit</div>
+              <div class="hl-val">[INFO] Scan complete</div>
+              <div class="hl-sub">Color-coded terminal log console</div>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Panel 2: Queue -->
       <div class="showcase-panel hidden" id="panel-queue">
-        <div class="panel-meta">
-          <div class="meta-tag">State Persistence</div>
-          <h3 class="meta-title">Resumable SQLite File Queue</h3>
-          <p class="meta-desc">
-            Every file found during folder scanning is stored in a local SQLite database with its relative path, file size, hash, and retry count.
-          </p>
-          <div class="meta-features">
-            <div class="meta-feat-item">🔄 Auto-resumes after PC shutdown</div>
-            <div class="meta-feat-item">🛡️ Detects changed or deleted files</div>
-            <div class="meta-feat-item">📝 Clear per-file retry audit logs</div>
+        <div class="panel-layout">
+          <div class="panel-stage" data-img="/images/upload-queue.png" data-title="TeleDrive — Upload Queue">
+            <div class="zoom-hint">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+              <span>Click to view in Full HD</span>
+            </div>
+            <img src="/images/upload-queue.png" alt="TeleDrive Upload Queue Screenshot" class="showcase-img" loading="lazy" />
           </div>
-        </div>
-        <div class="panel-image-wrap">
-          <img src="/images/upload-queue.png" alt="TeleDrive Upload Queue Screenshot" class="showcase-image" loading="lazy" />
+
+          <div class="highlights-grid">
+            <div class="highlight-box">
+              <div class="hl-tag">Queue State</div>
+              <div class="hl-val">Pending • Uploading • Done</div>
+              <div class="hl-sub">ACID-compliant SQLite persistence</div>
+            </div>
+            <div class="highlight-box">
+              <div class="hl-tag">File Integrity</div>
+              <div class="hl-val">Size & Hash Auditing</div>
+              <div class="hl-sub">Safely skips modified or missing files</div>
+            </div>
+            <div class="highlight-box">
+              <div class="hl-tag">Fail-Safe Retries</div>
+              <div class="hl-val">Per-file Retry Logs</div>
+              <div class="hl-sub">Tracks transient connection drops</div>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Panel 3: Settings -->
       <div class="showcase-panel hidden" id="panel-settings">
-        <div class="panel-meta">
-          <div class="meta-tag">Rate Limit Protection</div>
-          <h3 class="meta-title">Complete Control Over Timing & API</h3>
-          <p class="meta-desc">
-            Configure randomized delays between uploads (e.g. 20-60s), retry backoff curves, daily caps, and extra flood-wait safety buffers.
-          </p>
-          <div class="meta-features">
-            <div class="meta-feat-item">🎲 Randomized Jitter Delays</div>
-            <div class="meta-feat-item">📈 Exponential Backoff on Errors</div>
-            <div class="meta-feat-item">🔒 Telegram API ID & Hash Vault</div>
+        <div class="panel-layout">
+          <div class="panel-stage" data-img="/images/settings.png" data-title="TeleDrive — Settings Screen">
+            <div class="zoom-hint">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+              <span>Click to view in Full HD</span>
+            </div>
+            <img src="/images/settings.png" alt="TeleDrive Settings Screenshot" class="showcase-img" loading="lazy" />
+          </div>
+
+          <div class="highlights-grid">
+            <div class="highlight-box">
+              <div class="hl-tag">Timing Guard</div>
+              <div class="hl-val">20s – 60s Jitter Delays</div>
+              <div class="hl-sub">Human-like upload spacing</div>
+            </div>
+            <div class="highlight-box">
+              <div class="hl-tag">Flood Protection</div>
+              <div class="hl-val">+30s Server Buffer</div>
+              <div class="hl-sub">Prevents Telegram rate-limit penalties</div>
+            </div>
+            <div class="highlight-box">
+              <div class="hl-tag">Credentials Vault</div>
+              <div class="hl-val">Telegram API ID & Hash</div>
+              <div class="hl-sub">Stored 100% locally on your PC</div>
+            </div>
           </div>
         </div>
-        <div class="panel-image-wrap">
-          <img src="/images/settings.png" alt="TeleDrive Settings Screenshot" class="showcase-image" loading="lazy" />
-        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fullscreen Lightbox Modal -->
+  <div class="lightbox-overlay" id="lightbox-modal" aria-hidden="true">
+    <div class="lightbox-dialog">
+      <div class="lightbox-header">
+        <span class="lightbox-title" id="lightbox-title">Screenshot Preview</span>
+        <button class="lightbox-close" id="lightbox-close" aria-label="Close Fullscreen View">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="lightbox-body">
+        <img src="" alt="" id="lightbox-img" class="lightbox-image" />
       </div>
     </div>
   </div>
@@ -109,7 +162,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.6rem;
-    padding: 0.85rem 1.5rem;
+    padding: 0.75rem 1.35rem;
     border-radius: var(--radius-md);
     background: var(--bg-surface-raised);
     border: 1px solid var(--border-subtle);
@@ -128,10 +181,10 @@
   }
 
   .showcase-tab.active {
-    background: rgba(36, 161, 222, 0.15);
+    background: rgba(36, 161, 222, 0.18);
     color: #ffffff;
     border-color: var(--accent-primary);
-    box-shadow: 0 0 20px rgba(36, 161, 222, 0.25);
+    box-shadow: 0 0 25px rgba(36, 161, 222, 0.25);
   }
 
   .showcase-tab.active svg {
@@ -142,95 +195,214 @@
     background: rgba(10, 14, 23, 0.9);
     border: 1px solid var(--border-medium);
     border-radius: var(--radius-xl);
-    overflow: hidden;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
-  }
-
-  .showcase-panel {
-    display: grid;
-    grid-template-columns: 380px 1fr;
-    gap: 2.5rem;
-    padding: 2.5rem;
-    align-items: center;
+    padding: 1.75rem;
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);
   }
 
   .showcase-panel.hidden {
     display: none;
   }
 
-  .panel-meta {
-    text-align: left;
-  }
-
-  .meta-tag {
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--accent-primary);
-    margin-bottom: 0.5rem;
-  }
-
-  .meta-title {
-    font-size: 1.65rem;
-    font-weight: 800;
-    line-height: 1.25;
-    margin-bottom: 1rem;
-    letter-spacing: -0.02em;
-  }
-
-  .meta-desc {
-    font-size: 0.95rem;
-    color: var(--text-muted);
-    line-height: 1.6;
-    margin-bottom: 1.5rem;
-  }
-
-  .meta-features {
+  .panel-layout {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 1.75rem;
   }
 
-  .meta-feat-item {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: #e2e8f0;
-    padding: 0.45rem 0.75rem;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-  }
-
-  .panel-image-wrap {
+  .panel-stage {
+    position: relative;
     border-radius: var(--radius-lg);
     overflow: hidden;
-    border: 1px solid var(--border-medium);
-    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7);
-    background: #000;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: #080c14;
+    cursor: pointer;
+    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.8);
+    transition: all 0.3s ease;
   }
 
-  .showcase-image {
+  .panel-stage:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9), 0 0 30px rgba(36, 161, 222, 0.25);
+  }
+
+  .showcase-img {
     width: 100%;
     height: auto;
     display: block;
     object-fit: cover;
-    transition: transform 0.5s ease;
+    transition: transform 0.4s ease;
   }
 
-  .showcase-image:hover {
-    transform: scale(1.02);
+  .panel-stage:hover .showcase-img {
+    transform: scale(1.015);
   }
 
-  @media (max-width: 980px) {
-    .showcase-panel {
+  .zoom-hint {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    z-index: 10;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.85rem;
+    border-radius: var(--radius-full);
+    background: rgba(8, 12, 20, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #e2e8f0;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+    transition: all var(--transition-fast);
+  }
+
+  .panel-stage:hover .zoom-hint {
+    background: rgba(36, 161, 222, 0.9);
+    color: #ffffff;
+    border-color: #7dd3fc;
+  }
+
+  /* Highlights bar */
+  .highlights-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+
+  .highlight-box {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1.15rem 1.25rem;
+    text-align: left;
+    transition: all var(--transition-fast);
+  }
+
+  .highlight-box:hover {
+    background: rgba(36, 161, 222, 0.06);
+    border-color: rgba(36, 161, 222, 0.3);
+  }
+
+  .hl-tag {
+    font-family: var(--font-mono);
+    font-size: 0.725rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent-primary);
+    margin-bottom: 0.35rem;
+  }
+
+  .hl-val {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #f8fafc;
+    margin-bottom: 0.25rem;
+  }
+
+  .hl-sub {
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+  }
+
+  /* Lightbox Modal */
+  .lightbox-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(4, 6, 10, 0.92);
+    backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+
+  .lightbox-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .lightbox-dialog {
+    width: 100%;
+    max-width: 1200px;
+    background: #080c14;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.9), 0 0 50px rgba(36, 161, 222, 0.25);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .lightbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.5rem;
+    background: rgba(14, 20, 34, 0.95);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .lightbox-title {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #ffffff;
+  }
+
+  .lightbox-close {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-medium);
+    color: #e2e8f0;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .lightbox-close:hover {
+    background: #ef4444;
+    border-color: #ef4444;
+    color: #ffffff;
+  }
+
+  .lightbox-body {
+    padding: 1rem;
+    max-height: 80vh;
+    overflow-y: auto;
+    display: flex;
+    justify-content: center;
+    background: #05070a;
+  }
+
+  .lightbox-image {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    border-radius: var(--radius-md);
+  }
+
+  @media (max-width: 768px) {
+    .highlights-grid {
       grid-template-columns: 1fr;
-      padding: 1.75rem;
+    }
+    .lightbox-overlay {
+      padding: 0.75rem;
     }
   }
 </style>
 
 <script>
+  // Tab switching
   const sTabs = document.querySelectorAll('.showcase-tab');
   const panels = document.querySelectorAll('.showcase-panel');
 
@@ -248,5 +420,41 @@
         }
       });
     });
+  });
+
+  // Lightbox logic
+  const stages = document.querySelectorAll('.panel-stage');
+  const lightbox = document.getElementById('lightbox-modal');
+  const lightboxImg = document.getElementById('lightbox-img') as HTMLImageElement;
+  const lightboxTitle = document.getElementById('lightbox-title');
+  const lightboxClose = document.getElementById('lightbox-close');
+
+  stages.forEach(stage => {
+    stage.addEventListener('click', () => {
+      const src = stage.getAttribute('data-img');
+      const title = stage.getAttribute('data-title');
+      if (lightbox && lightboxImg && src) {
+        lightboxImg.src = src;
+        if (lightboxTitle && title) lightboxTitle.textContent = title;
+        lightbox.classList.add('open');
+        document.body.style.overflow = 'hidden';
+      }
+    });
+  });
+
+  function closeLightbox() {
+    if (lightbox) {
+      lightbox.classList.remove('open');
+      document.body.style.overflow = '';
+    }
+  }
+
+  lightboxClose?.addEventListener('click', closeLightbox);
+  lightbox?.addEventListener('click', (e) => {
+    if (e.target === lightbox) closeLightbox();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeLightbox();
   });
 </script>
