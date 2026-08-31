@@ -11,7 +11,8 @@ const {
   description = "Turn Telegram into your personal, safe, and unlimited cloud backup. Standalone desktop app with SQLite queue, flood-wait protection, and automated scheduling for Windows & Linux.",
 } = Astro.props;
 
-const socialImage = "https://teledrive.mapki.in/logo.png";
+const canonicalUrl = "https://teledrive.mapki.in";
+const socialImage = "https://teledrive.mapki.in/og-image.png";
 ---
 
 <!doctype html>
@@ -20,26 +21,41 @@ const socialImage = "https://teledrive.mapki.in/logo.png";
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="canonical" href={canonicalUrl} />
     <meta name="generator" content={Astro.generator} />
 
     <!-- SEO Meta Tags -->
     <title>{title}</title>
     <meta name="description" content={description} />
     <meta name="keywords" content="telegram uploader, cloud backup, telegram drive, file sync, telegram api, teledrive, personal cloud storage, sqlite queue" />
-    <meta name="author" content="amjadlle" />
+    <meta name="author" content="Amjad P A" />
     <meta name="theme-color" content="#07090e" />
 
-    <!-- Open Graph / Social Media -->
+    <!-- Open Graph / Facebook / Bento / Discord / WhatsApp -->
     <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:site_name" content="TeleDrive" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:image" content={socialImage} />
-    <meta property="og:image:alt" content="TeleDrive logo" />
-    <meta property="twitter:card" content="summary" />
-    <meta property="twitter:title" content={title} />
-    <meta property="twitter:description" content={description} />
-    <meta property="twitter:image" content={socialImage} />
-    <meta property="twitter:image:alt" content="TeleDrive logo" />
+    <meta property="og:image:secure_url" content={socialImage} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="TeleDrive — Unlimited Telegram Cloud Storage" />
+
+    <!-- Twitter / X Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@amjadlle" />
+    <meta name="twitter:creator" content="@amjadlle" />
+    <meta name="twitter:url" content={canonicalUrl} />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={socialImage} />
+    <meta name="twitter:image:alt" content="TeleDrive — Unlimited Telegram Cloud Storage" />
+
+    <!-- Link preview fallback -->
+    <link rel="image_src" href={socialImage} />
 
     <!-- Google Fonts Preconnect -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
