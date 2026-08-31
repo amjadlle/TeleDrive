@@ -55,5 +55,20 @@ const socialImage = "https://teledrive.mapki.in/logo.png";
     <div class="grid-overlay" aria-hidden="true"></div>
 
     <slot />
+
+    <!-- 💬 TeleDrive AI Chatbot (Powered by ZeroRoute) -->
+    <script 
+      src="https://zeroroute.mapki.in/widget.js" 
+      data-endpoint="https://zeroroute.mapki.in"
+      data-title="TeleDrive AI"
+      data-logo="https://teledrive.mapki.in/logo.png"
+      data-color="#24a1de"
+      data-greeting="Hi! 👋 I'm TeleDrive AI. Ask me anything about cloud backup, Telegram file storage, or limits!"
+      data-prompts="Is TeleDrive free to use?,How does Telegram storage work?,What are the file size limits?,How do I install/connect?"
+      data-persona="You are TeleDrive AI, the smart virtual assistant for TeleDrive. Explain clearly and concisely how TeleDrive turns Telegram into unlimited free cloud storage with fast downloads and sharing."
+      data-knowledge-url="https://teledrive.mapki.in/knowledge.md"
+      data-knowledge="TeleDrive Features: Unlimited cloud storage via Telegram API, fast streaming, shareable file links, cross-platform support. Free tier with zero hosting costs."
+      defer>
+    </script>
   </body>
 </html>
