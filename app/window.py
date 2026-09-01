@@ -34,6 +34,8 @@ QPushButton { background: #22252b; color: white; border: 0; border-radius: 9px; 
 QPushButton:hover { background: #3a3f48; }
 QPushButton#secondary { background: #e7eef6; color: #20344d; border: 1px solid #d5e0ec; }
 QPushButton#secondary:hover { background: #dce8f4; }
+QPushButton#coffeeButton { background: #ffdd00; color: #172235; border: 1px solid #e5c700; font-weight: 700; border-radius: 9px; padding: 8px 12px; }
+QPushButton#coffeeButton:hover { background: #ffe633; border-color: #ffd000; }
 QPushButton#danger { background: #b63838; }
 QPushButton#danger:hover { background: #982d2d; }
 QLabel#legend { color: #77736d; background: #f4f7fb; border: 1px solid #d9e3ef; border-radius: 10px; padding: 9px 12px; font-size: 11px; }
@@ -69,7 +71,7 @@ QPushButton#menuButton:hover { background: transparent; color: #25252a; }
 """
 
 TABLE_ROW_LIMIT = 100
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 RELEASES_API_URL = "https://api.github.com/repos/amjadlle/TeleDrive/releases/latest"
 UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 
@@ -206,6 +208,13 @@ class MainWindow(QMainWindow):
             layout.addWidget(button)
             self.nav_buttons.append(button)
         layout.addStretch()
+        coffee_btn = QPushButton("☕ Buy Me a Coffee")
+        coffee_btn.setObjectName("coffeeButton")
+        coffee_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        coffee_btn.setToolTip("Support TeleDrive development")
+        coffee_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://buymeacoffee.com/amjadlle")))
+        layout.addWidget(coffee_btn)
+        layout.addSpacing(6)
         self.status_badge = QLabel("Ready", objectName="statusBadge")
         layout.addWidget(self.status_badge)
         layout.addWidget(QLabel("Private · Resumable · Local", objectName="eyebrow"))

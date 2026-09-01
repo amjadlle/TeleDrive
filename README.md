@@ -1,9 +1,61 @@
-# Telegram Auto Upload
+# TeleDrive (Telegram Auto Upload)
+
+<p align="left">
+  <a href="https://buymeacoffee.com/amjadlle"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-yellow.svg?style=flat&logo=buy-me-a-coffee" alt="Buy Me A Coffee" /></a>
+  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" />
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-green.svg" alt="Platform" />
+</p>
 
 Safe, slow, resumable Telegram file uploader for Windows and Linux.
 
 TeleDrive turns Telegram into a personal cloud uploader. It scans a local folder,
 queues files in SQLite, and uploads them gradually with retry and flood-wait handling.
+
+## Desktop application
+
+The production UI is a PySide6 desktop app. It stores configuration, the Telegram
+session, logs, and SQLite state under:
+
+```text
+Windows: `%LOCALAPPDATA%\Telegram Auto Upload`  
+Linux: `~/.local/share/Telegram Auto Upload`
+```
+
+Run from source:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m app.main
+```
+
+## Screenshots
+
+### Dashboard
+
+![TeleDrive dashboard](images/dashboard.png)
+
+### Upload queue
+
+![TeleDrive upload queue](images/upload-queue.png)
+
+### Settings
+
+![TeleDrive settings](images/settings.png)
+
+## Build on Windows
+
+Create the portable Windows application folder:
+
+```powershell
+.\build.ps1
+```
+
+Output: `dist\TeleDrive.exe`
+
+This is a standalone executable. You can copy only this `.exe` to another Windows
+machine; no Python installation is required.
+
+To create the installer, install Inno Setup 6 and run:
 
 ## Desktop application
 
@@ -57,14 +109,14 @@ To create the installer, install Inno Setup 6 and run:
 
 The installer is per-user and does not require administrator privileges.
 
-The installer output is `dist-installer\TeleDrive-Setup-1.0.5.exe`.
+The installer output is `dist-installer\TeleDrive-Setup-1.0.6.exe`.
 
 ### Quick install on Windows
 
 Open Command Prompt and paste:
 
 ```bat
-mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.5.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.5/TeleDrive-Setup-1.0.5.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.5.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.5.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.5.exe" & echo TeleDrive setup launched.)
+mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.6.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.6/TeleDrive-Setup-1.0.6.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.6.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.6.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.6.exe" & echo TeleDrive setup launched.)
 ```
 
 This downloads the Windows installer with visible progress and opens the setup
@@ -75,7 +127,7 @@ wizard.
 Close TeleDrive first, then open a terminal and paste:
 
 ```bash
-pkill -x TeleDrive 2>/dev/null || true; curl -fL --progress-bar -o /tmp/TeleDrive.tar.gz "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.5/TeleDrive-linux-x86_64.tar.gz" && tar -xzf /tmp/TeleDrive.tar.gz -C "$HOME" && "$HOME/TeleDrive/TeleDrive"
+pkill -x TeleDrive 2>/dev/null || true; curl -fL --progress-bar -o /tmp/TeleDrive.tar.gz "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.6/TeleDrive-linux-x86_64.tar.gz" && tar -xzf /tmp/TeleDrive.tar.gz -C "$HOME" && "$HOME/TeleDrive/TeleDrive"
 ```
 
 This works for both a fresh installation and an update. It closes a running
@@ -226,6 +278,7 @@ copies of the app.
   this value controls the wait before the next batch begins.
 - **Retry attempts per file:** Temporary network or Telegram errors trigger retries. A
   file is not uploaded repeatedly when it succeeds.
+
 - **Retry backoff base:** Failed retries wait progressively longer: with a 30-second base,
   the delays are 30, 60, and 120 seconds.
 - **Flood-wait buffer:** If Telegram returns `FLOOD_WAIT_60` and the buffer is 30 seconds,
@@ -259,6 +312,31 @@ python uploader.py --config path\to\config.yaml --run-once
 
 Keep the target private while testing, avoid modifying files during an active upload,
 and back up the local state database and Telegram session when migrating machines.
+
+## 👨‍💻 Author
+
+**Amjad P A** — Full-Stack AI Engineer & Solo Builder
+
+- 🌐 **Portfolio**: [amjad.mapki.in](https://amjad.mapki.in)
+- ☕ **Buy Me a Coffee**: [buymeacoffee.com/amjadlle](https://buymeacoffee.com/amjadlle)
+- 🐙 **GitHub**: [@amjadlle](https://github.com/amjadlle)
+- 💼 **LinkedIn**: [linkedin.com/in/amjadlle](https://linkedin.com/in/amjadlle)
+- 𝕏 **X (Twitter)**: [@amjadlle](https://x.com/amjadlle)
+- ✉️ **Email**: [hire.amjad@gmail.com](mailto:hire.amjad@gmail.com)
+
+---
+
+## ☕ Support TeleDrive
+
+If TeleDrive helps you backup your files safely, manage your storage, or simplifies your Telegram workflow, consider buying me a coffee to support maintenance and future updates!
+
+<p align="center">
+  <a href="https://buymeacoffee.com/amjadlle" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="48" width="174" />
+  </a>
+</p>
+
+---
 
 ## License
 

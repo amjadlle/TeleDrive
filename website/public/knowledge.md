@@ -13,9 +13,9 @@ TeleDrive is a safe, resumable, and autonomous personal file uploader and backup
 
 ## Installation & Setup
 ### Windows
-1. Download `TeleDrive-Setup-1.0.5.exe` from GitHub releases or run:
+1. Download `TeleDrive-Setup-1.0.6.exe` from GitHub releases or run:
    ```powershell
-   irm "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.5/TeleDrive-Setup-1.0.5.exe" -OutFile "$env:TEMP\TeleDrive-Setup.exe"; Start-Process "$env:TEMP\TeleDrive-Setup.exe"
+   irm "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.6/TeleDrive-Setup-1.0.6.exe" -OutFile "$env:TEMP\TeleDrive-Setup.exe"; Start-Process "$env:TEMP\TeleDrive-Setup.exe"
    ```
 2. Launch TeleDrive and enter your Telegram `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org).
 3. Authenticate with your phone number and SMS/Telegram OTP code (2FA password supported).
