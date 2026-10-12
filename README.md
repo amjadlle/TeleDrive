@@ -1,348 +1,176 @@
-# TeleDrive (Telegram Auto Upload)
+# TeleDrive
 
-<p align="left">
-  <a href="https://buymeacoffee.com/amjadlle"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-yellow.svg?style=flat&logo=buy-me-a-coffee" alt="Buy Me A Coffee" /></a>
-  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" />
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-green.svg" alt="Platform" />
-</p>
+**Telegram personal backup uploader** — Docker Web UI, Windows/Linux desktop app and an automation CLI. This fork adds multi-account scheduling and SQLAlchemy-backed persistent state.
 
-Safe, slow, resumable Telegram file uploader for Windows and Linux.
+> Telegram Saved Messages and ordinary Telegram cloud chats are **not end-to-end encrypted**. Encrypt sensitive files before uploading when confidentiality from Telegram is required.
 
-TeleDrive turns Telegram into a personal cloud uploader. It scans a local folder,
-queues files in SQLite, and uploads them gradually with retry and flood-wait handling.
+## Quick start: Docker Web UI
 
-## Desktop application
+The server/NAS deployment has a browser dashboard, upload queue, history, account management, Telegram login prompts and logs.
 
-The production UI is a PySide6 desktop app. It stores configuration, the Telegram
-session, logs, and SQLite state under:
+~~~bash
+git clone -b feature/docker-webui-multiaccount https://github.com/babico/TeleDrive.git
+cd TeleDrive
+mkdir -p config data uploads
+cp .env.example .env
+cp examples/config.docker.yaml config/config.yaml
+chmod 600 .env config/config.yaml
+~~~
 
-```text
-Windows: `%LOCALAPPDATA%\Telegram Auto Upload`  
-Linux: `~/.local/share/Telegram Auto Upload`
-```
+Edit **.env** and set a unique **TELEDRIVE_WEB_PASSWORD** (minimum 16 characters). Set **PUID** and **PGID** to the host user owning the mounted folders if they differ from 1000. Then:
 
-Run from source:
+~~~bash
+docker compose up -d --build
+docker compose logs -f teledrive
+~~~
 
-```powershell
+Open **http://127.0.0.1:8080** on the Docker host. The port binds to loopback by default. For remote administration use an SSH tunnel, VPN or HTTPS reverse proxy. Never expose HTTP Basic authentication over untrusted plaintext HTTP.
+
+In **Settings**, enter the Telegram API ID/hash from [my.telegram.org](https://my.telegram.org/apps), each enabled account's phone number and upload target, then select a strategy. Choose **Run batch**; the browser prompts for login codes and 2FA passwords as needed.
+
+Docker mounts: **./config → /config** (settings), **./data → /data** (sessions, auth handoff, default SQLite DB), and **./uploads → /uploads:ro** (source files). To upload a different host directory, change only the host-side path of the **/uploads** bind mount.
+
+The Docker config example is [examples/config.docker.yaml](examples/config.docker.yaml). No desktop environment, X11 or PySide6 is needed inside Docker.
+
+## Multi-account strategies
+
+| Strategy | Behavior |
+| --- | --- |
+| **single** | Use the first enabled Telegram account |
+| **round_robin** | Rotate the preferred account between successive files, with fallback |
+| **failover** | Try accounts in configured priority order |
+| **parallel** | Concurrent account-affine workers, with fallback |
+
+Each account has a separate session file and optional API/target overrides. FloodWait and cooldown state are account-specific, and upload history records the sending account. Disabled accounts remain in settings without connecting.
+
+**Saved Messages caution:** the target **me** points to a different private Saved Messages area for every account. If you want one destination, use a shared private channel and grant posting access to all accounts.
+
+Telegram limits still apply. Oversized files can be split into lossless parts before uploading.
+
+## Database: synchronous SQLAlchemy dialects
+
+Configure **state.database_url** in YAML or the Web UI. SQLite works without a database server; PostgreSQL and MariaDB/MySQL drivers are included in the Web image. Other synchronous SQLAlchemy dialects can be used when the dialect, DBAPI driver and any required OS libraries are installed. There is no hardcoded database vendor whitelist, but not every third-party dialect is necessarily tested or compatible.
+
+~~~yaml
+state:
+  database_url: "sqlite:////data/state.db"
+~~~
+
+Other database URL examples:
+
+~~~text
+postgresql+psycopg://user:password@db:5432/teledrive
+mysql+pymysql://user:password@db:3306/teledrive
+oracle+oracledb://user:password@db:1521/?service_name=FREEPDB1
+mssql+pyodbc://user:password@db/teledrive?driver=ODBC+Driver+18+for+SQL+Server
+~~~
+
+To install another trusted dialect/driver at Docker image build time, set **TELEDRIVE_DB_EXTRA_PACKAGES** in **.env**, then rebuild:
+
+~~~dotenv
+TELEDRIVE_DB_EXTRA_PACKAGES=oracledb
+~~~
+
+~~~bash
+docker compose build --no-cache
+docker compose up -d
+~~~
+
+Some drivers, especially ODBC variants, also require system libraries in a derived Docker image. For remote databases, use TLS and grant only the permissions TeleDrive needs.
+
+## Desktop app (Windows/Linux)
+
+A PySide6 desktop UI remains available. The desktop example is [examples/config.desktop.yaml](examples/config.desktop.yaml); the application creates its own configuration under the user's application data directory.
+
+~~~bash
 python -m pip install -r requirements.txt
 python -m app.main
-```
+~~~
 
-## Screenshots
+Desktop data lives in **%LOCALAPPDATA%/Telegram Auto Upload** on Windows or **~/.local/share/Telegram Auto Upload** on Linux (unless **XDG_DATA_HOME** is set).
 
-### Dashboard
+Build helpers are in **scripts/**:
 
-![TeleDrive dashboard](images/dashboard.png)
+~~~powershell
+# Windows: portable executable, then Inno Setup installer
+./scripts/build.ps1
+./scripts/build-installer.ps1
+~~~
 
-### Upload queue
+~~~bash
+# Linux: PyInstaller package in dist-installer/
+bash scripts/build-linux.sh
+~~~
 
-![TeleDrive upload queue](images/upload-queue.png)
+The release workflow uses these scripts for version tags. Upstream's existing binary releases do **not** necessarily include this fork's Docker or multi-account features.
 
-### Settings
+### Desktop screenshots
 
-![TeleDrive settings](images/settings.png)
+![Desktop dashboard](website/public/images/dashboard.png)
+![Desktop upload queue](website/public/images/upload-queue.png)
+![Desktop settings](website/public/images/settings.png)
 
-## Build on Windows
+## CLI and automation
 
-Create the portable Windows application folder:
+The scan/upload backend also runs without a UI. Copy the desktop example to a writable config and edit its source path and Telegram credentials first.
 
-```powershell
-.\build.ps1
-```
+~~~bash
+cp examples/config.desktop.yaml local-config.yaml
+python uploader.py --config local-config.yaml --scan-only
+python uploader.py --config local-config.yaml --run-once
+~~~
 
-Output: `dist\TeleDrive.exe`
+The Web UI's automatic batch scheduler is configured in **Settings → Automation**. Avoid running multiple client processes against the same Telegram session; state leases alone cannot make shared session files safe.
 
-This is a standalone executable. You can copy only this `.exe` to another Windows
-machine; no Python installation is required.
+## Telegram setup
 
-To create the installer, install Inno Setup 6 and run:
+1. Log into [my.telegram.org](https://my.telegram.org) with your normal Telegram account, then create credentials under **API development tools**. No BotFather token is needed.
+2. Set the destination to **me** (your Saved Messages), a public **@channel**, or the numeric chat ID for a channel/group to which the account can post.
+3. Authorize each account with its Telegram login code and, if required, 2FA password.
+4. Scan a small folder and test one batch before enabling scheduling.
 
-## Desktop application
+Keep source files stable during uploads; back up your Telethon sessions and state DB before migrating hosts.
 
-The production UI is a PySide6 desktop app. It stores configuration, the Telegram
-session, logs, and SQLite state under:
+## Security
 
-```text
-Windows: `%LOCALAPPDATA%\Telegram Auto Upload`  
-Linux: `~/.local/share/Telegram Auto Upload`
-```
+The Web UI is password-protected by default. Container defaults include loopback binding, non-root execution, dropped Linux capabilities, a read-only root filesystem and read-only upload source. Telegram sessions and auth handoff files have restrictive permissions; distributed leases and per-file claims help prevent duplicate uploads.
 
-Run from source:
+See [SECURITY.md](SECURITY.md) for the threat model, TLS/host allowlists, secret-file authentication and database-driver trust. Default options are documented in [.env.example](.env.example) and [docker-compose.yml](docker-compose.yml).
 
-```powershell
-python -m pip install -r requirements.txt
-python -m app.main
-```
+## Website and development
 
-## Screenshots
+The Astro marketing website under **website/** is separate from the Docker administration UI:
 
-### Dashboard
+~~~bash
+cd website
+npm ci
+npm run dev
+npm run build
+~~~
 
-![TeleDrive dashboard](images/dashboard.png)
+| Path | Purpose |
+| --- | --- |
+| **uploader.py** | Telegram engine, scanning, account strategies |
+| **db.py** | SQLAlchemy state, migrations, leases and claims |
+| **web/** | FastAPI admin Web UI and static assets |
+| **app/** | PySide6 desktop application |
+| **scripts/** | Windows/Linux desktop packaging scripts |
+| **examples/** | Docker and desktop sample config files |
+| **tests/** | Regression/security tests |
+| **website/** | Standalone Astro marketing site |
+| **installer/** | Windows Inno Setup assets |
 
-### Upload queue
+Development checks:
 
-![TeleDrive upload queue](images/upload-queue.png)
+~~~bash
+python -m pip install -r requirements-web.txt pytest
+python -m pytest -q
+python -m compileall -q uploader.py db.py web app tests
+docker compose config --quiet
+~~~
 
-### Settings
+Security CI also builds the image, exercises the live Web API/authentication, and performs dependency and image scans.
 
-![TeleDrive settings](images/settings.png)
+## Credits and license
 
-## Build on Windows
-
-Create the portable Windows application folder:
-
-```powershell
-.\build.ps1
-```
-
-Output: `dist\TeleDrive.exe`
-
-This is a standalone executable. You can copy only this `.exe` to another Windows
-machine; no Python installation is required.
-
-To create the installer, install Inno Setup 6 and run:
-
-```powershell
-.\build-installer.ps1
-```
-
-The installer is per-user and does not require administrator privileges.
-
-The installer output is `dist-installer\TeleDrive-Setup-1.0.6.exe`.
-
-### Quick install on Windows
-
-Open Command Prompt and paste:
-
-```bat
-mkdir "%TEMP%\TeleDrive" 2>nul & curl.exe -fL --progress-bar -o "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.6.exe" "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.6/TeleDrive-Setup-1.0.6.exe" & if errorlevel 1 (echo Download failed. & exit /b 1) else if not exist "%TEMP%\TeleDrive\TeleDrive-Setup-1.0.6.exe" (echo Installer was not downloaded. & exit /b 1) else (powershell -NoProfile -Command "Unblock-File -LiteralPath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.6.exe; Start-Process -FilePath $env:TEMP\TeleDrive\TeleDrive-Setup-1.0.6.exe" & echo TeleDrive setup launched.)
-```
-
-This downloads the Windows installer with visible progress and opens the setup
-wizard.
-
-### Quick install on Linux
-
-Close TeleDrive first, then open a terminal and paste:
-
-```bash
-pkill -x TeleDrive 2>/dev/null || true; curl -fL --progress-bar -o /tmp/TeleDrive.tar.gz "https://github.com/amjadlle/TeleDrive/releases/download/v1.0.6/TeleDrive-linux-x86_64.tar.gz" && tar -xzf /tmp/TeleDrive.tar.gz -C "$HOME" && "$HOME/TeleDrive/TeleDrive"
-```
-
-This works for both a fresh installation and an update. It closes a running
-TeleDrive process, downloads the Linux package, extracts it to `~/TeleDrive`,
-and launches the new version. Stop any active upload before running it. Your
-settings, login, queue, and history remain in `~/.local/share/Telegram Auto Upload`.
-
-These commands are platform-specific: Windows uses the `.exe` installer, while
-Linux uses the `.tar.gz` archive.
-
-## Build on Linux
-
-The same source code runs on Linux with Python, PySide6, Telethon, and PyYAML:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-python -m app.main
-```
-
-Create a Linux executable folder with PyInstaller:
-
-```bash
-python -m pip install pyinstaller
-python -m PyInstaller --noconfirm --clean --windowed \
-  --name "Telegram Auto Upload" --hidden-import uploader desktop.py
-```
-
-The Linux output is created under `dist/Telegram Auto Upload/`. The Windows `.exe`
-and Inno Setup installer are Windows-specific; they are not used on Linux.
-
-The repository also includes `build-linux.sh`, which automates the Linux build and
-creates `dist-installer/TeleDrive-linux-x86_64.tar.gz`:
-
-```bash
-bash build-linux.sh
-```
-
-After extracting the archive, launch the app with:
-
-```bash
-./TeleDrive/TeleDrive
-```
-
-To package the Linux build for sharing:
-
-```bash
-tar -czf TeleDrive-linux-x86_64.tar.gz -C dist "Telegram Auto Upload"
-```
-
-Linux users need to build on Linux (or inside WSL); PyInstaller does not cross-compile
-a Linux executable from Windows.
-
-### Large files on free Telegram accounts
-
-TeleDrive automatically splits files at 1.9 GB before uploading them. The parts are
-created as lossless byte-for-byte pieces, so no video re-encoding is performed and
-the original file is never changed. Split parts are uploaded as documents and are
-removed from the source drive after every part uploads successfully. To reconstruct
-an original file after downloading all parts, join them in order with a binary file
-concatenation tool.
-
-## Telegram setup and destinations
-
-TeleDrive signs in as the user's Telegram account through the official Telegram API
-(MTProto). It needs the user's `api_id` and `api_hash`, not a BotFather token.
-
-### Create Telegram API credentials
-
-1. Create or use a normal Telegram account in the official Telegram app.
-2. Open [my.telegram.org](https://my.telegram.org) and sign in with that account's phone number.
-3. Open **API development tools**.
-4. Create an application and copy the displayed `api_id` and `api_hash` into TeleDrive Settings.
-5. Keep the `api_hash` private. During the first upload, TeleDrive asks for the Telegram login
-   code and, if enabled, the two-step verification password.
-
-Do not create a bot or paste a BotFather token into TeleDrive: Bot API tokens are for bot-based
-programs, while TeleDrive uploads as the logged-in user account.
-
-### Choose where files are uploaded
-
-The **Target channel / Saved Messages** setting accepts:
-
-- `me` — your personal Saved Messages; recommended for the first test.
-- A public username such as `@my_backup_channel` — the logged-in account must be a member
-  and have permission to post.
-- A numeric chat ID such as `-1001234567890` — useful for private channels and supergroups.
-
-For a private channel or group, first join it with the same Telegram account used by TeleDrive.
-For a channel, make that account an administrator with permission to post. Keep the destination
-private if it contains personal backups.
-
-### Find a private channel or group ID
-
-The easiest option is to use the destination's public username when one exists. For a private
-channel or supergroup, open a message from it in Telegram Desktop and choose **Copy Message Link**.
-A link like `https://t.me/c/1234567890/123` contains the internal ID `1234567890`; enter it in
-TeleDrive as `-1001234567890`.
-
-If the chat is a basic group or the message-link method is unavailable, an ID-reporting bot such
-as `@userinfobot` or `@RawDataBot` may show the chat ID after you send a message or add the bot.
-Only use a third-party bot if you trust it, and do not send private files or credentials to it.
-
-### Bot API note
-
-Creating a bot with [@BotFather](https://t.me/BotFather) and obtaining a bot token is not required
-for the current TeleDrive application. A future bot-based mode would require separate code and
-different permissions; the instructions above are for the current user-account mode.
-
-## First use
-
-1. Launch the desktop application.
-2. Open Settings.
-3. Enter the Telegram API ID and API hash from `my.telegram.org`.
-4. Set the target to `me` for a safe Saved Messages test.
-5. Choose a small source folder.
-6. Save settings and scan the folder.
-7. Run one upload batch.
-
-## Recommended settings
-
-For a steady, conservative personal backup, start with:
-
-| Setting | Recommended value | Meaning |
-| --- | ---: | --- |
-| Files per run | `20` | Maximum files uploaded in one batch. |
-| Files per day | `500` | Daily upload cap across all batches. |
-| Delay between uploads (minimum) | `20 sec` | Shortest wait after a successful upload. |
-| Delay between uploads (maximum) | `60 sec` | Longest wait after a successful upload; TeleDrive chooses a random wait in this range. |
-| Delay between automatic runs | `60 min` | Wait between batches when automatic loop mode is enabled. |
-| Retry attempts per file | `3` | Total attempts for a file after temporary errors, including the first attempt. |
-| Retry backoff base | `30 sec` | Starting retry delay; later retries increase to 60, 120 seconds, and so on. |
-| Flood-wait buffer | `30 sec` | Extra time added when Telegram tells TeleDrive to wait. |
-| Send files as | `Document` | Keeps files as file attachments rather than converting media. |
-
-These values are a conservative starting point for a private personal archive. Telegram
-limits are dynamic, so no configuration can guarantee that an account will never receive
-a flood wait or other restriction. If Telegram reports a `FLOOD_WAIT`, let TeleDrive
-finish the server-requested wait instead of restarting repeatedly or running multiple
-copies of the app.
-
-### How the timing settings work
-
-- **Delay between uploads:** After each successful file, TeleDrive waits a random time
-  between the minimum and maximum values before continuing.
-- **Delay between automatic runs:** A batch starts immediately when the loop is enabled;
-  this value controls the wait before the next batch begins.
-- **Retry attempts per file:** Temporary network or Telegram errors trigger retries. A
-  file is not uploaded repeatedly when it succeeds.
-
-- **Retry backoff base:** Failed retries wait progressively longer: with a 30-second base,
-  the delays are 30, 60, and 120 seconds.
-- **Flood-wait buffer:** If Telegram returns `FLOOD_WAIT_60` and the buffer is 30 seconds,
-  TeleDrive waits 90 seconds before continuing.
-
-For the safest operation, upload only to your own private channel or Saved Messages,
-keep one TeleDrive process running, and avoid using the same account for bulk messaging
-while a backup is active.
-
-The first login requests the Telegram code and, if enabled, the two-step verification
-password. The session is stored locally and reused on later runs.
-
-## Backend CLI
-
-The uploader engine remains available for automation and diagnostics:
-
-```powershell
-python uploader.py --config path\to\config.yaml --scan-only
-python uploader.py --config path\to\config.yaml --run-once
-```
-
-## Safety behavior
-
-- Recursive source-folder scanning
-- SQLite queue with resumable state
-- One file uploaded at a time
-- Configurable delays and daily/run limits
-- Retry and flood-wait handling
-- Changed or missing files are skipped safely
-- Single-process lock prevents overlapping runs
-
-Keep the target private while testing, avoid modifying files during an active upload,
-and back up the local state database and Telegram session when migrating machines.
-
-## 👨‍💻 Author
-
-**Amjad P A** — Full-Stack AI Engineer & Solo Builder
-
-- 🌐 **Portfolio**: [amjad.mapki.in](https://amjad.mapki.in)
-- ☕ **Buy Me a Coffee**: [buymeacoffee.com/amjadlle](https://buymeacoffee.com/amjadlle)
-- 🐙 **GitHub**: [@amjadlle](https://github.com/amjadlle)
-- 💼 **LinkedIn**: [linkedin.com/in/amjadlle](https://linkedin.com/in/amjadlle)
-- 𝕏 **X (Twitter)**: [@amjadlle](https://x.com/amjadlle)
-- ✉️ **Email**: [hire.amjad@gmail.com](mailto:hire.amjad@gmail.com)
-
----
-
-## ☕ Support TeleDrive
-
-If TeleDrive helps you backup your files safely, manage your storage, or simplifies your Telegram workflow, consider buying me a coffee to support maintenance and future updates!
-
-<p align="center">
-  <a href="https://buymeacoffee.com/amjadlle" target="_blank">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="48" width="174" />
-  </a>
-</p>
-
----
-
-## License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
-
-## Contributing
-
-Bug reports, documentation improvements, and code contributions are welcome. Please
-read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Originally created by [Amjad P A](https://github.com/amjadlle/TeleDrive). This is the [babico/TeleDrive fork](https://github.com/babico/TeleDrive) with Docker and multi-account enhancements. Licensed under [MIT](LICENSE); see [CONTRIBUTING.md](CONTRIBUTING.md) for contributions.

@@ -23,10 +23,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 import uploader
 from db import redact_database_url
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("TELEDRIVE_CONFIG", "/config/config.yaml"))
 AUTH_DIR = Path(os.environ.get("TELEDRIVE_AUTH_DIR", "/data/auth"))
-STATIC_DIR = BASE_DIR / "static"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def _load_web_password() -> str:

@@ -35,7 +35,7 @@ jobs:
       - name: Build Linux package
         if: runner.os == 'Linux'
         shell: bash
-        run: bash build-linux.sh
+        run: bash scripts/build-linux.sh
 
       - name: Build Windows installer
         if: runner.os == 'Windows'
@@ -45,8 +45,8 @@ jobs:
           $iss = Get-Content installer\TelegramAutoUpload.iss -Raw
           $iss = [regex]::Replace($iss, '#define MyAppVersion ".*?"', ('#define MyAppVersion "' + $version + '"'))
           Set-Content installer\TelegramAutoUpload.iss $iss -NoNewline
-          .\build.ps1
-          .\build-installer.ps1
+          .\scripts\build.ps1
+          .\scripts\build-installer.ps1
 
       - name: Upload package artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -22,3 +22,9 @@ website/.astro/
 .env
 config/
 uploads/
+
+# Local website settings (formerly website/.gitignore)
+website/.env*
+.DS_Store
+.idea/
+.vscode/

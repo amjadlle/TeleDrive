@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - feature/docker-webui-multiaccount
   pull_request:
 
@@ -34,13 +35,13 @@ jobs:
           python -m pip install -r requirements-web.txt
           python -m pip install pytest bandit pip-audit
       - name: Compile
-        run: python -m compileall -q uploader.py db.py webapp.py tests
+        run: python -m compileall -q uploader.py db.py web tests
       - name: Unit tests
         run: python -m pytest -q
       - name: Dependency consistency
         run: python -m pip check
       - name: Bandit
-        run: bandit -q -r uploader.py db.py webapp.py -ll
+        run: bandit -q -r uploader.py db.py web -ll
       - name: Dependency audit
         run: pip-audit -r requirements-web.txt
       - name: Docker Compose config

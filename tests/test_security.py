@@ -10,7 +10,7 @@ import yaml
 
 import db
 import uploader
-import webapp
+import web.app as webapp
 from fastapi import HTTPException
 from starlette.requests import Request
 

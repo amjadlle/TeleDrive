@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $root
 $compilerPath = (Get-Command ISCC -ErrorAction SilentlyContinue).Source
 if (-not $compilerPath) {
