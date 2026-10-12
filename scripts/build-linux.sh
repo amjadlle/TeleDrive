@@ -10,7 +10,7 @@ python3 -m venv .venv
 
 rm -rf build dist
 .venv/bin/python -m PyInstaller --noconfirm --clean --windowed \
-  --name "TeleDrive" --hidden-import uploader desktop.py
+  --name "TeleDrive" --paths . --hidden-import teledrive.uploader teledrive/desktop.py
 
 mkdir -p dist-installer
 tar -czf dist-installer/TeleDrive-linux-x86_64.tar.gz -C dist TeleDrive

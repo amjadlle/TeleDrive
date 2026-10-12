@@ -16,7 +16,7 @@ dependencies = [
 
 [project.scripts]
 telegram-auto-upload = "app.main:main"
-telegram-auto-upload-cli = "uploader:main"
+telegram-auto-upload-cli = "teledrive.uploader:main"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app*", "teledrive*"]

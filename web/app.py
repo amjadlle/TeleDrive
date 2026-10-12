@@ -20,8 +20,8 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-import uploader
-from db import redact_database_url
+from teledrive import uploader
+from teledrive.db import redact_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("TELEDRIVE_CONFIG", "/config/config.yaml"))
@@ -337,7 +337,7 @@ async def start_uploader(mode: str) -> dict[str, Any]:
     async with process_lock:
         if current_process is not None and current_process.returncode is None:
             raise HTTPException(409, "Uploader is already running")
-        args = [sys.executable, str(BASE_DIR / "uploader.py"), "--config", str(CONFIG_PATH), "--auth-dir", str(AUTH_DIR)]
+        args = [sys.executable, "-m", "teledrive.uploader", "--config", str(CONFIG_PATH), "--auth-dir", str(AUTH_DIR)]
         if mode == "scan-only":
             args.append("--scan-only")
         elif mode == "connect":

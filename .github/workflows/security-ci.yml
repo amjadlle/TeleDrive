@@ -35,13 +35,19 @@ jobs:
           python -m pip install -r requirements-web.txt
           python -m pip install pytest bandit pip-audit
       - name: Compile
-        run: python -m compileall -q uploader.py db.py web tests
+        run: python -m compileall -q teledrive web app tests
+      - name: Packaged CLI import and entrypoint
+        run: |
+          python -m teledrive.uploader --help
+          python -m pip install --no-deps -e .
+          python -c "import teledrive.db, teledrive.uploader; print('package-import-ok')"
+
       - name: Unit tests
         run: python -m pytest -q
       - name: Dependency consistency
         run: python -m pip check
       - name: Bandit
-        run: bandit -q -r uploader.py db.py web -ll
+        run: bandit -q -r teledrive web -ll
       - name: Dependency audit
         run: pip-audit -r requirements-web.txt
       - name: Docker Compose config

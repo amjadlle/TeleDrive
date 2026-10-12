@@ -116,8 +116,8 @@ The scan/upload backend also runs without a UI. Copy the desktop example to a wr
 
 ~~~bash
 cp examples/config.desktop.yaml local-config.yaml
-python uploader.py --config local-config.yaml --scan-only
-python uploader.py --config local-config.yaml --run-once
+python -m teledrive.uploader --config local-config.yaml --scan-only
+python -m teledrive.uploader --config local-config.yaml --run-once
 ~~~
 
 The Web UI's automatic batch scheduler is configured in **Settings → Automation**. Avoid running multiple client processes against the same Telegram session; state leases alone cannot make shared session files safe.
@@ -150,8 +150,9 @@ npm run build
 
 | Path | Purpose |
 | --- | --- |
-| **uploader.py** | Telegram engine, scanning, account strategies |
-| **db.py** | SQLAlchemy state, migrations, leases and claims |
+| **teledrive/uploader.py** | Telegram engine, scanning, account strategies |
+| **teledrive/db.py** | SQLAlchemy state, migrations, leases and claims |
+| **teledrive/desktop.py** | Desktop executable launcher and frozen CLI dispatcher |
 | **web/** | FastAPI admin Web UI and static assets |
 | **app/** | PySide6 desktop application |
 | **scripts/** | Windows/Linux desktop packaging scripts |
@@ -165,7 +166,7 @@ Development checks:
 ~~~bash
 python -m pip install -r requirements-web.txt pytest
 python -m pytest -q
-python -m compileall -q uploader.py db.py web app tests
+python -m compileall -q teledrive web app tests
 docker compose config --quiet
 ~~~
 

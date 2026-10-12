@@ -456,7 +456,7 @@ class MainWindow(QMainWindow):
     def _command(self, mode: str) -> list[str]:
         if getattr(sys, "frozen", False):
             return [sys.executable, "--cli", "--config", str(config_path()), "--auth-dir", str(self.auth_dir), mode]
-        return [sys.executable, str(Path(__file__).parents[1] / "uploader.py"), "--config", str(config_path()), "--auth-dir", str(self.auth_dir), mode]
+        return [sys.executable, "-m", "teledrive.uploader", "--config", str(config_path()), "--auth-dir", str(self.auth_dir), mode]
 
     def _start_uploader(self, mode: str) -> None:
         if self.process.state() != QProcess.ProcessState.NotRunning:

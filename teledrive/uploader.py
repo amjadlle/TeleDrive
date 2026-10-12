@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Union
 
-from db import Database, DBRow, connect_database, normalize_database_url, redact_database_url, sqlite_database_path
+from .db import Database, DBRow, connect_database, normalize_database_url, redact_database_url, sqlite_database_path
 
 import yaml
 from telethon import TelegramClient

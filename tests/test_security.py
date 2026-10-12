@@ -8,14 +8,21 @@ from pathlib import Path
 
 import yaml
 
-import db
-import uploader
+from teledrive import db
+from teledrive import uploader
 import web.app as webapp
 from fastapi import HTTPException
 from starlette.requests import Request
 
 
 class SecurityTests(unittest.TestCase):
+    def test_python_sources_live_in_packages(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual([], sorted(p.name for p in root.glob("*.py")))
+        self.assertTrue((root / "teledrive" / "__init__.py").is_file())
+        self.assertTrue((root / "teledrive" / "uploader.py").is_file())
+        self.assertTrue((root / "teledrive" / "db.py").is_file())
+
     def test_web_config_redacts_and_restores_secrets(self):
         raw = {
             "telegram": {
