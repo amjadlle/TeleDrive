@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import (
     BigInteger, Column, ForeignKey, MetaData, String, Table,
-    and_, delete, insert, select, update,
+    and_, delete, insert, select, update, inspect, text,
 )
 from sqlalchemy.exc import IntegrityError
 
@@ -194,6 +194,16 @@ class BucketCatalog:
         history = self.db.connection.execute(
             select(objects.c.id).where(objects.c.bucket == name).limit(1)
         ).first()
+        # A bucket with initiated multipart uploads must not disappear, even
+        # before the first part is uploaded. Retain all abort/completion
+        # history until a verified lifecycle GC can safely remove it.
+        if inspect(self.db.engine).has_table("storage_multipart_uploads"):
+            mpu_history = self.db.connection.execute(
+                text("SELECT id FROM storage_multipart_uploads WHERE bucket = :bucket LIMIT 1"),
+                {"bucket": name},
+            ).first()
+            if mpu_history is not None:
+                raise ValueError("Bucket has multipart history; safe GC required")
         if history is not None:
             raise ValueError("Bucket has object history; safe physical GC required")
         self.db.connection.execute(delete(buckets).where(buckets.c.name == name))
