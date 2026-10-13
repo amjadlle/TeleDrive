@@ -421,6 +421,7 @@ async def _handle(request: Request):
         mpu_complete = bool(mpu_id and request.method == "POST")
         mpu_abort = bool(mpu_id and request.method == "DELETE")
         mpu_list = bool(mpu_id and request.method == "GET")
+        is_object_attributes = bool(separator and "attributes" in request.query_params)
         is_object_tagging = bool(separator and "tagging" in request.query_params)
         is_bucket_tagging = bool(bucket and not separator and "tagging" in request.query_params)
         is_bucket_cors = bool(bucket and not separator and "cors" in request.query_params)
@@ -428,7 +429,13 @@ async def _handle(request: Request):
             k in request.query_params for k in ("uploads", "uploadId", "versionId")
         ):
             return _error("NotImplemented", "Tagging with multipart/version selectors unsupported", 501)
-        if multi_delete:
+        if is_object_attributes:
+            if request.method != "GET" or any(
+                p in request.query_params for p in ("uploadId", "uploads", "tagging", "versionId")
+            ):
+                return _error("NotImplemented", "Unsupported GetObjectAttributes variant", 501)
+            action = "s3:GetObjectAttributes"
+        elif multi_delete:
             if any(p in request.query_params for p in ("tagging", "uploads", "uploadId", "versionId")):
                 return _error("NotImplemented", "Conflicting DeleteObjects controls", 501)
             action = "s3:DeleteObject"
@@ -1032,6 +1039,28 @@ async def _handle(request: Request):
         except FileNotFoundError:
             return _error("NoSuchKey", "The specified key does not exist", 404)
         item_etag = MultipartStore(catalog).object_etag(item.id, item.sha256)
+        if is_object_attributes:
+            raw = request.headers.get("x-amz-object-attributes", "")
+            signed = signed_header_names(request)
+            if "x-amz-object-attributes" not in signed:
+                raise SigV4Error("AccessDenied", "Object attributes header must be signed")
+            requested = raw.split(",")
+            if (not requested or any(not name for name in requested)
+                    or len(set(requested)) != len(requested)):
+                return _error("InvalidArgument", "Invalid object attributes list", 400)
+            permitted = {"ETag", "ObjectSize"}
+            if any(name not in permitted for name in requested):
+                return _error("NotImplemented", "Requested object attributes are unsupported", 501)
+            result = ET.Element("GetObjectAttributesOutput", xmlns=NAMESPACE)
+            if "ETag" in requested:
+                ET.SubElement(result, "ETag").text = '"' + item_etag + '"'
+            if "ObjectSize" in requested:
+                ET.SubElement(result, "ObjectSize").text = str(item.size)
+            return Response(
+                ET.tostring(result, encoding="utf-8", xml_declaration=True),
+                media_type="application/xml", status_code=200,
+                headers={"x-amz-version-id": item.id},
+            )
         http_properties = ObjectMetadataStore(catalog).get(item.id)
         precondition = read_precondition(request, item_etag, item.created_at)
         if precondition == 304:
