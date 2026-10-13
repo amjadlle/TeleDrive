@@ -428,27 +428,135 @@ class MainWindow(QMainWindow):
         mode = str(upload.get("send_mode", "document")).lower()
         self.send_mode.setCurrentIndex(max(0, self.send_mode.findData(mode)))
 
+    def _add_account_editor(self, account: dict | None = None) -> None:
+        account = dict(account or {})
+        number = len(self._account_widgets) + 1
+        frame = QFrame(objectName="card")
+        grid = QGridLayout(frame)
+        grid.setContentsMargins(8, 8, 8, 8)
+        enabled = QCheckBox("Enabled")
+        enabled.setChecked(bool(account.get("enabled", True)))
+        name = QLineEdit(str(account.get("name") or f"account{number}"))
+        phone = QLineEdit(str(account.get("phone") or ""))
+        phone.setPlaceholderText("+country code + number")
+        target = QLineEdit(str(account.get("target") or ""))
+        target.setPlaceholderText("Optional target override")
+        session = QLineEdit(str(account.get("session_path") or f"data/sessions/account{number}"))
+        api_id = QLineEdit(str(account.get("api_id") or ""))
+        api_id.setPlaceholderText("Inherit default")
+        api_hash = QLineEdit(str(account.get("api_hash") or ""))
+        api_hash.setEchoMode(QLineEdit.EchoMode.Password)
+        api_hash.setPlaceholderText("Inherit default")
+        remove = QPushButton("Remove")
+        remove.setObjectName("danger")
+        grid.addWidget(enabled, 0, 0)
+        grid.addWidget(QLabel("Name"), 0, 1)
+        grid.addWidget(name, 0, 2)
+        grid.addWidget(remove, 0, 3)
+        grid.addWidget(QLabel("Phone"), 1, 0)
+        grid.addWidget(phone, 1, 1)
+        grid.addWidget(QLabel("Target"), 1, 2)
+        grid.addWidget(target, 1, 3)
+        grid.addWidget(QLabel("Session"), 2, 0)
+        grid.addWidget(session, 2, 1, 1, 3)
+        grid.addWidget(QLabel("API ID override"), 3, 0)
+        grid.addWidget(api_id, 3, 1)
+        grid.addWidget(QLabel("API hash override"), 3, 2)
+        grid.addWidget(api_hash, 3, 3)
+        editor = {
+            "frame": frame, "enabled": enabled, "name": name,
+            "phone": phone, "target": target, "session": session,
+            "api_id": api_id, "api_hash": api_hash,
+        }
+        self._account_widgets.append(editor)
+        self.accounts_layout.addWidget(frame)
+        remove.clicked.connect(lambda: self._remove_account_editor(editor))
+
+    def _remove_account_editor(self, editor: dict) -> None:
+        self._account_widgets.remove(editor)
+        editor["frame"].setParent(None)
+        editor["frame"].deleteLater()
+
+    def _clear_account_editors(self) -> None:
+        for editor in list(self._account_widgets):
+            self._remove_account_editor(editor)
+
+    def _collect_accounts(self) -> list[dict]:
+        rows = []
+        for editor in self._account_widgets:
+            row = {
+                "name": editor["name"].text().strip(),
+                "enabled": editor["enabled"].isChecked(),
+                "phone": editor["phone"].text().strip(),
+                "session_path": editor["session"].text().strip(),
+            }
+            target = editor["target"].text().strip()
+            if target:
+                row["target"] = target
+            custom_id = editor["api_id"].text().strip()
+            if custom_id:
+                row["api_id"] = int(custom_id)
+            custom_hash = editor["api_hash"].text().strip()
+            if custom_hash:
+                row["api_hash"] = custom_hash
+            rows.append(row)
+        return rows
+
     def _save_settings(self) -> None:
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.warning(self, "Settings", "Stop the uploader before saving settings.")
+            return
+        temporary = config_path().with_suffix(".yaml.tmp")
         try:
-            api_id = int(self.api_id.text().strip())
-            if api_id <= 0 or not self.api_hash.text().strip():
-                raise ValueError("Enter your valid Telegram API ID and API hash.")
-            source = Path(self.source.text().strip())
+            default_id = int(self.api_id.text().strip() or 0)
+            source = Path(self.source.text().strip()).expanduser()
             if not source.is_dir():
                 raise ValueError("Choose an existing source folder.")
             if self.sleep_min.value() > self.sleep_max.value():
                 raise ValueError("Minimum upload delay cannot exceed maximum delay.")
-        except ValueError as exc:
-            QMessageBox.warning(self, "Settings", str(exc)); return
-        raw = yaml.safe_load(config_path().read_text(encoding="utf-8")) or {}
-        raw.setdefault("telegram", {}).update({"api_id": api_id, "api_hash": self.api_hash.text().strip(), "phone": self.phone.text().strip(), "target": self.target.text().strip() or "me"})
-        raw.setdefault("upload", {}).update({"source_dir": str(source), "max_files_per_run": self.per_run.value(), "max_files_per_day": self.per_day.value(), "sleep_min_seconds": self.sleep_min.value(), "sleep_max_seconds": self.sleep_max.value(), "retry_attempts": self.retry_attempts.value(), "backoff_base_seconds": self.backoff.value(), "floodwait_buffer_seconds": self.flood_buffer.value(), "send_mode": self.send_mode.currentData()})
-        raw.setdefault("app", {})["run_interval_minutes"] = self.run_interval.value()
-        temp = config_path().with_suffix(".yaml.tmp")
-        temp.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
-        temp.replace(config_path())
-        self.activity.appendPlainText("Settings saved.")
-        QMessageBox.information(self, "Settings", "Settings saved. On your first upload, Telegram will ask for a login code in the terminal setup flow.")
+            accounts = self._collect_accounts()
+            validate_account_rows(accounts, default_id, self.api_hash.text().strip())
+            config = config_path()
+            raw = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+            telegram = raw.setdefault("telegram", {})
+            telegram.update({
+                "api_id": default_id,
+                "api_hash": self.api_hash.text().strip(),
+                "target": self.target.text().strip() or "me",
+                "strategy": self.strategy.currentData(),
+                "accounts": accounts,
+            })
+            telegram.pop("phone", None)
+            telegram.pop("session_path", None)
+            raw.setdefault("upload", {}).update({
+                "source_dir": str(source.resolve()),
+                "max_files_per_run": self.per_run.value(),
+                "max_files_per_day": self.per_day.value(),
+                "sleep_min_seconds": self.sleep_min.value(),
+                "sleep_max_seconds": self.sleep_max.value(),
+                "retry_attempts": self.retry_attempts.value(),
+                "backoff_base_seconds": self.backoff.value(),
+                "floodwait_buffer_seconds": self.flood_buffer.value(),
+                "send_mode": self.send_mode.currentData(),
+            })
+            state = raw.setdefault("state", {})
+            state["database_url"] = self.database_url.text().strip() or "data/state.db"
+            state.pop("db_path", None)
+            raw.setdefault("app", {})["run_interval_minutes"] = self.run_interval.value()
+            fd = os.open(str(temporary), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(raw, handle, sort_keys=False)
+            cfg = uploader.load_config(str(temporary))
+            uploader.validate_config(cfg)
+            os.replace(temporary, config)
+            if os.name != "nt":
+                config.chmod(0o600)
+            self.activity.appendPlainText("Settings saved.")
+            QMessageBox.information(self, "Settings", "Settings saved; each account has its own login prompt.")
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            QMessageBox.warning(self, "Settings", str(exc))
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose source folder", self.source.text())
