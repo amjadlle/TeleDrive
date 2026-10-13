@@ -123,6 +123,8 @@ class BotApiClient:
             code = parsed.get("error_code", "unknown") if isinstance(parsed, dict) else "unknown"
             raise BotApiError(f"Bot API {method} rejected request (code {code})")
         result = parsed.get("result")
+        if result is True:  # deleteMessage and other success-only methods
+            return {}
         if not isinstance(result, dict):
             raise BotApiError(f"Bot API {method} returned an invalid result")
         return result
