@@ -16,7 +16,7 @@ from teledrive.s3.credentials import S3CredentialStore
 def make_form(service, data, *, key="browser/upload.bin", seconds=300,
               missing=None, clauses=None, issued=None, key_prefix=None,
               status=None, redirect=None, content_type=None, content_type_prefix=None,
-              extra_fields=None):
+              extra_fields=None, metadata_prefixes=None):
     credential = issued or service[1]
     current = datetime.now(timezone.utc).replace(microsecond=0)
     day = current.strftime("%Y%m%d")
@@ -39,6 +39,8 @@ def make_form(service, data, *, key="browser/upload.bin", seconds=300,
         ["starts-with", "$key", key_prefix] if k == "key" and key_prefix is not None
         else ["starts-with", "$Content-Type", content_type_prefix]
         if k == "Content-Type" and content_type_prefix is not None
+        else ["starts-with", "$" + k, metadata_prefixes[k]]
+        if metadata_prefixes is not None and k in metadata_prefixes
         else {k: v}
         for k, v in form.items()
     )
@@ -685,6 +687,90 @@ def test_browser_post_metadata_duplicate_constraints_fail_closed(service):
         clauses=constraints,
     ))
     assert response.status_code == 403, response.text
+    assert service[2].uploads == 0
+
+
+
+@pytest.mark.parametrize("size", [1, 65537, 1048593])
+def test_browser_post_metadata_prefix_signed_value_readback(service, size):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = hashlib.shake_256(f"metadata-prefix-{size}".encode()).digest(size)
+    key = f"browser/policy-meta/{size}.bin"
+    issued = make_form(
+        service, body, key=key,
+        extra_fields={"x-amz-meta-release": "p1:initial"},
+        metadata_prefixes={"x-amz-meta-release": "p1:"},
+    )
+    permitted = {**issued, "x-amz-meta-release": "p1:verified-on-server"}
+    response = post(service, body, permitted)
+    assert response.status_code == 204, response.text
+    get = signed(service, "GET", "/backup-bucket/" + key)
+    assert get.content == body
+    assert get.headers["x-amz-meta-release"] == "p1:verified-on-server"
+    assert post(service, body, {
+        **issued, "x-amz-meta-release": "p2:unauthorized",
+    }).status_code == 403
+    assert service[2].uploads == 1
+
+
+def test_real_boto3_browser_post_metadata_prefix_policy_interoperability(service):
+    import boto3
+    from botocore.config import Config
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = hashlib.shake_256(b"boto3-meta-prefix").digest(131087)
+    checksum = base64.b64encode(hashlib.sha256(data).digest()).decode()
+    creds = service[1]
+    client = boto3.client(
+        "s3", endpoint_url="http://localhost:9000",
+        aws_access_key_id=creds.access_key, aws_secret_access_key=creds.secret_key,
+        region_name="us-east-1", config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+        ),
+    )
+    form = client.generate_presigned_post(
+        Bucket="backup-bucket", Key="sdk/meta-prefix.bin",
+        Fields={
+            "x-amz-meta-env": "ci:original",
+            "x-amz-checksum-sha256": checksum,
+        },
+        Conditions=[
+            ["starts-with", "$x-amz-meta-env", "ci:"],
+            {"x-amz-checksum-sha256": checksum},
+            ["content-length-range", 0, 8 * 1024 * 1024],
+        ], ExpiresIn=120,
+    )
+    authorized = {**form["fields"], "x-amz-meta-env": "ci:accepted"}
+    result = post(service, data, authorized)
+    assert result.status_code == 204, result.text
+    get = signed(service, "GET", "/backup-bucket/sdk/meta-prefix.bin")
+    assert get.content == data and get.headers["x-amz-meta-env"] == "ci:accepted"
+    assert post(service, data, {
+        **authorized, "x-amz-meta-env": "prod:forbidden",
+    }).status_code == 403
+    assert service[2].uploads == 1
+
+
+@pytest.mark.parametrize("bad", [
+    ["starts-with", "$x-amz-meta-does-not-exist", "ci:"],
+    ["starts-with", "$Cache-Control", "public"],
+    ["starts-with", "$x-amz-credential", ""],
+    ["starts-with", "$x-amz-meta-env", 5],
+    ["starts-with", "$x-amz-meta-env", "other:"],
+])
+def test_browser_post_metadata_prefix_policy_does_not_weaken_auth(service, bad):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"must-not-be-accepted"
+    form = make_form(
+        service, data, extra_fields={"x-amz-meta-env": "ci:verified"},
+    )
+    clauses = json.loads(base64.b64decode(form["policy"]))["conditions"]
+    clauses[-2] = bad
+    result = post(service, data, make_form(
+        service, data, extra_fields={"x-amz-meta-env": "ci:verified"},
+        clauses=clauses,
+    ))
+    assert result.status_code == 403, result.text
     assert service[2].uploads == 0
 
 
