@@ -93,7 +93,8 @@ class BucketCatalog:
         return ObjectHead(item, int(row[1]))
 
     def publish(self, identifier: str, *, now: int,
-                expected_generation: int | None = None) -> ObjectHead:
+                expected_generation: int | None = None,
+                expected_object_id: str | None = None) -> ObjectHead:
         """Atomically update the current pointer after Telegram upload succeeds.
 
         expected_generation=0 is create-if-absent, and a positive value is
@@ -108,6 +109,8 @@ class BucketCatalog:
             .where(heads.c.bucket == item.bucket, heads.c.key_hash == digest)
         ).first()
         if existing is None:
+            if expected_object_id is not None:
+                raise ValueError("Object changed; object ID precondition failed")
             if expected_generation not in (None, 0):
                 raise ValueError("Object changed; generation precondition failed")
             try:
@@ -125,12 +128,15 @@ class BucketCatalog:
         if current.bucket != item.bucket or current.key != item.key:
             raise RuntimeError("Object hash collision detected")
         generation = int(existing[1])
+        if expected_object_id is not None and expected_object_id != existing[0]:
+            raise ValueError("Object changed; object ID precondition failed")
         if expected_generation is not None and expected_generation != generation:
             raise ValueError("Object changed; generation precondition failed")
         changed = self.db.connection.execute(
             update(heads)
             .where(
                 heads.c.bucket == item.bucket, heads.c.key_hash == digest,
+                heads.c.object_id == existing[0],
                 heads.c.generation == generation,
             )
             .values(object_id=item.id, generation=generation + 1, updated_at=now)
@@ -166,7 +172,8 @@ class BucketCatalog:
         ) for row in rows]
 
     def remove_current(self, bucket: str, key: str, *,
-                       expected_generation: int | None = None) -> bool:
+                       expected_generation: int | None = None,
+                       expected_object_id: str | None = None) -> bool:
         """Unlink a head only; Telegram data stays until separately verified GC."""
         digest = self._keyhash(key)
         try:
@@ -175,6 +182,8 @@ class BucketCatalog:
             return False
         if expected_generation is not None and current.generation != expected_generation:
             raise ValueError("Object changed; generation precondition failed")
+        if expected_object_id is not None and current.item.id != expected_object_id:
+            raise ValueError("Object changed; object ID precondition failed")
         condition = [
             heads.c.bucket == bucket, heads.c.key_hash == digest,
             heads.c.object_id == current.item.id,
