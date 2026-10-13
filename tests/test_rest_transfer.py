@@ -165,3 +165,33 @@ def test_missing_bot_credentials_returns_503_before_upload(service, monkeypatch)
     result = put(client, headers, b"secret", key="unconfigured")
     assert result.status_code == 503
     assert bot.counter == 0
+
+
+def test_head_returns_actual_object_metadata_without_telegram_download(service):
+    client, headers, bot, _ = service
+    body = os.urandom(257)
+    uploaded = put(client, headers, body, key="head-check.bin")
+    assert uploaded.status_code == 201
+    calls_before = bot.counter
+    result = client.head(
+        "/api/v1/buckets/backup-bucket/content",
+        params={"key": "head-check.bin"}, headers=headers,
+    )
+    assert result.status_code == 200
+    assert result.content == b""
+    assert result.headers["content-length"] == str(len(body))
+    assert result.headers["etag"] == '"' + hashlib.sha256(body).hexdigest() + '"'
+    assert result.headers["x-teledrive-object-id"] == uploaded.json()["id"]
+    assert bot.counter == calls_before
+
+    absent = client.head(
+        "/api/v1/buckets/backup-bucket/content",
+        params={"key": "does-not-exist"}, headers=headers,
+    )
+    assert absent.status_code == 404
+
+    forbidden = client.head(
+        "/api/v1/buckets/backup-bucket/content",
+        params={"key": "head-check.bin"},
+    )
+    assert forbidden.status_code == 401
