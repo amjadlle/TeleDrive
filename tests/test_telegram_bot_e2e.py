@@ -453,3 +453,118 @@ def test_live_bot_large_single_chunk_roundtrip_below_download_cap(size):
                 finally:
                     conn.close()
     asyncio.run(scenario())
+
+
+def test_live_bot_durable_job_queue_restart_and_source_fencing():
+    """Actual Bot API, 256 KiB+13 payload, durable SQL worker and fail-closed job.
+
+    The DB is reopened before claiming and again before download. Changing a
+    second queued source cannot send new Telegram messages or publish HEAD.
+    """
+    import time
+    from sqlalchemy import select
+    from types import SimpleNamespace
+    from teledrive.storage.bot_api_adapter import _bot_files
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.jobs import StorageUploadJobs, UploadJobError
+
+    token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
+    if not token or not chat_id:
+        pytest.skip("Dedicated real Bot API test credentials missing")
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-live-job-") as folder:
+            root = Path(folder)
+            database_path = root / "queue.db"
+            payload = os.urandom(256 * 1024 + 13)
+            source = root / "job-source.bin"
+            source.write_bytes(payload)
+            mutated = root / "mutated.bin"
+            mutated.write_bytes(b"before-enqueue")
+            conn = connect_database(str(database_path))
+            transport = None
+            try:
+                catalog = BucketCatalog(ManifestStore(conn))
+                catalog.create_bucket("ci-queued", int(time.time()))
+                jobs = StorageUploadJobs(catalog)
+                correct_id = jobs.enqueue(
+                    "ci-queued", "durable/payload.bin", source, allowed_root=root,
+                )
+                bad_id = jobs.enqueue(
+                    "ci-queued", "durable/mutated.bin", mutated, allowed_root=root,
+                )
+                assert correct_id != bad_id
+                with pytest.raises(FileNotFoundError):
+                    catalog.get("ci-queued", "durable/payload.bin")
+                # Source mutation rejection is proved after queue snapshot.
+                mutated.write_bytes(b"after-enqueue-changed-data")
+
+                conn.close()
+                conn = connect_database(str(database_path))
+                transport = BotApiChunkTransport(
+                    BotApiClient(token), BotFileIndex(conn),
+                    chat_id=int(chat_id), account="bot-ci-durable-jobs",
+                    min_upload_interval=1.1,
+                )
+                queue = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+                # Claim order is deterministic by created_at and then job ID;
+                # do not rely on random UUID ordering across equal timestamps.
+                results = []
+                failures = []
+                for _ in range(2):
+                    try:
+                        results.append(await queue.run_next(
+                            transport, allowed_root=root, scratch_directory=root,
+                            chunk_size=64 * 1024,
+                        ))
+                    except UploadJobError as error:
+                        failures.append(error)
+                assert len(results) == 1 and results[0]["id"] == correct_id
+                assert results[0]["state"] == "done"
+                assert len(failures) == 1
+                assert "Source changed" in str(failures[0])
+                states = {row["id"]: row for row in queue.list_jobs()}
+                assert states[correct_id]["state"] == "done"
+                assert states[bad_id]["state"] == "failed"
+                assert states[correct_id]["attempts"] == 1
+                assert states[bad_id]["attempts"] == 1
+                assert await queue.run_next(
+                    transport, allowed_root=root, scratch_directory=root,
+                    chunk_size=64 * 1024,
+                ) is None
+
+                conn.close()
+                conn = connect_database(str(database_path))
+                reopened = BucketCatalog(ManifestStore(conn))
+                published = reopened.get("ci-queued", "durable/payload.bin")
+                assert published.item.id == results[0]["object_id"]
+                assert published.item.sha256 == hashlib.sha256(payload).hexdigest()
+                assert len(reopened.manifests.parts(published.item.id)) == 5
+                with pytest.raises(FileNotFoundError):
+                    reopened.get("ci-queued", "durable/mutated.bin")
+                source.unlink()
+                transport = BotApiChunkTransport(
+                    BotApiClient(token), BotFileIndex(conn),
+                    chat_id=int(chat_id), account="bot-ci-durable-jobs",
+                )
+                recovered = root / "recovered.bin"
+                await TelegramObjectStorage(
+                    reopened.manifests, transport, chunk_size=64 * 1024,
+                    scratch_directory=root,
+                ).download_to_path(published.item.id, recovered)
+                assert recovered.read_bytes() == payload
+            finally:
+                try:
+                    if transport is not None:
+                        for account, peer, mid in conn.connection.execute(select(
+                            _bot_files.c.account, _bot_files.c.chat_id,
+                            _bot_files.c.message_id,
+                        )).all():
+                            await transport.delete(SimpleNamespace(
+                                account=account, chat_id=int(peer), message_id=int(mid),
+                            ))
+                finally:
+                    conn.close()
+
+    asyncio.run(scenario())
