@@ -167,10 +167,18 @@ def _presigned_signature(request: Request, lookup_secret, permission: str,
         for k, v in sorted(canonical_pairs, key=lambda p:
                            (quote(p[0], safe='-_.~'), quote(p[1], safe='-_.~')))
     )
+    # botocore's SigV4 canonical request uses the declared payload hash
+    # when x-amz-content-sha256 is present, including presigned POST.
+    # The signed header above pins the digest, and the multipart handler
+    # independently rehashes the received XML before committing it.
+    canonical_payload = (
+        headers["x-amz-content-sha256"]
+        if "x-amz-content-sha256" in signed else "UNSIGNED-PAYLOAD"
+    )
     canonical = (
         f"{request.method}\n{_canonical_path(request)}\n{canonical_query}\n"
         + "".join(f"{name}:{headers[name]}\n" for name in signed)
-        + f"\n{signed_string}\nUNSIGNED-PAYLOAD"
+        + f"\n{signed_string}\n{canonical_payload}"
     )
     scope = f"{date}/{region}/s3/aws4_request"
     string_to_sign = (
