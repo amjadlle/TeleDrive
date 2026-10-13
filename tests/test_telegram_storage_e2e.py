@@ -142,10 +142,12 @@ def test_real_telegram_unindexed_chunk_cleanup():
 @pytest.mark.parametrize("size,chunk_size", [
     pytest.param(0, 2048, id="empty-0B"),
     pytest.param(1, 2048, id="single-byte"),
+    pytest.param(2047, 2048, id="chunk-minus-one"),
     pytest.param(2048, 2048, id="exact-chunk"),
     pytest.param(2049, 2048, id="chunk-plus-one"),
     pytest.param(65537, 32768, id="64KiB-plus-one"),
     pytest.param(1048593, 524288, id="1MiB-plus-17"),
+    pytest.param(2 * 1024 * 1024 + 17, 1024 * 1024, id="2MiB-plus-17"),
 ])
 def test_real_telethon_varied_payload_lengths_with_remote_readback(size, chunk_size):
     """Live user-account Telegram: SHA of every remote part and crossed ranges.
