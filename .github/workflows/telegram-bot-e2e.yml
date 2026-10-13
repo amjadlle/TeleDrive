@@ -2,6 +2,12 @@ name: Telegram Bot Storage E2E
 
 on:
   workflow_dispatch:
+    inputs:
+      run_multipart:
+        description: "Run 5 MiB+ real Telegram multipart assembly and cleanup test"
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - main
@@ -22,6 +28,7 @@ jobs:
     env:
       TELEDRIVE_E2E_BOT_TOKEN: ${{ secrets.TELEDRIVE_E2E_BOT_TOKEN }}
       TELEDRIVE_E2E_BOT_CHAT_ID: ${{ vars.TELEDRIVE_E2E_BOT_CHAT_ID }}
+      TELEDRIVE_E2E_MULTIPART: ${{ github.event_name == 'workflow_dispatch' && inputs.run_multipart && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
