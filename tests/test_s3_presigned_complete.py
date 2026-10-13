@@ -22,7 +22,9 @@ def _url(service, upload_id, payload, *, checksum=True, extra=""):
     request = AWSRequest(
         method="POST",
         url="http://localhost:9000/backup-bucket/asset.bin?uploadId=" + upload_id + extra,
-        data=payload,
+        # Query presigning must not parse XML as botocore JSON/form data.
+        # SigV4 authenticates method, path/query and the signed XML SHA-256.
+        data=b"",
         headers=headers,
     )
     request.context["payload_signing_enabled"] = False
