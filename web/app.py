@@ -923,6 +923,29 @@ async def put_object_content(
         conn.close()
 
 
+@app.head("/api/v1/buckets/{bucket}/content", tags=["Uploads"],
+          summary="Read object headers without downloading Telegram bytes")
+def head_object_content(
+    bucket: str, key: str = Query(..., min_length=1, max_length=1024),
+    _: None = Depends(require_api_scope("objects:read")),
+):
+    conn = db_connect()
+    try:
+        try:
+            item = BucketCatalog(ManifestStore(conn)).get(bucket, key).item
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "Object not found") from exc
+        return Response(status_code=200, headers={
+            "ETag": '"' + item.sha256 + '"',
+            "Content-Length": str(item.size),
+            "Accept-Ranges": "bytes",
+            "X-TeleDrive-Object-ID": item.id,
+            "Content-Type": "application/octet-stream",
+        })
+    finally:
+        conn.close()
+
+
 @app.get("/api/v1/buckets/{bucket}/content", tags=["Uploads"],
          summary="Stream verified object bytes from Telegram; supports HTTP Range")
 async def get_object_content(
