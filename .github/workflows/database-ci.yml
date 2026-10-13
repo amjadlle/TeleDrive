@@ -1,0 +1,76 @@
+name: Database Integration CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/docker-webui-multiaccount
+    paths:
+      - "teledrive/db.py"
+      - "teledrive/uploader.py"
+      - "tests/test_database_live.py"
+      - ".github/workflows/database-ci.yml"
+  pull_request:
+    paths:
+      - "teledrive/db.py"
+      - "teledrive/uploader.py"
+      - "tests/test_database_live.py"
+      - ".github/workflows/database-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    name: PostgreSQL + MySQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: teledrive
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: teledrive
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U teledrive -d teledrive"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root-test-password
+          MYSQL_DATABASE: teledrive
+          MYSQL_USER: teledrive
+          MYSQL_PASSWORD: test-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -u root -proot-test-password"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DB_TEST_POSTGRES_URL: postgresql+psycopg://teledrive:test-password@127.0.0.1:5432/teledrive
+      DB_TEST_MYSQL_URL: mysql+pymysql://teledrive:test-password@127.0.0.1:3306/teledrive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install application and DB drivers
+        run: |
+          python -m pip install -e .
+          python -m pip install pytest "psycopg[binary]>=3.2,<4" "PyMySQL>=1.1,<2"
+          python -m pip check
+      - name: Run live PostgreSQL/MySQL integration tests
+        run: python -m pytest -vv tests/test_database_live.py
