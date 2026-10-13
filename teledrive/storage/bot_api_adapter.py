@@ -125,6 +125,9 @@ class BotApiClient:
             body = json.dumps(fields).encode("utf-8")
             content_type = "application/json"
         url = f"https://api.telegram.org/bot{self.__token}/{method}"
+        parsed_url = urllib.parse.urlsplit(url)
+        if parsed_url.scheme != "https" or parsed_url.hostname != "api.telegram.org":
+            raise BotApiError("Bot API requests must use Telegram HTTPS")
         request = urllib.request.Request(
             url, data=body, headers={"Content-Type": content_type}, method="POST"
         )
@@ -162,8 +165,13 @@ class BotApiClient:
     def _download_sync(self, file_path: str, destination: Path) -> None:
         safe_path = self._safe_file_path(file_path)
         url = f"https://api.telegram.org/file/bot{self.__token}/{safe_path}"
+        parsed_url = urllib.parse.urlsplit(url)
+        if parsed_url.scheme != "https" or parsed_url.hostname != "api.telegram.org":
+            raise BotApiError("Bot file downloads must use Telegram HTTPS")
         try:
             request = urllib.request.Request(url)
+            # nosec B310: URL scheme + hostname validated above; no user URL.
+            # nosec B310: Telegram-only HTTPS URL validated before this call.
             with urllib.request.urlopen(request, timeout=90) as response:
                 with destination.open("xb") as output:
                     size = 0
