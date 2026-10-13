@@ -266,10 +266,28 @@ class StorageUploadJobs:
         return result.rowcount == 1
 
     def retry(self, ident: str) -> bool:
+        row = self.db.connection.execute(
+            select(jobs.c.object_id).where(
+                jobs.c.id == ident, jobs.c.state == "failed"
+            )
+        ).one_or_none()
+        if row is None:
+            self.db.connection.rollback()
+            return False
+        object_id = row[0]
+        if object_id is not None:
+            # A READY staged manifest is safe to reuse. FAILED or missing
+            # journals cannot be resumed; keep them for independent GC
+            # evidence, and retry with a fresh object ID.
+            state = self.db.connection.execute(
+                select(objects.c.status).where(objects.c.id == object_id)
+            ).scalar_one_or_none()
+            if state != "ready":
+                object_id = None
         result = self.db.connection.execute(
             update(jobs).where(jobs.c.id == ident, jobs.c.state == "failed")
             .values(state="queued", last_error=None, lease_token=None,
-                    lease_until=None)
+                    lease_until=None, object_id=object_id)
         )
         self.db.commit()
         return result.rowcount == 1
