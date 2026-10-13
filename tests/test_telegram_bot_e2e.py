@@ -675,3 +675,110 @@ def test_live_bot_ack_receipt_recovers_unjournaled_chunk_without_resend():
                 finally:
                     db.close()
     asyncio.run(scenario())
+
+
+def test_live_bot_rejected_429_then_remote_chunk_sha_and_sql_restart():
+    """Inject *only* the 429; actual retry/uploads/readback hit Telegram.
+
+    Do not deliberately flood Telegram to induce a real 429. The first
+    sendDocument attempt is rejected locally and never reaches the channel.
+    The retry and following chunk are real, indexed and independently read.
+    """
+    import time
+    from sqlalchemy import select
+    from types import SimpleNamespace
+    from teledrive.storage.bot_api_adapter import (
+        BotApiRateLimited, _bot_files,
+    )
+
+    token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
+    if not token or not chat_id:
+        pytest.skip("Dedicated Telegram Bot API channel not configured")
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-live-429-") as folder:
+            root = Path(folder)
+            db_path = root / "rate-limited.db"
+            source = root / "source.bin"
+            original = os.urandom(128 * 1024 + 13)
+            source.write_bytes(original)
+            database = connect_database(str(db_path))
+            real_api = BotApiClient(token)
+
+            class RejectedFirst:
+                def __init__(self):
+                    self.attempts = 0
+                    self.rejections = 0
+
+                async def call(self, method, fields, source=None):
+                    if method == "sendDocument":
+                        self.attempts += 1
+                        if self.rejections == 0:
+                            self.rejections = 1
+                            raise BotApiRateLimited(1)
+                    return await real_api.call(method, fields, source)
+
+                async def download_file(self, path, destination):
+                    return await real_api.download_file(path, destination)
+
+            injected = RejectedFirst()
+            transport = BotApiChunkTransport(
+                injected, BotFileIndex(database), chat_id=int(chat_id),
+                account="bot-ci-429-fencing", min_upload_interval=1.1,
+            )
+            try:
+                await transport.verify_target()
+                obj = await TelegramObjectStorage(
+                    ManifestStore(database), transport,
+                    chunk_size=128 * 1024, scratch_directory=root,
+                ).put_file("ci-429", "retry/boundary.bin", source)
+                assert injected.rejections == 1
+                # Exactly one refused attempt, two confirmed channel posts.
+                assert injected.attempts == 3
+                refs = ManifestStore(database).parts(obj.id)
+                assert len(refs) == 2
+                assert [(ref.ordinal, ref.offset, ref.size) for ref in refs] == [
+                    (0, 0, 128 * 1024), (1, 128 * 1024, 13),
+                ]
+                assert len({ref.message_id for ref in refs}) == 2
+                assert all(ref.chat_id == int(chat_id) for ref in refs)
+                assert obj.sha256 == hashlib.sha256(original).hexdigest()
+                persisted = database.connection.execute(select(
+                    _bot_files.c.message_id,
+                )).scalars().all()
+                assert len(persisted) == 2
+                assert set(persisted) == {ref.message_id for ref in refs}
+
+                database.close()
+                database = connect_database(str(db_path))
+                source.unlink()
+                after_restart = TelegramObjectStorage(
+                    ManifestStore(database),
+                    BotApiChunkTransport(
+                        real_api, BotFileIndex(database), chat_id=int(chat_id),
+                        account="bot-ci-429-fencing",
+                    ),
+                    chunk_size=128 * 1024, scratch_directory=root,
+                )
+                restored = root / "restored.bin"
+                await after_restart.download_to_path(obj.id, restored)
+                assert restored.read_bytes() == original
+                data = b"".join([block async for block in after_restart.iter_bytes(
+                    obj.id, start=128 * 1024 - 3, end=128 * 1024 + 5,
+                )])
+                assert data == original[128 * 1024 - 3:128 * 1024 + 5]
+            finally:
+                try:
+                    for account, peer, mid in database.connection.execute(select(
+                        _bot_files.c.account, _bot_files.c.chat_id,
+                        _bot_files.c.message_id,
+                    )).all():
+                        await transport.delete(SimpleNamespace(
+                            account=account, chat_id=int(peer),
+                            message_id=int(mid),
+                        ))
+                finally:
+                    database.close()
+
+    asyncio.run(scenario())
