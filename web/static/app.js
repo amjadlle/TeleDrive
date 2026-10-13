@@ -5,7 +5,7 @@ function toast(msg,bad=false){const e=$('#toast');e.textContent=msg;e.className=
 function fmtTs(v){return v?new Date(v*1000).toLocaleString():'-'}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 
-$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.page).classList.add('active');if(b.dataset.page==='queue')loadFiles('queue');if(b.dataset.page==='history')loadFiles('history');if(b.dataset.page==='settings')loadSettings();if(b.dataset.page==='logs')loadLogs()});
+$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.page).classList.add('active');if(b.dataset.page==='queue')loadFiles('queue');if(b.dataset.page==='history')loadFiles('history');if(b.dataset.page==='settings')loadSettings();if(b.dataset.page==='api-management')loadKeys();if(b.dataset.page==='logs')loadLogs()});
 
 async function refreshDashboard(){
 try{
@@ -45,5 +45,53 @@ $('#runBtn').onclick=()=>api('/api/process/start',{method:'POST',body:JSON.strin
 $('#scanBtn').onclick=()=>api('/api/process/start',{method:'POST',body:JSON.stringify({mode:'scan-only'})}).then(refreshDashboard).catch(e=>toast(e.message,true));
 $('#stopBtn').onclick=()=>api('/api/process/stop',{method:'POST'}).then(refreshDashboard).catch(e=>toast(e.message,true));
 $('#authSubmit').onclick=async()=>{if(!authPrompt)return;try{await api('/api/auth',{method:'POST',body:JSON.stringify({account:authPrompt.account,kind:authPrompt.kind,value:$('#authValue').value})});$('#authValue').value='';toast('Auth value submitted')}catch(e){toast(e.message,true)}};
+
+async function loadKeys(){
+  try {
+    const result=await api('/api/v1/admin/keys');
+    const rows=(result.keys||[]).map(k=>{
+      const state=k.revoked?'Revoked':(k.expires_at&&k.expires_at<=Date.now()/1000?'Expired':'Active');
+      return '<tr><td>'+esc(k.name)+'</td><td><code>'+esc(k.prefix)+'…</code></td><td>'+esc((k.scopes||[]).join(', '))+'</td><td>'+fmtTs(k.created_at)+'<br>'+fmtTs(k.last_used_at)+'</td><td>'+state+'</td><td><div class="row"><button class="btn compact key-rotate" data-id="'+esc(k.id)+'" '+(state!=='Active'?'disabled':'')+'>Rotate</button><button class="btn danger compact key-revoke" data-id="'+esc(k.id)+'" '+(state==='Revoked'?'disabled':'')+'>Revoke</button></div></td></tr>';
+    }).join('');
+    $('#apiKeysRows').innerHTML=rows;
+    $('.key-revoke').forEach(b=>b.onclick=async()=>{
+      if(!confirm('Revoke this API key immediately? Existing clients will lose access.'))return;
+      try{await api('/api/v1/admin/keys/'+encodeURIComponent(b.dataset.id),{method:'DELETE'});toast('Key revoked');await loadKeys()}catch(e){toast(e.message,true)}
+    });
+    $('.key-rotate').forEach(b=>b.onclick=async()=>{
+      if(!confirm('Rotate this key now? The old token will stop working immediately.'))return;
+      try{const result=await api('/api/v1/admin/keys/'+encodeURIComponent(b.dataset.id)+'/rotate',{method:'POST'});revealKey(result.token);toast('Key rotated');await loadKeys()}catch(e){toast(e.message,true)}
+    });
+  }catch(e){toast(e.message,true)}
+}
+
+function revealKey(value){
+  $('#createdKeySecret').value=value;
+  $('#createdKeyCard').style.display='block';
+}
+$('#createKey').onclick=async()=>{
+  const scopes=$('#keyScopes input[type=checkbox]:checked').map(e=>e.value);
+  const expiry=$('#keyExpiry').value;
+  try{
+    const response=await api('/api/v1/admin/keys',{method:'POST',body:JSON.stringify({
+      name:$('#keyName').value.trim(),scopes,
+      expires_at:expiry?Math.floor(new Date(expiry).getTime()/1000):null
+    })});
+    revealKey(response.token);
+    $('#keyName').value='';
+    toast('Key created — copy the secret now');
+    await loadKeys();
+  }catch(e){toast(e.message,true)}
+};
+$('#refreshKeys').onclick=loadKeys;
+$('#dismissKey').onclick=()=>{$('#createdKeySecret').value='';$('#createdKeyCard').style.display='none'};
+$('#copyKey').onclick=async()=>{
+  try{await navigator.clipboard.writeText($('#createdKeySecret').value);toast('Key copied')}catch(e){toast('Clipboard access denied; select and copy the key manually',true)}
+};
+$('#keyScopes input[type=checkbox]').forEach(field=>field.onchange=()=>{
+  const admin=$('#keyScopes input[value="admin:*"]');
+  if(field===admin&&admin.checked){$('#keyScopes input[type=checkbox]').forEach(x=>{if(x!==admin)x.checked=false})}
+  else if(field.checked){admin.checked=false}
+});
 
 refreshDashboard();setInterval(refreshDashboard,3000);
