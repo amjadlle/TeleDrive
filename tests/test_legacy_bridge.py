@@ -29,7 +29,8 @@ def bridge(tmp_path):
     cat = BucketCatalog(ManifestStore(conn))
     cat.create_bucket("bridge-ci", int(time.time()))
     config = SimpleNamespace(
-        source_dir=str(root), allowed_extensions=[".txt"], max_file_size_mb=1,
+        source_dir=str(root), db_path=str(db_path),
+        allowed_extensions=[".txt"], max_file_size_mb=1,
     )
     try:
         yield root, db_path, StorageUploadJobs(cat), config
@@ -209,6 +210,11 @@ def test_cutover_checks_root_database_and_bucket_before_telegram(bridge, tmp_pat
             _cutover(bridge, lease, allowed_root=outside)
         with pytest.raises(UploadJobError, match="same database"):
             _cutover(bridge, unrelated)
+        cfg = bridge[3]
+        cfg.db_path = str(tmp_path / "other-configured.db")
+        with pytest.raises(UploadJobError, match="same database"):
+            _cutover(bridge, lease)
+        cfg.db_path = str(path)
         with pytest.raises(FileNotFoundError):
             _cutover(bridge, lease, bucket="not-a-bucket")
         assert queue.list_jobs() == []

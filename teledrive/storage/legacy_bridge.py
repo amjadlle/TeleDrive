@@ -104,8 +104,10 @@ async def run_legacy_cutover_cycle(
     permitted = allowed_root.resolve(strict=True)
     if not source_root.is_dir() or not source_root.is_relative_to(permitted):
         raise UploadJobError("Legacy source must be inside the approved job root")
-    if queue.db.url != lease_db.url:
-        raise UploadJobError("Legacy importer and job queue must share the same database")
+    from teledrive.db import normalize_database_url
+    if (queue.db.url != lease_db.url
+            or normalize_database_url(cfg.db_path) != queue.db.url):
+        raise UploadJobError("Legacy uploader, importer and job queue must share the same database")
 
     from uuid import uuid4
     holder = "legacy-cutover-" + uuid4().hex

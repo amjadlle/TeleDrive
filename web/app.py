@@ -1250,6 +1250,8 @@ async def run_next_storage_upload_job(
     request: Request, _: None = Depends(require_auth),
 ):
     _same_origin(request)
+    if os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "").strip():
+        raise HTTPException(409, "Manual job execution is disabled during leased legacy cutover")
     root = _storage_job_root()
     conn = db_connect()
     try:
