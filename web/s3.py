@@ -978,6 +978,21 @@ async def _handle(request: Request):
             db.close()
 
 
+@app.middleware("http")
+async def _route_encoded_control_keys(request: Request, call_next):
+    """FastAPI's default {path:path} regex does not match decoded newlines.
+
+    Encoded control characters are legitimate opaque S3 object key bytes.
+    Route only those paths directly to the same signature-verified gateway;
+    the rest continue through normal Starlette routing. The raw URL path,
+    not the decoded scope path, is used for SigV4 verification.
+    """
+    path = request.scope.get("path", "")
+    if path != "/__health" and any(ord(character) < 32 for character in path):
+        return await _handle(request)
+    return await call_next(request)
+
+
 @app.get("/__health", include_in_schema=False)
 def health():
     # Container-local liveness only; no credentials or Telegram calls.
