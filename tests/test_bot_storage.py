@@ -860,3 +860,71 @@ def test_independent_bot_accounts_have_distinct_send_intent_fences(tmp_path):
         assert idx.unresolved_count() == 2
     finally:
         db.close()
+
+def test_concurrent_duplicate_upload_attempts_do_not_send_twice(tmp_path):
+    db = connect_database(str(tmp_path / "parallel-intents.db"))
+
+    class SlowRemote(FakeBotApi):
+        async def call(self, method, fields, source=None):
+            if method == "sendDocument":
+                await asyncio.sleep(0.05)
+            return await super().call(method, fields, source)
+
+    remote = SlowRemote()
+    transport = BotApiChunkTransport(
+        remote, BotFileIndex(db), chat_id=remote.chat_id,
+        min_upload_interval=0,
+    )
+    source = tmp_path / "concurrent.bin"
+    source.write_bytes(os.urandom(8 * 1024 + 1))
+    sha = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    async def both():
+        return await asyncio.gather(
+            transport.upload(source, object_id="dupe-race", ordinal=0, checksum=sha),
+            transport.upload(source, object_id="dupe-race", ordinal=0, checksum=sha),
+            return_exceptions=True,
+        )
+
+    try:
+        results = run(both())
+        assert sum(isinstance(item, tuple) for item in results) == 1
+        assert sum(isinstance(item, BotApiError) for item in results) == 1
+        assert remote.counter == 1
+        assert transport.index.unresolved_count() == 0
+    finally:
+        db.close()
+
+
+def test_unresolved_send_fence_applies_across_independent_sql_sessions(tmp_path):
+    path = str(tmp_path / "independent-workers.db")
+    original = connect_database(path)
+    another = connect_database(path)
+    try:
+        initial = BotFileIndex(original)
+        same_remote = BotFileIndex(another)
+        initial.start_send("bot", -1001234, "cross-worker", 0, "a" * 64, 13)
+        assert same_remote.unresolved_count() == 1
+        with pytest.raises(BotApiError, match="Unresolved"):
+            same_remote.start_send(
+                "bot", -1001234, "cross-worker", 0, "a" * 64, 13,
+            )
+        assert initial.unresolved_count() == 1
+    finally:
+        another.close()
+        original.close()
+
+
+def test_unresolved_intent_cannot_be_cleared_by_wrong_source_metadata(tmp_path):
+    db = connect_database(str(tmp_path / "strict-clear.db"))
+    try:
+        idx = BotFileIndex(db)
+        idx.start_send("bot", -1009, "sensitive", 4, "b" * 64, 19)
+        idx.clear_rejected_send("bot", -1009, "sensitive", 4, "c" * 64, 19)
+        idx.clear_rejected_send("bot", -1009, "sensitive", 4, "b" * 64, 20)
+        idx.clear_rejected_send("other", -1009, "sensitive", 4, "b" * 64, 19)
+        assert idx.unresolved_count() == 1
+        idx.clear_rejected_send("bot", -1009, "sensitive", 4, "b" * 64, 19)
+        assert idx.unresolved_count() == 0
+    finally:
+        db.close()
