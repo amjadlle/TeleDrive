@@ -47,13 +47,26 @@ class TelethonChunkTransport:
         account = self.accounts.get(reference.account)
         if account is None:
             raise FileNotFoundError("Telegram account holding this chunk is unavailable")
-        client, _ = account
-        # Re-fetch by message ID to refresh Telethon's expiring file references.
-        message = await client.get_messages(reference.chat_id, ids=reference.message_id)
+        client, target = account
+        # Re-fetch the original message (rather than caching file_reference).
+        # Reuse the already-resolved target where it matches the saved chat ID;
+        # StringSession does not necessarily persist Telegram entity caches.
+        peer = reference.chat_id
+        if int(await client.get_peer_id(target)) == reference.chat_id:
+            peer = target
+        message = await client.get_messages(peer, ids=reference.message_id)
         if message is None or not getattr(message, "media", None):
             raise FileNotFoundError("Telegram message/media was deleted or inaccessible")
         result = await client.download_media(message, file=str(destination))
-        if result is None or not destination.is_file():
+        if result is None:
+            raise FileNotFoundError("Telegram media download failed")
+        actual = Path(result)
+        if actual != destination:
+            # Telethon may append a MIME extension to an extensionless target.
+            if actual.resolve().parent != destination.parent.resolve():
+                raise RuntimeError("Unexpected Telegram download path")
+            actual.replace(destination)
+        if not destination.is_file() or destination.is_symlink():
             raise FileNotFoundError("Telegram media download failed")
 
     async def delete(self, reference: ChunkReference) -> None:
