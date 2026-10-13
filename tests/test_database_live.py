@@ -433,3 +433,38 @@ def test_object_tags_survive_database_restart_and_copy_on_live_sql(env_name):
         ]
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_s3_bucket_tags_persist_and_delete_cleanly_on_live_sql(env_name):
+    """Real SQL FK/table lifecycle, independent versioned metadata and deletion."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from uuid import uuid4
+    from teledrive.s3.tagging import BucketTagStore
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
+
+    bucket = "ci-" + uuid4().hex[:20]
+    db = connect_database(url)
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        catalog.create_bucket(bucket, int(time.time()))
+        tags = BucketTagStore(catalog)
+        tags.replace(bucket, [("team", "TeleDrive"), ("language", "Türkçe")])
+        assert tags.get(bucket) == [("language", "Türkçe"), ("team", "TeleDrive")]
+    finally:
+        db.close()
+
+    reopened = connect_database(url)
+    try:
+        catalog = BucketCatalog(ManifestStore(reopened))
+        tags = BucketTagStore(catalog)
+        assert tags.get(bucket) == [("language", "Türkçe"), ("team", "TeleDrive")]
+        tags.replace(bucket, [("team", "changed")])
+        assert tags.get(bucket) == [("team", "changed")]
+        catalog.delete_bucket(bucket)
+        assert bucket not in catalog.list_buckets()
+    finally:
+        reopened.close()
