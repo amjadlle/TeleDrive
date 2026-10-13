@@ -147,6 +147,30 @@ class BotFileIndex:
             select(func.count()).select_from(_bot_send_intents)
         ).scalar_one())
 
+    def unresolved_details(self, *, limit: int = 100) -> list[dict]:
+        """Read-only, bounded operator inventory for lost Bot ACK triage.
+
+        This returns only SQL metadata, never a token, HTTP request or file ID.
+        A row is NOT proof that Telegram accepted the message, and this method
+        must not clear intents or cause remote-media writes.
+        """
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("Invalid unresolved Bot inventory limit")
+        query = select(
+            _bot_send_intents.c.account,
+            _bot_send_intents.c.chat_id,
+            _bot_send_intents.c.object_id,
+            _bot_send_intents.c.ordinal,
+            _bot_send_intents.c.sha256,
+            _bot_send_intents.c.size,
+        ).order_by(
+            _bot_send_intents.c.account,
+            _bot_send_intents.c.chat_id,
+            _bot_send_intents.c.object_id,
+            _bot_send_intents.c.ordinal,
+        ).limit(limit)
+        return [dict(row) for row in self.db.connection.execute(query).mappings()]
+
     def put_receipt(self, account: str, chat_id: int, message_id: int,
                     file_id: str, *, object_id: str, ordinal: int,
                     checksum: str, size: int) -> None:
