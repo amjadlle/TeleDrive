@@ -20,7 +20,9 @@ from teledrive.storage.manifest import ManifestStore
 
 
 def put(svc, body: bytes, key: str = "race.bin", **headers):
-    return signed(svc, "PUT", f"/conditional/{key}", body, extra_headers=headers)
+    return signed(svc, "PUT", f"/conditional/{key}", body,
+                  extra_headers={name.replace("_", "-"): value
+                                 for name, value in headers.items()})
 
 
 def read(svc, key: str = "race.bin"):
