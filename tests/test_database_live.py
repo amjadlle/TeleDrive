@@ -124,3 +124,70 @@ def test_failed_chunk_cleanup_transaction_is_durable(env_name):
             asyncio.run(service.cleanup(object_id, dry_run=False))
     finally:
         connection.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_writer_fence_blocks_stale_commit_on_separate_connection(env_name):
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from hashlib import sha256
+    from uuid import uuid4
+    from teledrive.storage.manifest import ManifestStore, ManifestError
+
+    a = connect_database(url)
+    b = connect_database(url)
+    try:
+        now = int(time.time()) - 3600
+        first = ManifestStore(a)
+        second = ManifestStore(b)
+        ident = first.begin("ci", f"live-writer/{uuid4().hex}", 0, now)
+        first.start_writer(ident, "worker-before-crash", now, ttl=120)
+        assert not second.heartbeat_writer(ident, "wrong-owner", now + 1)
+        abandoned = second.abandon_stale_pending(now=now + 3601, min_age_seconds=60)
+        assert ident in abandoned
+        assert not first.heartbeat_writer(ident, "worker-before-crash", now + 3602)
+        with pytest.raises(ManifestError):
+            first.finish(ident, sha256(b"").hexdigest(), now + 3602,
+                         writer_token="worker-before-crash")
+        assert (ident, "failed") in first.interrupted()
+    finally:
+        a.close()
+        b.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_bucket_heads_visible_across_live_database_connections(env_name):
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from hashlib import sha256
+    from uuid import uuid4
+    from teledrive.storage.manifest import ManifestStore
+    from teledrive.storage.catalog import BucketCatalog
+
+    a = connect_database(url)
+    b = connect_database(url)
+    try:
+        first = ManifestStore(a)
+        second = ManifestStore(b)
+        one = BucketCatalog(first)
+        two = BucketCatalog(second)
+        bucket = "ci-" + uuid4().hex[:20]
+        one.create_bucket(bucket, int(time.time()))
+        key = "backup/ü/snapshot.bin"
+        ident = first.begin(bucket, key, 0, int(time.time()))
+        first.finish(ident, sha256(b"").hexdigest(), int(time.time()))
+        first_head = one.publish(ident, now=int(time.time()), expected_generation=0)
+        assert first_head.generation == 1
+        assert two.get(bucket, key).item.id == ident
+
+        next_id = second.begin(bucket, key, 0, int(time.time()))
+        second.finish(next_id, sha256(b"").hexdigest(), int(time.time()))
+        assert two.publish(next_id, now=int(time.time()), expected_generation=1).generation == 2
+        with pytest.raises(ValueError):
+            one.publish(ident, now=int(time.time()), expected_generation=1)
+        assert one.get(bucket, key).item.id == next_id
+    finally:
+        a.close()
+        b.close()
