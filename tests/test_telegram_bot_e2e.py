@@ -572,3 +572,106 @@ def test_live_bot_durable_job_queue_restart_and_source_fencing():
                     conn.close()
 
     asyncio.run(scenario())
+
+
+def test_live_bot_ack_receipt_recovers_unjournaled_chunk_without_resend():
+    """Real Telegram ACK, process crash before manifest append, fenced resume.
+
+    The already-uploaded chunk is fetched and independently compared to the
+    immutable source. Resume must send *only* the remaining tail to Telegram.
+    """
+    import time
+    from sqlalchemy import select, update
+    from types import SimpleNamespace
+    from teledrive.storage.bot_api_adapter import _bot_files
+    from teledrive.storage.manifest import writer_fences
+
+    token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
+    chat = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
+    if not token or not chat:
+        pytest.skip("Dedicated Telegram Bot API channel not configured")
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-live-ack-") as folder:
+            root = Path(folder)
+            db_path = root / "ack.db"
+            size = 8192 + 17
+            data = os.urandom(size)
+            local = root / "source.bin"
+            local.write_bytes(data)
+            db = connect_database(str(db_path))
+            transport = BotApiChunkTransport(
+                BotApiClient(token), BotFileIndex(db),
+                chat_id=int(chat), account="bot-ci-ack-recovery",
+            )
+            try:
+                await transport.verify_target()
+                manifests = ManifestStore(db)
+                object_id = manifests.begin(
+                    "live-ack", "crash-after-ack.bin", size, int(time.time()),
+                )
+                manifests.start_writer(
+                    object_id, "killed-writer", int(time.time()), ttl=60,
+                )
+                first_bytes = data[:8192]
+                part = root / "first.bin"
+                part.write_bytes(first_bytes)
+                account, chat_id, message_id = await transport.upload(
+                    part, object_id=object_id, ordinal=0,
+                    checksum=hashlib.sha256(first_bytes).hexdigest(),
+                )
+                assert account == "bot-ci-ack-recovery" and chat_id == int(chat)
+                assert manifests.recovery_parts(object_id) == []
+                # The bot receipt is already durable; the manifest journal
+                # and old writer's last heartbeat simulate an abrupt kill.
+                db.connection.execute(
+                    update(writer_fences).where(
+                        writer_fences.c.object_id == object_id,
+                    ).values(lease_until=0)
+                )
+                db.commit()
+                db.close()
+                db = connect_database(str(db_path))
+                transport = BotApiChunkTransport(
+                    BotApiClient(token), BotFileIndex(db),
+                    chat_id=int(chat), account="bot-ci-ack-recovery",
+                )
+                resumed = await TelegramObjectStorage(
+                    ManifestStore(db), transport, chunk_size=8192,
+                    scratch_directory=root,
+                ).resume_file("live-ack", "crash-after-ack.bin", local, object_id)
+                references = ManifestStore(db).parts(object_id)
+                assert resumed.sha256 == hashlib.sha256(data).hexdigest()
+                assert len(references) == 2
+                assert references[0].message_id == message_id
+                assert references[0].sha256 == hashlib.sha256(first_bytes).hexdigest()
+                assert len({ref.message_id for ref in references}) == 2
+                # Exactly two remote messages exist: the original recovered
+                # receipt and one newly transmitted 17-byte tail.
+                entries = db.connection.execute(select(
+                    _bot_files.c.message_id
+                )).scalars().all()
+                assert len(entries) == 2 and set(entries) == {
+                    ref.message_id for ref in references
+                }
+                local.unlink()
+                destination = root / "restored.bin"
+                await TelegramObjectStorage(
+                    ManifestStore(db), transport, chunk_size=8192,
+                    scratch_directory=root,
+                ).download_to_path(object_id, destination)
+                assert destination.read_bytes() == data
+            finally:
+                try:
+                    # ACK IDs are collected even on a crash before appending
+                    # a chunk; cleanup never touches unrelated channel posts.
+                    for account, cid, mid in db.connection.execute(select(
+                        _bot_files.c.account, _bot_files.c.chat_id,
+                        _bot_files.c.message_id,
+                    )).all():
+                        await transport.delete(SimpleNamespace(
+                            account=account, chat_id=int(cid), message_id=int(mid),
+                        ))
+                finally:
+                    db.close()
+    asyncio.run(scenario())
