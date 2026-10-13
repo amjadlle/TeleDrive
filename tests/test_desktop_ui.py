@@ -142,3 +142,52 @@ def test_desktop_rejects_duplicate_accounts_before_saving(ui, tmp_path):
     win._save_settings()
     assert warnings
     assert config.read_text() == original
+
+
+def test_desktop_api_keys_share_database_and_revoke_immediately(ui, monkeypatch):
+    from teledrive.api_keys import ApiKeyStore
+
+    win, _, warnings = ui
+    revealed = []
+    monkeypatch.setattr(QInputDialog, "getText",
+                        lambda *args, **kwargs: revealed.append(args[-1]) or ("", True))
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
+    win._show_page(4)
+    page = win.api_page
+    assert win.pages.currentWidget() is page
+    page.name.setText("desktop-integration")
+    page.scopes.setText("buckets:read,objects:read")
+    page.create_key()
+    assert not warnings
+    assert len(revealed) == 1
+    original = revealed[0]
+    assert original.startswith("td_live_")
+    assert page.table.rowCount() == 1
+
+    conn = win._api_database_connection()
+    try:
+        assert ApiKeyStore(conn).authorize(original, "buckets:read")
+        assert not ApiKeyStore(conn).authorize(original, "buckets:manage")
+    finally:
+        conn.close()
+    page.table.selectRow(0)
+    page.rotate_selected()
+    assert len(revealed) == 2
+    replacement = revealed[1]
+    assert replacement != original
+    conn = win._api_database_connection()
+    try:
+        keys = ApiKeyStore(conn)
+        assert not keys.authorize(original, "buckets:read")
+        assert keys.authorize(replacement, "buckets:read")
+    finally:
+        conn.close()
+    page.table.selectRow(0)
+    page.revoke_selected()
+    conn = win._api_database_connection()
+    try:
+        assert not ApiKeyStore(conn).authorize(replacement, "buckets:read")
+    finally:
+        conn.close()
+    assert not warnings
