@@ -15,6 +15,7 @@ jobs:
       TELEDRIVE_E2E_API_HASH: ${{ secrets.TELEDRIVE_E2E_API_HASH }}
       TELEDRIVE_E2E_SESSION: ${{ secrets.TELEDRIVE_E2E_SESSION }}
       TELEDRIVE_E2E_TARGET: ${{ vars.TELEDRIVE_E2E_TARGET }}
+      TELEDRIVE_E2E_CHANNEL_NAME: ${{ secrets.TELEDRIVE_E2E_CHANNEL_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -29,6 +30,10 @@ jobs:
         run: |
           if [[ -z "$TELEDRIVE_E2E_API_ID" || -z "$TELEDRIVE_E2E_API_HASH" || -z "$TELEDRIVE_E2E_SESSION" ]]; then
             echo "::error::Configure TELEDRIVE_E2E_API_ID, TELEDRIVE_E2E_API_HASH and TELEDRIVE_E2E_SESSION"
+            exit 1
+          fi
+          if [[ -z "$TELEDRIVE_E2E_CHANNEL_NAME" && -z "$TELEDRIVE_E2E_TARGET" ]]; then
+            echo "::error::Set TELEDRIVE_E2E_CHANNEL_NAME (recommended) or TELEDRIVE_E2E_TARGET"
             exit 1
           fi
       - name: Install storage dependencies
