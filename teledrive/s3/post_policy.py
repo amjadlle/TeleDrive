@@ -12,13 +12,16 @@ from email.parser import BytesParser
 from .sigv4 import SigV4Error, _hmac
 
 FORM_LIMIT = 20 * 1024 * 1024
-FIELDS = frozenset(("key", "policy", "x-amz-algorithm", "x-amz-credential",
-                    "x-amz-date", "x-amz-signature", "x-amz-checksum-sha256"))
-CONDITIONS = FIELDS - {"policy", "x-amz-signature"} | {"bucket"}
+REQUIRED_FIELDS = frozenset(("key", "policy", "x-amz-algorithm",
+                             "x-amz-credential", "x-amz-date",
+                             "x-amz-signature", "x-amz-checksum-sha256"))
+OPTIONAL_FIELDS = frozenset(("success_action_status",))
+FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
+CONDITIONS = (REQUIRED_FIELDS - {"policy", "x-amz-signature"}) | {"bucket"}
 
 
 def parse_form(content_type: str, data: bytes):
-    """Parse at most one file and exactly the expected seven policy fields."""
+    """Parse one file, mandatory signing fields and a bounded response status."""
     if len(data) > FORM_LIMIT:
         raise SigV4Error("EntityTooLarge", "Browser form is too large")
     if (len(content_type) > 256 or not content_type.lower().startswith("multipart/form-data;")
@@ -33,7 +36,7 @@ def parse_form(content_type: str, data: bytes):
     if not msg.is_multipart() or msg.defects:
         raise SigV4Error("InvalidRequest", "Malformed multipart upload")
     items = list(msg.iter_parts())
-    if len(items) > 8:
+    if len(items) > len(FIELDS) + 1:
         raise SigV4Error("InvalidRequest", "Too many browser form parts")
     fields = {}
     file_bytes = None
@@ -59,8 +62,9 @@ def parse_form(content_type: str, data: bytes):
                 fields[name] = content.decode("utf-8")
             except UnicodeError as exc:
                 raise SigV4Error("InvalidRequest", "Invalid field encoding") from exc
-    if file_bytes is None or set(fields) != FIELDS:
-        raise SigV4Error("InvalidRequest", "Missing signed browser form fields")
+    if (file_bytes is None or not REQUIRED_FIELDS.issubset(fields)
+            or not set(fields).issubset(FIELDS)):
+        raise SigV4Error("InvalidRequest", "Missing or unsupported signed browser form fields")
     return fields, file_bytes
 
 
@@ -84,6 +88,9 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
     now = now or datetime.now(timezone.utc)
     if not -300 <= (now - signed_at).total_seconds() <= 900:
         raise SigV4Error("AccessDenied", "Policy signing date expired")
+    status = fields.get("success_action_status")
+    if status is not None and status not in ("200", "201", "204"):
+        raise SigV4Error("InvalidArgument", "Unsupported POST success response status")
     key = fields["key"]
     if not key or len(key.encode()) > 1024 or "$" + "{" in key:
         raise SigV4Error("InvalidArgument", "Exact non-template object key required")
@@ -103,11 +110,15 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
     except (ValueError, TypeError, KeyError, UnicodeError) as exc:
         raise SigV4Error("InvalidArgument", "Invalid POST policy JSON") from exc
     if (not isinstance(doc, dict) or set(doc) != {"conditions", "expiration"}
-            or not isinstance(clauses, list) or len(clauses) != 7
+            or not isinstance(clauses, list)
+            or len(clauses) != len(CONDITIONS) + 1 + (status is not None)
             or not now < expiration <= signed_at + timedelta(minutes=15)):
         raise SigV4Error("AccessDenied", "Policy must expire within fifteen minutes")
     bound = {name: fields[name] for name in CONDITIONS if name != "bucket"}
     bound["bucket"] = bucket
+    if status is not None:
+        bound["success_action_status"] = status
+    expected_conditions = set(bound)
     seen = set()
     has_range = False
     for entry in clauses:
@@ -135,10 +146,10 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
             name, value = entry[1][1:], entry[2]
         else:
             raise SigV4Error("AccessDenied", "Unsupported POST policy condition")
-        if name not in CONDITIONS or name in seen or value != bound[name]:
+        if name not in expected_conditions or name in seen or value != bound[name]:
             raise SigV4Error("AccessDenied", "POST policy does not pin every form field")
         seen.add(name)
-    if seen != CONDITIONS or not has_range:
+    if seen != expected_conditions or not has_range:
         raise SigV4Error("AccessDenied", "Incomplete POST upload constraints")
     secret = lookup_secret(access, "s3:PutObject")
     if secret is None:
