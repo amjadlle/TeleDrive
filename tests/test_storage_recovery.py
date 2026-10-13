@@ -228,3 +228,40 @@ def test_telethon_adapter_scan_limit_cannot_hide_older_orphans(db_store):
     result = run(adapter.discover(identifier, scan_limit=2))
     assert not result.complete
     assert len(result.matches) == 2
+
+
+def test_unindexed_telegram_upload_from_db_crash_is_discovered(db_store):
+    """send_file succeeded, append() never committed: caption still locates it."""
+    ident, _ = failed_object(db_store, with_journal=False)
+    remote = FakeRecoveryTransport()
+    orphan = RemoteChunk("primary", 12345, 500, 0, "c" * 16)
+    remote.messages[orphan.identity] = orphan
+    manager = RecoveryManager(db_store, remote, min_age_seconds=3600)
+    preview = run(manager.cleanup(ident))
+    assert preview.journaled == 0
+    assert preview.orphaned == 1
+    assert remote.messages
+    report = run(manager.cleanup(ident, dry_run=False))
+    assert report.cleaned and report.deleted == 1
+    assert not remote.messages
+
+
+def test_ready_object_is_never_a_cleanup_candidate(db_store):
+    digest = hashlib.sha256(b"").hexdigest()
+    ident = db_store.begin("ci", "finished", 0, int(time.time()) - 100000)
+    db_store.finish(ident, digest, int(time.time()) - 100000)
+    remote = FakeRecoveryTransport()
+    with pytest.raises(UnsafeCleanup, match="Only failed"):
+        run(RecoveryManager(db_store, remote).cleanup(ident, dry_run=False))
+    assert db_store.get(ident).size == 0
+
+
+def test_unknown_account_reference_does_not_trigger_deletion(db_store):
+    ident, known = failed_object(db_store)
+    remote = FakeRecoveryTransport()
+    # A different account is not the account recorded for this chunk.
+    fake = replace(known, account="unexpected")
+    remote.messages[known.identity] = fake
+    with pytest.raises(UnsafeCleanup, match="does not belong"):
+        run(RecoveryManager(db_store, remote, min_age_seconds=3600).cleanup(ident, dry_run=False))
+    assert not remote.deleted
