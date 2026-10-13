@@ -27,7 +27,7 @@ from fastapi.responses import Response, StreamingResponse
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
-from teledrive.s3.tagging import ObjectTagStore, TaggingError, validate_tags
+from teledrive.s3.tagging import ObjectTagStore, BucketTagStore, TaggingError, validate_tags
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
@@ -115,6 +115,22 @@ def _parse_tag_xml(body: bytes) -> list[tuple[str, str]]:
             raise TaggingError("MalformedXML", "Invalid Tag key/value fields")
         entries.append((children["Key"].text or "", children["Value"].text or ""))
     return validate_tags(entries)
+
+
+async def _tag_request_tags(request: Request) -> list[tuple[str, str]]:
+    body = bytearray()
+    async for block in request.stream():
+        body.extend(block)
+        if len(body) > 16 * 1024:
+            raise TaggingError("MalformedXML", "Tagging XML exceeds maximum size")
+    _verify_upload_sha256(request, hashlib.sha256(body).digest())
+    md5_header = request.headers.get("content-md5")
+    if md5_header and not hmac.compare_digest(
+        md5_header,
+        base64.b64encode(hashlib.md5(body, usedforsecurity=False).digest()).decode("ascii")
+    ):
+        raise TaggingError("BadDigest", "Content-MD5 checksum mismatch")
+    return _parse_tag_xml(bytes(body))
 
 
 def _range(value: str | None, size: int) -> tuple[int, int, bool]:
@@ -269,13 +285,22 @@ async def _handle(request: Request):
         mpu_abort = bool(mpu_id and request.method == "DELETE")
         mpu_list = bool(mpu_id and request.method == "GET")
         is_object_tagging = bool(separator and "tagging" in request.query_params)
-        if is_object_tagging and any(k in request.query_params for k in ("uploads", "uploadId", "versionId")):
+        is_bucket_tagging = bool(bucket and not separator and "tagging" in request.query_params)
+        if (is_object_tagging or is_bucket_tagging) and any(
+            k in request.query_params for k in ("uploads", "uploadId", "versionId")
+        ):
             return _error("NotImplemented", "Tagging with multipart/version selectors unsupported", 501)
         if is_object_tagging:
             action = {
                 "GET": "s3:GetObjectTagging",
                 "PUT": "s3:PutObjectTagging",
                 "DELETE": "s3:DeleteObjectTagging",
+            }.get(request.method)
+        elif is_bucket_tagging:
+            action = {
+                "GET": "s3:GetBucketTagging",
+                "PUT": "s3:PutBucketTagging",
+                "DELETE": "s3:DeleteBucketTagging",
             }.get(request.method)
         elif mpu_start or mpu_part or mpu_complete:
             action = "s3:PutObject"
@@ -317,6 +342,25 @@ async def _handle(request: Request):
                             media_type="application/xml")
 
         if not separator:
+            if is_bucket_tagging:
+                if bucket not in catalog.list_buckets():
+                    return _error("NoSuchBucket", "Bucket does not exist", 404)
+                tagstore = BucketTagStore(catalog)
+                if request.method == "GET":
+                    values = tagstore.get(bucket)
+                    if not values:
+                        return _error("NoSuchTagSet", "No bucket tag set exists", 404)
+                    return Response(_tag_xml(values), media_type="application/xml")
+                if request.method == "PUT":
+                    tagstore.replace(bucket, await _tag_request_tags(request))
+                    return Response(status_code=204)
+                if request.method == "DELETE":
+                    async for block in request.stream():
+                        if block:
+                            raise TaggingError("InvalidRequest", "DeleteBucketTagging must have no body")
+                    tagstore.replace(bucket, [])
+                    return Response(status_code=204)
+                return _error("NotImplemented", "Unsupported bucket tagging method", 501)
             if request.method == "PUT":
                 catalog.create_bucket(bucket, int(time.time()))
                 return Response(status_code=200)
@@ -403,19 +447,7 @@ async def _handle(request: Request):
                 return Response(_tag_xml(tags.get(target.item.id)),
                                 media_type="application/xml", status_code=200)
             if request.method == "PUT":
-                body = bytearray()
-                async for block in request.stream():
-                    body.extend(block)
-                    if len(body) > 16 * 1024:
-                        raise TaggingError("MalformedXML", "Tagging XML exceeds maximum size")
-                _verify_upload_sha256(request, hashlib.sha256(body).digest())
-                md5_header = request.headers.get("content-md5")
-                if md5_header and not hmac.compare_digest(
-                    md5_header,
-                    base64.b64encode(hashlib.md5(body, usedforsecurity=False).digest()).decode("ascii")
-                ):
-                    raise TaggingError("BadDigest", "Content-MD5 checksum mismatch")
-                tags.replace_current(bucket, key, _parse_tag_xml(bytes(body)))
+                tags.replace_current(bucket, key, await _tag_request_tags(request))
                 return Response(status_code=200)
             if request.method == "DELETE":
                 async for block in request.stream():
