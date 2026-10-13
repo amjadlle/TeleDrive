@@ -22,7 +22,7 @@ import pytest
 import uvicorn
 
 import web.s3 as gateway
-from test_s3_gateway import service
+from test_s3_gateway import service, signed
 
 
 @pytest.fixture
@@ -116,7 +116,7 @@ def test_real_aws_cli_upload_download_list_delete(live_s3, tmp_path):
     assert transport.uploads >= 1 and transport.downloads >= 1
 
 
-def test_real_rclone_sync_and_integrity(live_s3, tmp_path):
+def test_real_rclone_sync_and_integrity(live_s3, tmp_path, service):
     """rclone real S3 remote: put, list, copy-to-local, replace and delete."""
     rclone = _client("rclone")
     endpoint, issued, transport = live_s3
@@ -137,7 +137,12 @@ def test_real_rclone_sync_and_integrity(live_s3, tmp_path):
         return _run([rclone, "--retries", "1", "--low-level-retries", "1",
                      "--contimeout", "5s", "--timeout", "60s", *args], env=env)
 
-    cli("mkdir", "td:rclone-test")
+    # no_check_bucket deliberately disables rclone bucket probing/creation.
+    # Provision via the signed S3 endpoint first, then verify rclone's
+    # independent PUT/GET/list/overwrite/delete client behavior.
+    created = signed(service, "PUT", "/rclone-test")
+    assert created.status_code == 200, created.text
+    assert "rclone-test" in cli("lsd", "td:")
     content = _data(tmp_path)
     cli("copyto", str(tmp_path / "source.bin"),
         "td:rclone-test/deep/path/one.bin")
