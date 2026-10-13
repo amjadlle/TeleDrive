@@ -290,3 +290,13 @@ verification and explicit retention approvals are implemented.
 - Unsupported CRC32C and CRC64NVME checksum variants return an explicit
   NotImplemented response rather than false success. CRC32 verification
   remains supported; full AWS checksum family compatibility is still open.
+
+## P1.3 checksum-bound presigned multipart Complete
+
+- A presigned POST is accepted only for an existing `uploadId` Complete
+  operation and only with a SigV4-signed exact `x-amz-content-sha256`
+  request body digest. XML is rehashed before changing SQL state;
+  replay is idempotent and does not reupload Telegram bytes.
+- Generic presigned POST, including CreateMultipartUpload and unbound
+  payload signatures, remains rejected. A future supported-scope S3
+  presigned POST must meet the same integrity and owner requirements.

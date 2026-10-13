@@ -74,8 +74,8 @@ def _canonical_path(request: Request) -> str:
 
 def _presigned_signature(request: Request, lookup_secret, permission: str,
                          now: datetime | None) -> str:
-    if request.method not in {"GET", "HEAD", "PUT", "DELETE"}:
-        raise SigV4Error("NotImplemented", "Presigned multipart POST is unsupported")
+    if request.method not in {"GET", "HEAD", "PUT", "DELETE", "POST"}:
+        raise SigV4Error("NotImplemented", "Presigned S3 method unsupported")
     if request.headers.get("authorization"):
         raise SigV4Error("AccessDenied", "Ambiguous Authorization and query signature")
     pairs = _query_pairs(request.scope.get("query_string", b""))
@@ -113,6 +113,18 @@ def _presigned_signature(request: Request, lookup_secret, permission: str,
         if len(matching) != 1:
             raise SigV4Error("SignatureDoesNotMatch", "Ambiguous or missing signed header")
         headers[name] = " ".join(matching[0].strip().split())
+    if request.method == "POST":
+        # The only safe presigned POST is an explicitly selected multipart
+        # Complete with a signed exact XML body SHA-256. Refuse a generic
+        # POST presign, including CreateMultipartUpload and arbitrary forms.
+        allowed_query = required | {"uploadId"}
+        if (not values.get("uploadId") or len(values["uploadId"]) > 80
+                or any(name not in allowed_query for name in values)):
+            raise SigV4Error("NotImplemented", "Only presigned multipart Complete supported")
+        if ("x-amz-content-sha256" not in signed or not re.fullmatch(
+            r"[0-9a-f]{64}", headers.get("x-amz-content-sha256", "")
+        )):
+            raise SigV4Error("AccessDenied", "Multipart POST requires signed XML SHA-256")
     if request.method == "PUT":
         # Never expose an S3 write URL which permits arbitrary replacement
         # with a different payload by anyone who obtains the link.

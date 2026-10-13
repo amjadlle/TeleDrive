@@ -92,6 +92,7 @@ jobs:
             tests/test_s3_version_tagging.py \
             tests/test_s3_version_copy.py \
             tests/test_s3_additional_checksums.py \
+            tests/test_s3_presigned_complete.py \
             tests/test_storage_catalog.py \
             tests/test_bot_storage.py \
             tests/test_s3_gateway.py \
