@@ -516,6 +516,9 @@ class MultipartStore:
                     if moved.rowcount != 1:
                         raise MultipartError("OperationAborted", "Concurrent object replacement", 409)
 
+                self.catalog._record_published_uncommitted(
+                    self.manifests.get(object_id)
+                )
                 completed = self.db.connection.execute(update(uploads).where(
                     uploads.c.id == identifier, uploads.c.state == "completing"
                 ).values(state="completed", completed_object_id=object_id,

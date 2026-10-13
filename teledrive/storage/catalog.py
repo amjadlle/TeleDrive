@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from dataclasses import dataclass
 
 from sqlalchemy import (
-    BigInteger, Column, ForeignKey, MetaData, String, Table,
+    BigInteger, Column, ForeignKey, MetaData, String, Table, Index,
     and_, delete, insert, select, update, inspect, text,
 )
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +33,17 @@ heads = Table(
     Column("generation", BigInteger, nullable=False),
     Column("updated_at", BigInteger, nullable=False),
 )
+published_versions = Table(
+    "storage_published_versions", catalog_metadata,
+    Column("object_id", String(36), primary_key=True),
+    Column("bucket", String(63), nullable=False),
+    Column("key_hash", String(64), nullable=False),
+    Column("committed_ns", BigInteger, nullable=False),
+)
+Index("ix_storage_published_versions_key",
+      published_versions.c.bucket, published_versions.c.key_hash,
+      published_versions.c.committed_ns)
+
 _BUCKET_RE = re.compile(r"[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?\Z")
 
 
@@ -92,6 +104,58 @@ class BucketCatalog:
             raise RuntimeError("Object key digest collision; refusing unsafe resolution")
         return ObjectHead(item, int(row[1]))
 
+    def _record_published_uncommitted(self, item: StoredObject) -> None:
+        """Append a proven head-version record in its publication transaction.
+
+        Records never represent an incomplete upload, overwritten staged part,
+        or a failed conditional write. A historical HEAD predating this index
+        can be registered explicitly when an operator requests its versions.
+        """
+        self.db.connection.execute(insert(published_versions).values(
+            object_id=item.id, bucket=item.bucket,
+            key_hash=self._keyhash(item.key),
+            committed_ns=time.time_ns(),
+        ))
+
+    def list_versions(self, bucket: str, key: str, *,
+                      limit: int = 100) -> list[dict]:
+        """Read versions proven published, not all READY/staged manifests."""
+        if not 1 <= limit <= 1000:
+            raise ValueError("Invalid version limit")
+        digest = self._keyhash(key)
+        try:
+            current = self.get(bucket, key).item.id
+        except FileNotFoundError:
+            current = None
+        rows = self.db.connection.execute(
+            select(published_versions.c.object_id,
+                   published_versions.c.committed_ns,
+                   objects.c.size, objects.c.sha256)
+            .select_from(published_versions.join(
+                objects, published_versions.c.object_id == objects.c.id
+            ))
+            .where(
+                published_versions.c.bucket == bucket,
+                published_versions.c.key_hash == digest,
+                objects.c.status == "ready",
+                objects.c.bucket == bucket,
+                objects.c.object_key == key,
+            ).order_by(
+                published_versions.c.committed_ns.desc(),
+                published_versions.c.object_id.desc(),
+            ).limit(limit)
+        ).mappings().all()
+        return [
+            {
+                "version_id": row["object_id"],
+                "size": int(row["size"]),
+                "sha256": row["sha256"],
+                "committed_ns": int(row["committed_ns"]),
+                "is_current": row["object_id"] == current,
+            }
+            for row in rows
+        ]
+
     def publish(self, identifier: str, *, now: int,
                 expected_generation: int | None = None,
                 expected_object_id: str | None = None) -> ObjectHead:
@@ -121,6 +185,7 @@ class BucketCatalog:
                     ))
             except IntegrityError as exc:
                 raise ValueError("Concurrent object creation; retry with generation") from exc
+            self._record_published_uncommitted(item)
             self.db.commit()
             return ObjectHead(item, 1)
 
@@ -144,6 +209,7 @@ class BucketCatalog:
         if changed.rowcount != 1:
             self.db.connection.rollback()
             raise ValueError("Concurrent object modification")
+        self._record_published_uncommitted(item)
         self.db.commit()
         return ObjectHead(item, generation + 1)
 

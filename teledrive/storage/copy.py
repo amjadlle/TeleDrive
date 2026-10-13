@@ -13,7 +13,7 @@ from uuid import uuid4
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError
 
-from teledrive.storage.catalog import BucketCatalog, heads
+from teledrive.storage.catalog import BucketCatalog, heads, published_versions
 from teledrive.storage.manifest import object_aliases, objects
 from teledrive.s3.multipart import MultipartStore, multipart_etags
 from teledrive.s3.tagging import ObjectTagStore
@@ -38,6 +38,9 @@ def copy_object(
     expected_source_id: str | None = None,
     replacement_tags: list[tuple[str, str]] | None = None,
     replacement_metadata: dict[str, str] | None = None,
+    source_version_id: str | None = None,
+    expected_destination_generation: int | None = None,
+    expected_destination_object_id: str | None = None,
 ) -> CopiedObject:
     """Publish a snapshot copy with one SQL transaction.
 
@@ -48,7 +51,21 @@ def copy_object(
     db = catalog.db
     manifests = catalog.manifests
     now = int(time.time()) if now is None else now
-    source = catalog.get(source_bucket, source_key).item
+    if source_version_id is not None:
+        # The caller may restore only a version previously published to this
+        # exact bucket/key, never arbitrary READY objects or staged MPU parts.
+        found = db.connection.execute(select(published_versions.c.object_id).where(
+            published_versions.c.object_id == source_version_id,
+            published_versions.c.bucket == source_bucket,
+            published_versions.c.key_hash == catalog._keyhash(source_key),
+        )).scalar_one_or_none()
+        if not found:
+            raise FileNotFoundError("Published object version not found")
+        source = manifests.get(source_version_id)
+        if source.bucket != source_bucket or source.key != source_key:
+            raise ValueError("Version source metadata mismatch")
+    else:
+        source = catalog.get(source_bucket, source_key).item
     if expected_source_id is not None and source.id != expected_source_id:
         raise CopyConflict("Copy source object changed during request")
     base_id = manifests.resolve_content_id(source.id)
@@ -96,11 +113,20 @@ def copy_object(
             heads.c.bucket == destination_bucket, heads.c.key_hash == key_hash
         )).first()
         if current is None:
+            if expected_destination_object_id is not None or (
+                expected_destination_generation not in (None, 0)
+            ):
+                raise CopyConflict("Destination generation changed")
             db.connection.execute(insert(heads).values(
                 bucket=destination_bucket, key_hash=key_hash,
                 object_id=identifier, generation=1, updated_at=now,
             ))
         else:
+            if expected_destination_generation is not None and (
+                expected_destination_generation != int(current[1])
+                or expected_destination_object_id != current[0]
+            ):
+                raise CopyConflict("Destination generation changed")
             old = manifests.get(current[0])
             if old.bucket != destination_bucket or old.key != destination_key:
                 raise ValueError("Destination hash collision")
@@ -115,6 +141,7 @@ def copy_object(
             ))
             if updated.rowcount != 1:
                 raise CopyConflict("Destination was changed concurrently")
+        catalog._record_published_uncommitted(manifests.get(identifier))
         db.commit()
         return CopiedObject(identifier, original_tag, source.size, source.id)
     except IntegrityError as exc:
