@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
+from xml.etree import ElementTree as ET
 
 import pytest
 
@@ -12,7 +14,8 @@ from teledrive.s3.credentials import S3CredentialStore
 
 
 def make_form(service, data, *, key="browser/upload.bin", seconds=300,
-              missing=None, clauses=None, issued=None, key_prefix=None):
+              missing=None, clauses=None, issued=None, key_prefix=None,
+              status=None):
     credential = issued or service[1]
     current = datetime.now(timezone.utc).replace(microsecond=0)
     day = current.strftime("%Y%m%d")
@@ -23,6 +26,8 @@ def make_form(service, data, *, key="browser/upload.bin", seconds=300,
         "x-amz-date": current.strftime("%Y%m%dT%H%M%SZ"),
         "x-amz-checksum-sha256": base64.b64encode(hashlib.sha256(data).digest()).decode(),
     }
+    if status is not None:
+        form["success_action_status"] = status
     conditions = [{"bucket": "backup-bucket"}]
     conditions.extend(
         ["starts-with", "$key", key_prefix] if k == "key" and key_prefix is not None
@@ -167,6 +172,126 @@ def test_browser_post_real_boto3_filename_prefix_policy(service):
     assert post(service, payload, expanded).status_code == 204
     assert signed(service, "GET", "/backup-bucket/sdk/prefix/nested.bin").content == payload
     assert post(service, payload, {**expanded, "key": "sdk/outside.bin"}).status_code == 403
+    assert service[2].uploads == 1
+
+
+
+@pytest.mark.parametrize("status", ["200", "201", "204"])
+@pytest.mark.parametrize("size", [0, 1, 2049, 65537])
+def test_browser_post_exact_signed_success_response_modes(service, status, size):
+    """Each supported status responds only after checksum and SQL publication."""
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = hashlib.shake_256(f"{status}:{size}".encode()).digest(size)
+    key = f"browser/status/{status}/{size}.bin"
+    response = post(service, payload, make_form(
+        service, payload, key=key, status=status,
+    ))
+    assert response.status_code == int(status), response.text
+    etag = '"' + hashlib.sha256(payload).hexdigest() + '"'
+    assert response.headers["etag"] == etag
+    assert response.headers["x-amz-version-id"]
+    if status == "201":
+        root = ET.fromstring(response.content)
+        assert root.tag.endswith("PostResponse")
+        assert root.findtext("{*}Bucket") == "backup-bucket"
+        assert root.findtext("{*}Key") == key
+        assert root.findtext("{*}ETag") == etag
+        assert root.findtext("{*}Location") == response.headers["location"]
+        assert response.headers["location"].endswith("/backup-bucket/" + key)
+    else:
+        assert response.content == b""
+        assert "location" not in response.headers
+    assert signed(service, "GET", "/backup-bucket/" + key).content == payload
+    assert service[2].uploads == (0 if size == 0 else 1)
+
+
+def test_browser_post_201_response_escapes_key_and_url(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = b"correctly-escaped-xml" * 32
+    key = "browser/201/İstanbul & validation?.bin"
+    result = post(service, payload, make_form(service, payload, key=key, status="201"))
+    assert result.status_code == 201, result.text
+    root = ET.fromstring(result.content)
+    assert root.findtext("{*}Key") == key
+    assert "&amp;" in result.text
+    assert root.findtext("{*}Location") == result.headers["location"]
+    assert result.headers["location"].endswith(
+        "/backup-bucket/" + quote(key, safe="/")
+    )
+    assert service[2].uploads == 1
+
+
+@pytest.mark.parametrize("invalid", [
+    "", "0", "202", "302", "-1", "0201", "201 ", "True", "201\\nLocation:evil",
+])
+def test_browser_post_invalid_success_status_is_denied_before_send(service, invalid):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = b"status-validation"
+    response = post(service, payload, make_form(service, payload, status=invalid))
+    assert response.status_code in (400, 403)
+    assert service[2].uploads == 0
+
+
+def test_browser_post_unsigned_or_changed_status_and_redirect_rejected(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"immutable-status"
+    original = make_form(service, body, status="201")
+    valid_without_status = make_form(service, body)
+    mutations = [
+        {**original, "success_action_status": "200"},
+        {**valid_without_status, "success_action_status": "201"},
+        {k: v for k, v in original.items() if k != "success_action_status"},
+        {**original, "success_action_redirect": "https://example.com/"},
+        {**original, "x-amz-meta-injected": "not-signed"},
+    ]
+    for fields in mutations:
+        response = post(service, body, fields)
+        assert response.status_code in (400, 403), response.text
+    assert service[2].uploads == 0
+
+
+def test_browser_post_signed_status_policy_rejects_unsupported_wildcard(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = b"bound-201"
+    base = make_form(service, payload, status="201")
+    clauses = json.loads(base64.b64decode(base["policy"]))["conditions"]
+    clauses[-2] = ["starts-with", "$success_action_status", "20"]
+    assert post(service, payload, make_form(
+        service, payload, status="201", clauses=clauses,
+    )).status_code == 403
+    assert service[2].uploads == 0
+
+
+def test_real_boto3_presigned_post_status_201_xml(service):
+    """SDK-generated exact signed status must survive independent verification."""
+    import boto3
+    from botocore.config import Config
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = hashlib.shake_256(b"boto3-status-201").digest(262157)
+    checksum = base64.b64encode(hashlib.sha256(data).digest()).decode()
+    creds = service[1]
+    client = boto3.client(
+        "s3", endpoint_url="http://localhost:9000",
+        aws_access_key_id=creds.access_key, aws_secret_access_key=creds.secret_key,
+        region_name="us-east-1", config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+        ),
+    )
+    signed_form = client.generate_presigned_post(
+        Bucket="backup-bucket", Key="sdk/status-201.bin",
+        Fields={"x-amz-checksum-sha256": checksum, "success_action_status": "201"},
+        Conditions=[
+            {"x-amz-checksum-sha256": checksum},
+            {"success_action_status": "201"},
+            ["content-length-range", 0, 8 * 1024 * 1024],
+        ],
+        ExpiresIn=120,
+    )
+    response = post(service, data, signed_form["fields"])
+    assert response.status_code == 201, response.text
+    assert ET.fromstring(response.content).findtext("{*}Key") == "sdk/status-201.bin"
+    assert signed(service, "GET", "/backup-bucket/sdk/status-201.bin").content == data
     assert service[2].uploads == 1
 
 
