@@ -23,6 +23,7 @@ from teledrive import uploader
 from teledrive.db import Database, connect_database, normalize_database_url, sqlite_database_path
 from teledrive.desktop_support import accounts_from_config, parse_auth_prompt, validate_account_rows, write_auth_response
 from app.pages.api_management import ApiManagementPage
+from app.pages.s3_management import S3ManagementPage
 
 STYLE = """
 QMainWindow { background: transparent; }
@@ -156,6 +157,8 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._build_settings_page())
         self.api_page = ApiManagementPage(self._api_database_connection)
         self.pages.addWidget(self.api_page)
+        self.s3_page = S3ManagementPage(self._api_database_connection)
+        self.pages.addWidget(self.s3_page)
         self.pages.addWidget(self._build_logs_page())
         layout.addWidget(self.pages, 1); outer.addLayout(layout, 1)
         self.setCentralWidget(root)
@@ -213,7 +216,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("PERSONAL TELEGRAM CLOUD", objectName="eyebrow"))
         layout.addSpacing(18)
         self.nav_buttons: list[QPushButton] = []
-        for index, label in enumerate(("Dashboard", "Upload Queue", "History", "Settings", "API Management", "Activity Log")):
+        for index, label in enumerate(("Dashboard", "Upload Queue", "History", "Settings", "API Management", "S3 Management", "Activity Log")):
             button = QPushButton(label)
             button.setObjectName("secondary")
             button.clicked.connect(lambda _=False, i=index: self._show_page(i))
@@ -573,6 +576,8 @@ class MainWindow(QMainWindow):
             self._refresh_table(self.history_table, "status = 'uploaded'")
         elif index == 4:
             self.api_page.refresh_keys()
+        elif index == 5:
+            self.s3_page.refresh_keys()
 
     def _check_for_updates(self) -> None:
         if self._update_worker is not None and self._update_worker.isRunning():
