@@ -236,12 +236,43 @@ class ManifestStore:
         self.db.commit()
         return abandoned
 
-    def append(self, identifier: str, part: ChunkReference, now: int) -> None:
+    def reclaim_writer(self, identifier: str, token: str, now: int,
+                       ttl: int = 120) -> bool:
+        """Reclaim only an expired, explicitly fenced PENDING upload writer."""
+        if not token or len(token) > 80 or ttl < 5:
+            raise ValueError("Invalid writer token or TTL")
+        try:
+            row = self.db.connection.execute(
+                select(objects.c.id).where(
+                    objects.c.id == identifier, objects.c.status == "pending",
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                self.db.connection.rollback()
+                return False
+            changed = self.db.connection.execute(
+                update(writer_fences).where(
+                    writer_fences.c.object_id == identifier,
+                    writer_fences.c.lease_until < now,
+                ).values(token=token, heartbeat_at=now, lease_until=now + ttl)
+            )
+            if changed.rowcount != 1:
+                self.db.connection.rollback()
+                return False
+            self.db.commit()
+            return True
+        except BaseException:
+            self.db.connection.rollback()
+            raise
+
+    def append(self, identifier: str, part: ChunkReference, now: int, *,
+               writer_token: str | None = None) -> None:
         row = self.db.connection.execute(
             select(objects.c.status, objects.c.size).where(objects.c.id == identifier)
         ).first()
         if row is None or row[0] != "pending":
             raise ManifestError("Object is not pending")
+        self._assert_writer(identifier, writer_token, now)
         if part.ordinal < 0 or part.offset < 0 or part.size <= 0:
             raise ManifestError("Invalid chunk coordinates")
         if len(part.sha256) != 64 or not all(c in "0123456789abcdef" for c in part.sha256):
