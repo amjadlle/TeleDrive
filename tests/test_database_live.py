@@ -191,3 +191,80 @@ def test_bucket_heads_visible_across_live_database_connections(env_name):
     finally:
         a.close()
         b.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_s3_multipart_atomic_chunk_reparent_on_live_sql(env_name, tmp_path):
+    """Move existing Telegram message references without a duplicate upload.
+
+    This exercises the actual PostgreSQL/MySQL unique-message constraint,
+    multi-row object/chunk updates and committed head visibility.
+    """
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    import asyncio
+    import hashlib
+    from uuid import uuid4
+
+    from teledrive.s3.multipart import MultipartStore
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ChunkReference, ManifestStore
+    from teledrive.storage.engine import TelegramObjectStorage
+
+    data1 = b"A" * (5 * 1024 * 1024)
+    data2 = b"tail"
+    payloads = {}
+    class FakeTelegram:
+        async def upload(self, *args, **kwargs):
+            raise AssertionError("Multipart Complete must not upload Telegram data")
+
+        async def download(self, reference, destination):
+            destination.write_bytes(payloads[reference.message_id])
+
+    db = connect_database(url)
+    second = connect_database(url)
+    try:
+        manifests = ManifestStore(db)
+        catalog = BucketCatalog(manifests)
+        mpu = MultipartStore(catalog)
+        name = "ci-" + uuid4().hex[:20]
+        key = "multipart/atomic.bin"
+        now = int(time.time())
+        catalog.create_bucket(name, now)
+        upload_id = mpu.initiate(name, key, "ci-access-key")
+        selected = []
+        for idx, data in enumerate((data1, data2), start=1):
+            manifest_id = manifests.begin(name, key, len(data), now)
+            message_id = int(uuid4().hex[:8], 16) % 2_000_000_000 + 1
+            payloads[message_id] = data
+            manifests.append(manifest_id, ChunkReference(
+                ordinal=0, offset=0, size=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+                account="ci", chat_id=-10012345, message_id=message_id,
+            ), now)
+            manifests.finish(manifest_id, hashlib.sha256(data).hexdigest(), now)
+            etag = hashlib.md5(data, usedforsecurity=False).hexdigest()
+            mpu.record_part(upload_id, name, key, "ci-access-key", number=idx,
+                            object_id=manifest_id, etag=etag)
+            selected.append((idx, etag))
+        engine = TelegramObjectStorage(manifests, FakeTelegram(),
+                                       chunk_size=1024 * 1024, scratch_directory=tmp_path)
+        done = asyncio.run(mpu.complete(upload_id, name, key, "ci-access-key",
+                                        selected, engine))
+        assert done.size == len(data1) + len(data2)
+        # Verify durable committed read through a different DB connection.
+        other_catalog = BucketCatalog(ManifestStore(second))
+        ready = other_catalog.get(name, key).item
+        assert ready.id == done.object_id
+        assert ready.sha256 == hashlib.sha256(data1 + data2).hexdigest()
+        assert len(ManifestStore(second).parts(ready.id)) == 2
+        async def read():
+            other_engine = TelegramObjectStorage(
+                ManifestStore(second), FakeTelegram(), scratch_directory=tmp_path
+            )
+            return b"".join([piece async for piece in other_engine.iter_bytes(ready.id)])
+        assert asyncio.run(read()) == data1 + data2
+    finally:
+        db.close()
+        second.close()
