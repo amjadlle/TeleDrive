@@ -76,3 +76,64 @@ def test_real_telegram_upload_download_and_range():
                 conn.close()
 
     asyncio.run(scenario())
+
+
+def test_real_telegram_unindexed_chunk_cleanup():
+    """Manual E2E: Telegram accepted upload, DB journal commit was lost.
+
+    Only the message created in this test is eligible for deletion.
+    """
+    import time
+    from teledrive.storage.recovery import RecoveryManager
+
+    api_id = os.getenv("TELEDRIVE_E2E_API_ID", "")
+    api_hash = os.getenv("TELEDRIVE_E2E_API_HASH", "")
+    session = os.getenv("TELEDRIVE_E2E_SESSION", "")
+    if not all((api_id, api_hash, session)):
+        pytest.skip("Manual E2E requires dedicated Telegram test credentials")
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-recovery-e2e-") as folder:
+            root = Path(folder)
+            upload = root / "orphan.bin"
+            body = os.urandom(87)
+            upload.write_bytes(body)
+            conn = connect_database(str(root / "manifest.db"))
+            store = ManifestStore(conn)
+            client = TelegramClient(StringSession(session), int(api_id), api_hash)
+            await client.connect()
+            uploaded_id = None
+            target = None
+            try:
+                if not await client.is_user_authorized():
+                    raise RuntimeError("E2E Telegram test session not authorized")
+                target = await resolve_telegram_target(
+                    client,
+                    os.getenv("TELEDRIVE_E2E_TARGET"),
+                    os.getenv("TELEDRIVE_E2E_CHANNEL_NAME"),
+                )
+                transport = TelethonChunkTransport({"ci": (client, target)})
+                old = int(time.time()) - 7200
+                identifier = store.begin("ci", "unindexed-test", len(body), old)
+                digest = hashlib.sha256(body).hexdigest()
+                account, chat_id, uploaded_id = await transport.upload(
+                    upload, object_id=identifier, ordinal=0, checksum=digest
+                )
+                assert account == "ci" and chat_id != 0 and uploaded_id > 0
+                # Simulate a crash between Telegram's successful response
+                # and SQL append, without relying on mocks.
+                store.fail(identifier, "simulated metadata commit crash", old)
+                manager = RecoveryManager(store, transport, min_age_seconds=3600)
+                preview = await manager.cleanup(identifier)
+                assert preview.orphaned == 1 and preview.deleted == 0
+                assert await client.get_messages(target, ids=uploaded_id) is not None
+                done = await manager.cleanup(identifier, dry_run=False)
+                assert done.cleaned and done.deleted == 1
+                assert await client.get_messages(target, ids=uploaded_id) is None
+            finally:
+                if uploaded_id is not None and target is not None:
+                    await client.delete_messages(target, [uploaded_id], revoke=True)
+                await client.disconnect()
+                conn.close()
+
+    asyncio.run(scenario())
