@@ -360,13 +360,51 @@ recommended). The current gateway requires SigV4 header-signed SHA-256
 bodies. Part sizes and multipart ETags follow S3 conventions, but this is not
 a complete AWS S3 implementation.
 
-**Not yet supported:** presigned URLs, virtual-host-style buckets, AWS
-chunked/unsigned PUT bodies, ACL/policy APIs, version listing, lifecycle,
-object lock, notifications, replication, advanced multipart checksum modes,
+**Implemented presigned URLs:** Query-parameter AWS SigV4 presigned
+GET, HEAD, DELETE and checksum-bound PUT are supported. URLs are limited
+to 7 days, checked against credential revocation and permission scopes, and
+rejected on signature/path/header tampering. Unlike AWS's general presigned
+PUT mode, TeleDrive intentionally requires a **SHA-256 checksum included in
+the URL's SignedHeaders**: bare unsigned-payload PUT links are refused.
+Presigned multipart POST operations are not yet supported.
+
+**Not yet supported:** virtual-host-style buckets, AWS chunked or
+checksum-unbound PUT bodies, ACL/policy APIs, version listing, lifecycle,
+object lock, notifications, replication, advanced multipart checksum modes
 and full SDK interoperability. Unsupported operations return explicit S3 XML
 `NotImplemented` rather than simulated success. Tests cover botocore-signed
-HTTP, a real boto3 client, multipart/no-reupload, ACL/owner isolation,
-wrong checksums, abandoned uploads, and live PostgreSQL/MySQL chunk moves.
+HTTP, boto3 GET/PUT/HEAD presigns, multipart/no-reupload, owner isolation,
+wrong checksums, expired credentials, and live PostgreSQL/MySQL chunk moves.
+
+Example boto3-generated short-lived URLs:
+
+~~~python
+import base64
+import hashlib
+
+body = b"Example Telegram-backed object"
+sha256_b64 = base64.b64encode(hashlib.sha256(body).digest()).decode("ascii")
+
+download_url = s3.generate_presigned_url(
+    "get_object",
+    Params={"Bucket": "backup-bucket", "Key": "test.txt"},
+    ExpiresIn=300,
+)
+upload_url = s3.generate_presigned_url(
+    "put_object",
+    Params={"Bucket": "backup-bucket", "Key": "new.txt",
+            "ChecksumSHA256": sha256_b64},
+    ExpiresIn=300,
+    HttpMethod="PUT",
+)
+# The client uploading to upload_url MUST send exactly:
+# x-amz-checksum-sha256: <sha256_b64>
+# together with the original bytes. Changing either is rejected.
+~~~
+
+Do not embed the master encryption key or S3 secret key in a shared URL.
+Presigned URLs themselves grant temporary access and must not be logged,
+pasted in issues or sent over insecure transport.
 
 ### Recover a stale S3 multipart completion (root admin only)
 
@@ -412,9 +450,10 @@ operation. Use HTTPS or a trusted VPN for any remote admin traffic.
 - **Physical lifecycle/versioning:** DeleteObject currently unlinks the
   current pointer; historical data remains and is not yet exposed through
   complete S3 ListObjectVersions / restore APIs.
-- **Protocol coverage:** Presigned URLs, S3 multipart checksum variants,
+- **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT
+  now work, but presigned multipart POST, S3 multipart checksum variants,
   SSE/metadata/tags, CopyObject, virtual-host requests, bucket policies and
-  lifecycle are separate acceptance-tested phases.
+  lifecycle still require separate acceptance-tested phases.
 - **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
   Cyberduck), restart during upload/complete, rate limits, account revocation,
   multiple simultaneous workers, and opt-in live Telegram multipart
