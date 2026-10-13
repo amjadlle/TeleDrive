@@ -57,3 +57,16 @@ Restore to a separately provisioned test database before promotion.
   representative subset of durable queued jobs.
 - A successful backup command is **not** proof that live restoration or
   full disaster recovery has been rehearsed. Track drills separately.
+
+## Read-only disaster-recovery snapshot check
+
+Verify the SQLite snapshot in a separate environment, using the independent
+SHA-256 reported by the backup command:
+
+    python scripts/verify_metadata_backup.py --database /secure-backups/teledrive-2026-10-13.db --sha256 YOUR_BACKUP_SHA256
+
+The verifier checks SQLite consistency, FK constraints, all current HEAD
+key hashes and the published-version index. It only reads local metadata;
+it does not contact Telegram, recover missing messages, rotate credentials
+or turn on physical garbage collection. Test actual Telegram recovery
+separately before production cutover.

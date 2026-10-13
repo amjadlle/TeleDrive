@@ -308,3 +308,11 @@ verification and explicit retention approvals are implemented.
   stale multipart completions and incomplete 1000-record inventories.
   WebUI shows alert code, severity and count; operator recovery and
   retries remain manual, and no Telegram physical deletion is enabled.
+
+## P2 dry-run disaster-recovery metadata validation
+
+- Read-only SQLite snapshot verifier checks independent backup SHA-256,
+  integrity/foreign keys, published versions and current HEAD consistency.
+- Tests reject corrupt snapshots, forged HEAD/version hashes and symlinks.
+  Restoring production Telegram sessions and missing remote media still
+  requires an isolated staging rehearsal and remains unverified.
