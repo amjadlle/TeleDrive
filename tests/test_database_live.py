@@ -49,3 +49,32 @@ def test_external_db_schema_queue_lease_and_account_history(env_name):
     finally:
         first.close()
         second.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_storage_manifest_round_trip_on_real_database(env_name):
+    """Verify the new chunk journal and ready visibility against a real SQL server."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from hashlib import sha256
+    from teledrive.storage.manifest import ManifestStore, ChunkReference
+
+    connection = connect_database(url)
+    manifests = ManifestStore(connection)
+    now = int(time.time())
+    try:
+        ident = manifests.begin("ci-bucket", f"test/{env_name}/{now}", 8, now)
+        with pytest.raises(FileNotFoundError):
+            manifests.get(ident)
+        payload = b"abcdefgh"
+        manifests.append(ident, ChunkReference(
+            ordinal=0, offset=0, size=8, sha256=sha256(payload).hexdigest(),
+            account="ci", chat_id=123456, message_id=int(now * 100) % 2000000000,
+        ), now)
+        ready = manifests.finish(ident, sha256(payload).hexdigest(), now)
+        assert ready.size == 8
+        assert ready.sha256 == sha256(payload).hexdigest()
+        assert len(manifests.parts(ident)) == 1
+    finally:
+        connection.close()
