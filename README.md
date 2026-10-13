@@ -608,6 +608,34 @@ the lease is fresh and never deletes Telegram messages or publishes data.
 The S3 credential holder is not allowed to bypass this root-admin-only
 operation. Use HTTPS or a trusted VPN for any remote admin traffic.
 
+### S3 conditional writes and delete semantics
+
+The SigV4-signed request headers `If-None-Match: *` and `If-Match: "<etag>"`
+now support **atomic** object creation/replacement. Conditional DELETE
+supports `If-Match`. All conditions are required to be present in SigV4
+`SignedHeaders`; unsigned conditions are rejected. A stale ETag, missing
+object or concurrent head-pointer change produces `412 PreconditionFailed`.
+The SQL update checks both generation and immutable object ID, including
+delete/recreate ABA races. A failed publication can leave a durable but
+unpublished Telegram-backed manifest; this remains protected by GC retention.
+
+Example with boto3:
+
+~~~python
+first = s3.put_object(
+    Bucket="backup-bucket", Key="state.txt",
+    Body=b"first", IfNoneMatch="*",
+)
+s3.put_object(
+    Bucket="backup-bucket", Key="state.txt",
+    Body=b"second", IfMatch=first["ETag"],
+)
+~~~
+
+`If-Modified-Since`/`If-Unmodified-Since` on writes and conditional
+multipart operations remain explicitly unsupported until their atomic
+semantics can be proven.
+
 ### Kalan riskler ve yapılması gerekenler (S3 denetimi)
 
 - **Stale multipart completions (recovery implemented):** Each in-progress
@@ -630,10 +658,14 @@ operation. Use HTTPS or a trusted VPN for any remote admin traffic.
   complete S3 ListObjectVersions / restore APIs.
 - **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT,
   CopyObject, scoped DeleteObjects, conditional GET/HEAD, object/bucket
-  tagging, signed user metadata and bucket CORS now work. Still pending: atomic conditional writes/deletes,
-  presigned multipart POST, version-ID tagging, advanced S3 checksum variants,
-  SSE, virtual-host-style requests, bucket policies
-  and lifecycle.
+  tagging, signed user metadata, bucket CORS and signed conditional
+  PutObject/DeleteObject now work. Conditional PUT uses If-None-Match: *
+  or If-Match with atomic SQL generation+object-ID fencing, and conditional
+  DELETE supports If-Match. Historical Telegram data is retained after
+  failed CAS publication; no unsafe automatic cleanup. Still pending:
+  conditional multipart Complete, presigned multipart POST, version-ID
+  tagging, advanced S3 checksum variants, SSE, virtual-host-style requests,
+  bucket policies and lifecycle.
 - **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
   Cyberduck), restart during upload/complete, rate limits, account revocation,
   multiple simultaneous workers, and opt-in live Telegram multipart
