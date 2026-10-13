@@ -27,6 +27,7 @@ from fastapi.responses import Response, StreamingResponse
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
+from teledrive.s3.batch_delete import BatchDeleteError, MAX_XML_BYTES, parse_batch, verify_body
 from teledrive.s3.tagging import ObjectTagStore, BucketTagStore, TaggingError, validate_tags
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object, CopyConflict
@@ -303,6 +304,10 @@ async def _handle(request: Request):
                 "GET": "s3:GetObject", "HEAD": "s3:GetObject",
                 "PUT": "s3:PutObject", "DELETE": "s3:DeleteObject",
             }.get(request.method)
+        multi_delete = bool(bucket and not separator and request.method == "POST"
+                            and "delete" in request.query_params)
+        if "delete" in request.query_params and not multi_delete:
+            return _error("NotImplemented", "Unsupported DeleteObjects route", 501)
         mpu_bucket_list = bool(bucket and not separator and "uploads" in request.query_params
                                and request.method == "GET")
         mpu_start = bool(separator and "uploads" in request.query_params and request.method == "POST")
@@ -317,7 +322,11 @@ async def _handle(request: Request):
             k in request.query_params for k in ("uploads", "uploadId", "versionId")
         ):
             return _error("NotImplemented", "Tagging with multipart/version selectors unsupported", 501)
-        if is_object_tagging:
+        if multi_delete:
+            if any(p in request.query_params for p in ("tagging", "uploads", "uploadId", "versionId")):
+                return _error("NotImplemented", "Conflicting DeleteObjects controls", 501)
+            action = "s3:DeleteObject"
+        elif is_object_tagging:
             action = {
                 "GET": "s3:GetObjectTagging",
                 "PUT": "s3:PutObjectTagging",
@@ -372,6 +381,36 @@ async def _handle(request: Request):
                             media_type="application/xml")
 
         if not separator:
+            if multi_delete:
+                if bucket not in catalog.list_buckets():
+                    return _error("NoSuchBucket", "The specified bucket does not exist", 404)
+                if request.headers.get("x-amz-mfa") or request.headers.get(
+                    "x-amz-bypass-governance-retention"
+                ):
+                    return _error("NotImplemented", "Retention/MFA Delete unsupported", 501)
+                body = bytearray()
+                async for block in request.stream():
+                    body.extend(block)
+                    if len(body) > MAX_XML_BYTES:
+                        raise BatchDeleteError("MalformedXML", "DeleteObjects XML exceeds 1 MiB")
+                payload = bytes(body)
+                verify_body(payload, request.headers)
+                batch = parse_batch(payload)
+                result = ET.Element("DeleteResult", xmlns=NAMESPACE)
+                for key_to_delete in batch.keys:
+                    try:
+                        catalog.remove_current(bucket, key_to_delete)
+                    except ValueError:
+                        problem = ET.SubElement(result, "Error")
+                        ET.SubElement(problem, "Key").text = key_to_delete
+                        ET.SubElement(problem, "Code").text = "InvalidObjectName"
+                        ET.SubElement(problem, "Message").text = "Invalid object name"
+                        continue
+                    if not batch.quiet:
+                        deleted = ET.SubElement(result, "Deleted")
+                        ET.SubElement(deleted, "Key").text = key_to_delete
+                return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
+                                media_type="application/xml", status_code=200)
             if is_bucket_tagging:
                 if bucket not in catalog.list_buckets():
                     return _error("NoSuchBucket", "Bucket does not exist", 404)
@@ -781,6 +820,8 @@ async def _handle(request: Request):
         if partial:
             headers["Content-Range"] = f"bytes {start}-{end-1}/{item.size}"
         return StreamingResponse(stream(), status_code=206 if partial else 200, headers=headers)
+    except BatchDeleteError as exc:
+        return _error(exc.code, str(exc), exc.status)
     except TaggingError as exc:
         return _error(exc.code, str(exc), exc.status)
     except MultipartError as exc:
