@@ -189,3 +189,72 @@ def test_delete_recreate_same_generation_is_not_equal_object_identity(service):
         assert catalog.get("conditional", "race.bin").item.id == replacement_id
     finally:
         db.close()
+
+
+def test_real_boto3_http_conditional_put_contract(service):
+    """boto3 (not synthetic requests) must observe 412 and preserve object bytes."""
+    import socket
+    import threading
+    import time
+    import boto3
+    import uvicorn
+    from botocore.config import Config
+    from botocore.exceptions import ClientError
+    import web.s3 as gateway
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.listen(16)
+    server = uvicorn.Server(uvicorn.Config(
+        gateway.app, host="127.0.0.1", port=port, lifespan="off", log_level="error",
+    ))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        assert server.started
+        cred = service[1]
+        sdk = boto3.client(
+            "s3", endpoint_url=f"http://127.0.0.1:{port}",
+            aws_access_key_id=cred.access_key,
+            aws_secret_access_key=cred.secret_key,
+            region_name="us-east-1",
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path", "payload_signing_enabled": True},
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+                retries={"max_attempts": 0},
+            ),
+        )
+        sdk.create_bucket(Bucket="sdk-condition")
+        first = sdk.put_object(Bucket="sdk-condition", Key="key", Body=b"one",
+                               IfNoneMatch="*")
+        try:
+            sdk.put_object(Bucket="sdk-condition", Key="key",
+                           Body=b"should-not-overwrite", IfNoneMatch="*")
+        except ClientError as exc:
+            assert exc.response["ResponseMetadata"]["HTTPStatusCode"] == 412
+            assert exc.response["Error"]["Code"] == "PreconditionFailed"
+        else:
+            raise AssertionError("SDK conditional create ignored existing object")
+        second = sdk.put_object(Bucket="sdk-condition", Key="key",
+                                Body=b"two", IfMatch=first["ETag"])
+        assert second["ETag"] != first["ETag"]
+        try:
+            sdk.put_object(Bucket="sdk-condition", Key="key",
+                           Body=b"stale", IfMatch=first["ETag"])
+        except ClientError as exc:
+            assert exc.response["ResponseMetadata"]["HTTPStatusCode"] == 412
+        else:
+            raise AssertionError("SDK stale IfMatch overwrote current object")
+        assert sdk.get_object(Bucket="sdk-condition", Key="key")["Body"].read() == b"two"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        sock.close()
+        assert not thread.is_alive()
