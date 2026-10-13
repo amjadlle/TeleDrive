@@ -236,8 +236,10 @@ verification and explicit retention approvals are implemented.
   candidate planner and explicit current-HEAD migration preview.
 
 ### Still open — do not claim these are implemented
-- **P1 remaining:** Bot API ACK lost before receipt persistence (Bot API
-  cannot read arbitrary historical channel posts), unimplemented browser POST
+- **P1 remaining:** Bot API lost-ACK **automatic recovery** (Bot API cannot
+  read arbitrary historical channel posts); durable pre-send fences now
+  prevent blind duplicates, but operator-verified reconstruction is still
+  required. Unimplemented browser POST
   wildcard operators and non-HTTPS/mixed-response variants, multi-host Telegram 429
   and revocation soak, production-representative staging restore with real
   secrets and Telegram retention, and operator-controlled production legacy
@@ -733,3 +735,44 @@ verification and explicit retention approvals are implemented.
 - **Fresh same-SHA CI evidence required** before claiming these changes
   accepted. This scope is not full AWS browser-policy parity, production
   credential recovery or an extended multi-host Telegram soak.
+
+## P1.1 pre-send Bot API unknown-outcome durable fences (2026-10-14)
+
+- Before sending any nonempty Bot chunk, SQL now commits a keyed intent
+  `(account, chat_id, object_id, ordinal, SHA-256, size)`.
+  Telegram ACK indexing and intent removal occur in **one** SQL transaction.
+  A process crash, timeout, response lost after Telegram accepted the message,
+  or injected receipt SQL failure leaves the intent present after restart.
+- When an expired worker attempts resume, a missing ACK receipt combined with
+  an unresolved send intent **fails closed** instead of resending the chunk.
+  This prevents automatically creating a duplicate Telegram post with an
+  unknown accepted outcome. Exact Telegram HTTP 429 rejections are known
+  non-acceptances; they remove only their matching intent and preserve the
+  bounded 429 retry path. No remote deletion is enabled.
+- Root-admin storage health reports a **critical** `unresolved_bot_sends`
+  alert and aggregate count, without disclosing Telegram file IDs, message
+  IDs, tokens, object IDs, or source paths. Persistently unresolved cases
+  need **out-of-band owner-authorized** inspection. Bot API alone cannot
+  recover an arbitrary channel post after losing its ACK.
+- Deterministic contract tests: inspect SQL intent from another connection
+  *during* send, server ACK-loss after real fake remote acceptance, SQL
+  close/reopen, simultaneous duplicate sends, independent SQL connections,
+  nonmatching account/size/checksum, failed receipt insert, and known-429
+  cleanup. The real Telegram test deliberately withholds an actual successful
+  ACK, verifies zero duplicate send after restart, independently downloads
+  the accepted file from Telegram, records the known test ACK and resumes the
+  verified tail. This is **not** an automatic production recovery mechanism.
+
+## P1.4 bounded live Telegram mixed-size soak (opt-in)
+
+- Bot manual `workflow_dispatch.run_soak=true` or reviewed push marker
+  `[p1-live-soak]` enables a real-channel, 12-object mixed-size soak, ranging
+  from empty to 3 MiB + 31 B. Payloads alternate between high-entropy and
+  NUL/0xFF patterns; uploads are throttled, SQL connections reopened every
+  three objects, all returned message IDs tracked, each object fetched from
+  Telegram with exact SHA-256 and bounded Range tests, and **only** messages
+  uploaded by that test invocation are cleaned up.
+- This is a bounded single-runner reliability acceptance, not a sustained
+  multi-host/per-region production soak or revocation load certification.
+  Tests are optional by design to avoid unexpected data transfer/costs.
+- **New P1.1/P1.4 changes require fresh 7-workflow same-SHA CI evidence.**
