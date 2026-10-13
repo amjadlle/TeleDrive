@@ -592,6 +592,13 @@ class StorageUploadJobRequest(BaseModel):
     source_path: str = Field(min_length=1, max_length=4096)
 
 
+class LegacyFolderImportRequest(BaseModel):
+    bucket: str = Field(min_length=3, max_length=63)
+    prefix: str = Field(default="", max_length=512)
+    max_files: int = Field(default=100, ge=1, le=1000)
+    execute: bool = False
+
+
 class VersionRestoreRequest(BaseModel):
     bucket: str = Field(min_length=3, max_length=63)
     key: str = Field(min_length=1, max_length=1024)
@@ -1119,6 +1126,70 @@ def create_storage_upload_job(
         except (UploadJobError, ValueError, OSError) as exc:
             raise HTTPException(422, str(exc)) from exc
         return {"id": job_id, "state": "queued"}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/storage/jobs/import-legacy",
+          tags=["Storage jobs"], summary="Preview or queue legacy folder files without uploading")
+def import_legacy_folder_jobs(
+    request: Request, payload: LegacyFolderImportRequest,
+    _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    from teledrive.storage.legacy_bridge import enqueue_legacy_folder
+    approved_root = _storage_job_root()
+    cfg = effective_config()
+    try:
+        source_root = Path(cfg.source_dir).resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(503, "Legacy source folder unavailable") from exc
+    if not source_root.is_relative_to(approved_root):
+        raise HTTPException(403, "Legacy source is outside the configured job root")
+    conn = db_connect()
+    try:
+        now = int(time.time())
+        holder = "legacy-bridge-" + os.urandom(16).hex()
+        if not conn.acquire_lease(
+            uploader.LEASE_NAME, holder, now, uploader.LEASE_TTL_SECONDS
+        ):
+            raise HTTPException(409, "Legacy uploader currently holds a lease")
+        try:
+            last_renew = time.monotonic()
+
+            def heartbeat():
+                nonlocal last_renew
+                if time.monotonic() - last_renew < 10:
+                    return
+                if not conn.renew_lease(
+                    uploader.LEASE_NAME, holder,
+                    int(time.time()), uploader.LEASE_TTL_SECONDS
+                ):
+                    raise RuntimeError("Legacy uploader lease lost during import")
+                last_renew = time.monotonic()
+
+            manager = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+            try:
+                report = enqueue_legacy_folder(
+                    cfg, manager, bucket=payload.bucket, prefix=payload.prefix,
+                    max_files=payload.max_files,
+                    dry_run=not payload.execute, lease_heartbeat=heartbeat,
+                )
+            except FileNotFoundError as exc:
+                raise HTTPException(404, "Destination object bucket not found") from exc
+            except (UploadJobError, ValueError, OSError) as exc:
+                raise HTTPException(422, str(exc)) from exc
+            return {
+                "dry_run": not payload.execute,
+                "queued": report.queued if payload.execute else 0,
+                "would_queue": report.queued,
+                "already_queued": report.already_queued,
+                "excluded": report.excluded,
+                "job_ids": list(report.job_ids) if payload.execute else [],
+                "uploads_started": 0,
+            }
+        finally:
+            conn.release_lease(uploader.LEASE_NAME, holder)
     finally:
         conn.close()
 

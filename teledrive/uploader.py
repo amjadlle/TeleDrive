@@ -922,6 +922,14 @@ async def async_main() -> int:
                         cfg, queue, bucket=args.queue_object_bucket,
                         prefix=args.queue_object_prefix,
                         max_files=args.queue_object_limit,
+                        lease_heartbeat=lambda: (
+                            conn.renew_lease(
+                                LEASE_NAME, RUN_HOLDER, int(time.time()),
+                                LEASE_TTL_SECONDS,
+                            ) or (_ for _ in ()).throw(
+                                RuntimeError("Legacy uploader lease lost during import")
+                            )
+                        ),
                     )
                     logging.info(
                         "Durable import: queued=%d existing=%d excluded=%d bucket=%s",

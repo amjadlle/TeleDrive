@@ -272,6 +272,25 @@ $('#queueStorageJob').onclick=async()=>{
     await loadStorageJobs();
   }catch(e){toast(e.message,true)}
 };
+async function scanLegacyFolder(execute){
+  const bucket=$('#legacyImportBucket').value.trim();
+  const prefix=$('#legacyImportPrefix').value.trim();
+  const max_files=Number($('#legacyImportLimit').value);
+  if(!bucket||!Number.isInteger(max_files)||max_files<1||max_files>1000){
+    toast('Valid bucket and 1..1000 file limit required',true);return
+  }
+  if(execute&&!confirm('Queue eligible legacy files into durable storage jobs? No Telegram upload starts now. Ensure the legacy uploader is stopped.'))return;
+  const target=$('#legacyImportReport');
+  try{
+    const report=await api('/api/v1/admin/storage/jobs/import-legacy',{
+      method:'POST',body:JSON.stringify({bucket,prefix,max_files,execute}),
+    });
+    target.textContent=JSON.stringify(report,null,2);
+    if(execute){toast('Queued '+report.queued+' durable jobs');await loadStorageJobs()}
+  }catch(e){target.textContent='Legacy import failed: '+e.message;toast(e.message,true)}
+}
+$('#previewLegacyImport').onclick=()=>scanLegacyFolder(false);
+$('#executeLegacyImport').onclick=()=>scanLegacyFolder(true);
 $('#runStorageJob').onclick=async()=>{
   if(!confirm('Process the next upload job and publish its Telegram object if the generation precondition still matches?'))return;
   const button=$('#runStorageJob');

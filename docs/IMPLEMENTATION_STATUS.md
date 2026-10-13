@@ -358,3 +358,14 @@ verification and explicit retention approvals are implemented.
   It refuses a concurrently leased legacy uploader. Operators must stop the
   old uploader before enabling the separate durable worker, otherwise
   the two independent pipelines could send the same files.
+
+
+## P1.2 WebUI legacy folder queue importer
+
+- Root-admin POST `/api/v1/admin/storage/jobs/import-legacy` requires
+  Basic authentication and same-origin CSRF protection; defaults to
+  `execute=false` for a non-uploading dry run. The source must remain
+  within `TELEDRIVE_JOB_SOURCE_ROOT` and the configured legacy uploader
+  SQL lease is acquired before scanning. The caller cannot select an
+  arbitrary host filesystem root. WebUI provides explicit Preview and
+  Queue actions, never automatically invokes the Telegram worker.

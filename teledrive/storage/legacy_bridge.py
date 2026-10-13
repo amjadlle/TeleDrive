@@ -24,7 +24,8 @@ class LegacyQueueReport:
 
 def enqueue_legacy_folder(
     cfg, queue: StorageUploadJobs, *, bucket: str, prefix: str = "",
-    max_files: int = 1000,
+    max_files: int = 1000, dry_run: bool = False,
+    lease_heartbeat=None,
 ) -> LegacyQueueReport:
     """Queue eligible legacy source files as immutable S3 object-key jobs.
 
@@ -49,6 +50,8 @@ def enqueue_legacy_folder(
     identifiers: list[str] = []
     # Sort for deterministic bounded scans across restarts.
     for candidate in sorted(iter_source_files(str(root))):
+        if lease_heartbeat is not None:
+            lease_heartbeat()
         if not file_allowed(candidate, cfg):
             excluded += 1
             continue
@@ -64,10 +67,11 @@ def enqueue_legacy_folder(
             if found is not None:
                 previous += 1
                 continue
-            queue.enqueue(
-                bucket, key, path, allowed_root=root,
-                deduplicate=True,
-            )
+            if not dry_run:
+                queue.enqueue(
+                    bucket, key, path, allowed_root=root,
+                    deduplicate=True,
+                )
             queued += 1
             identifiers.append(ident)
         except (OSError, ValueError, FileNotFoundError):

@@ -184,6 +184,19 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 <button class="btn compact" id="refreshStorageJobs">Refresh jobs</button>
 <button class="btn compact" id="refreshStorageHealth">Storage health</button>
 </div>
+<div class="section"><h4>Legacy folder → durable job queue</h4>
+<p class="muted">Explicitly import files from the configured legacy source folder, preserving path layout and filters. Requires the legacy source to be within TELEDRIVE_JOB_SOURCE_ROOT. Preview before importing. No Telegram upload starts during import; stop the old uploader before using the durable worker.</p>
+<div class="form-grid">
+<div><label>Existing destination bucket</label><input id="legacyImportBucket" class="input" placeholder="backup-bucket"></div>
+<div><label>Relative object-key prefix</label><input id="legacyImportPrefix" class="input" placeholder="legacy"></div>
+<div><label>Maximum new jobs</label><input id="legacyImportLimit" type="number" min="1" max="1000" value="100" class="input"></div>
+</div>
+<div class="row section">
+<button class="btn compact" id="previewLegacyImport">Preview legacy import</button>
+<button class="btn compact" id="executeLegacyImport">Queue legacy files</button>
+</div>
+<pre id="legacyImportReport" class="section" style="white-space:pre-wrap;overflow-wrap:anywhere">Not scanned</pre>
+</div>
 <pre id="storageHealthSummary" class="section" style="white-space:pre-wrap;overflow-wrap:anywhere">Not checked</pre>
 <div class="scroll section"><table><thead><tr><th>Bucket / key</th><th>Source</th><th>Status</th><th>Attempts</th><th>Updated</th><th>Action</th></tr></thead><tbody id="storageJobsRows"></tbody></table></div>
 </div>
