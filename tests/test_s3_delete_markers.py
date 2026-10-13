@@ -200,3 +200,18 @@ def test_delete_last_version_leaves_missing_head_and_keeps_remote(service):
     rows, _ = _versions(service)
     assert rows == []
     assert service[2].uploads == before
+
+
+def test_version_tagging_selector_is_not_shadowed_by_version_delete(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/file.bin", b"kept").status_code == 200
+    version = _current_id(service)
+    deleted_tags = signed(service, "DELETE",
+                          f"/backup-bucket/file.bin?tagging&versionId={version}")
+    assert deleted_tags.status_code == 204, deleted_tags.text
+    assert signed(service, "GET", f"/backup-bucket/file.bin?versionId={version}").content == b"kept"
+    # An operation selector collision is rejected instead of deleting bytes.
+    invalid = signed(service, "DELETE",
+                     f"/backup-bucket/file.bin?tagging&versionId={version}&bogus=1")
+    assert invalid.status_code in (400, 501)
+    assert signed(service, "GET", "/backup-bucket/file.bin").content == b"kept"

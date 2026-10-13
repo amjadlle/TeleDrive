@@ -99,7 +99,14 @@ class StorageGCInventory:
 
         # Current head pointers are only one reference source. Deleted or
         # overwritten objects are still historical versions, not safe garbage.
-        head_ids = list(connection.execute(select(heads.c.object_id)).scalars())
+        # S3 delete markers are SQL HEAD tombstones, not live payload
+        # objects. They must not inflate the live-object count or the
+        # retained Telegram reference inventory.
+        head_ids = list(connection.execute(
+            select(heads.c.object_id).select_from(heads.join(
+                objects, heads.c.object_id == objects.c.id,
+            )).where(objects.c.status == "ready")
+        ).scalars())
         aliases = list(connection.execute(select(
             object_aliases.c.object_id, object_aliases.c.source_object_id
         )).all())

@@ -507,3 +507,8 @@ verification and explicit retention approvals are implemented.
 - Generic S3 versioning configuration, lifecycle/retention policies, and
   physical deletion remain unsupported. Test these only against disposable
   buckets; production GC is still off.
+
+- Version-tag deletion remains a **distinct** authenticated API operation:
+  `DELETE ?tagging&versionId=` never deletes the object VersionId. GC live
+  head metrics exclude SQL-only delete markers; immutable Telegram references
+  are still preserved and counted separately.

@@ -503,6 +503,7 @@ async def _handle(request: Request):
         is_version_delete = bool(
             separator and request.method == "DELETE"
             and "versionId" in request.query_params
+            and "tagging" not in request.query_params
         )
         if is_version_delete and (
             len(request.query_params.getlist("versionId")) != 1
