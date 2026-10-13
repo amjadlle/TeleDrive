@@ -299,3 +299,38 @@ def test_corrupted_telegram_part_prevents_multipart_publication(service):
     # Failure can be inspected/retried; no visible truncated object.
     listed = signed(service, "GET", f"/backup-bucket/asset.bin?uploadId={uid}")
     assert listed.status_code == 200
+
+
+def test_list_multipart_uploads_is_owner_scoped_and_paginated(service):
+    setup(service)
+    ids = [begin(service, key=key) for key in ("a.bin", "b.bin", "c.bin")]
+    from teledrive.s3.credentials import S3CredentialStore
+    connection = service[3]()
+    try:
+        stranger = S3CredentialStore(connection, service[4]).create(
+            "stranger", ["s3:ListBucket"]
+        )
+    finally:
+        connection.close()
+    unauthorized = signed(service, "GET", "/backup-bucket?uploads",
+                          access=stranger.access_key, secret=stranger.secret_key)
+    assert unauthorized.status_code == 200
+    assert ET.fromstring(unauthorized.content).findall(NS+"Upload") == []
+    first = signed(service, "GET", "/backup-bucket?uploads&max-uploads=2")
+    assert first.status_code == 200, first.text
+    root = ET.fromstring(first.content)
+    assert [e.findtext(NS+"Key") for e in root.findall(NS+"Upload")] == ["a.bin", "b.bin"]
+    assert root.findtext(NS+"IsTruncated") == "true"
+    key_marker = root.findtext(NS+"NextKeyMarker")
+    upload_marker = root.findtext(NS+"NextUploadIdMarker")
+    from urllib.parse import quote
+    final = signed(service, "GET",
+                   "/backup-bucket?uploads&max-uploads=2&key-marker="+quote(key_marker)
+                   +"&upload-id-marker="+quote(upload_marker))
+    assert final.status_code == 200, final.text
+    assert [e.findtext(NS+"Key") for e in ET.fromstring(final.content).findall(NS+"Upload")] == ["c.bin"]
+    assert signed(service, "DELETE", "/backup-bucket/b.bin?uploadId="+ids[1]).status_code == 204
+    after_abort = signed(service, "GET", "/backup-bucket?uploads")
+    assert [e.findtext(NS+"Key") for e in ET.fromstring(after_abort.content).findall(NS+"Upload")] == [
+        "a.bin", "c.bin"
+    ]
