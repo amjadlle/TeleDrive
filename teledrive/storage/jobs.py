@@ -221,6 +221,25 @@ class StorageUploadJobs:
         self.db.commit()
         return result.rowcount == 1
 
+    def cancel(self, ident: str) -> bool:
+        """Cancel only inactive jobs; never interrupt a live Telegram writer.
+
+        A staged/expired job must first be claimed and reconciled by the
+        regular worker. Cancellation cannot discard its durable manifest.
+        No Telegram message is deleted by this operation.
+        """
+        result = self.db.connection.execute(
+            update(jobs).where(
+                jobs.c.id == ident,
+                jobs.c.state.in_(("queued", "failed")),
+            ).values(
+                state="cancelled", lease_token=None, lease_until=None,
+                updated_at=int(time.time()),
+            )
+        )
+        self.db.commit()
+        return result.rowcount == 1
+
     def retry(self, ident: str) -> bool:
         result = self.db.connection.execute(
             update(jobs).where(jobs.c.id == ident, jobs.c.state == "failed")

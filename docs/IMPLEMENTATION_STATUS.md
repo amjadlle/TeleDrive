@@ -236,3 +236,11 @@ verification and explicit retention approvals are implemented.
   rate-limit/fault benchmarks and full installer staging acceptance.
 - **Release:** Integration into `main` and a real version-tagged
   Linux/Windows release were not performed by this feature-branch CI.
+
+## Additional job lifecycle safety
+
+- An inactive queued/failed upload job can now be cancelled using
+  `StorageUploadJobs.cancel(id)`; active, staged, publishing or completed
+  jobs cannot be cancelled, protecting in-flight Telegram ownership and
+  staged immutable manifests. Cancellation is metadata-only and persists
+  through SQL restart. Operator-facing cancellation API is still pending.

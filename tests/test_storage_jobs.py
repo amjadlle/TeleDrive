@@ -158,6 +158,35 @@ def test_one_worker_lease_and_head_generation_precondition(queue):
     assert manager.list_jobs()[0]["state"] == "failed"
 
 
+def test_inactive_jobs_can_be_cancelled_without_upload_or_losing_history(queue):
+    manager, root, path = queue
+    source = root / "cancel.bin"
+    source.write_bytes(b"safe")
+    first = manager.enqueue("job-bucket", "cancelled.bin", source, allowed_root=root)
+    assert manager.cancel(first) is True
+    assert manager.cancel(first) is False
+    assert manager.retry(first) is False
+    assert manager.claim_next() is None
+
+    second = manager.enqueue("job-bucket", "claimed.bin", source, allowed_root=root)
+    owner = manager.claim_next()
+    assert owner and owner["id"] == second
+    assert not manager.cancel(second), "Never cancel an active writer"
+    assert manager.fail(second, owner["lease_token"], "planned fail", now=int(time.time()))
+    assert manager.cancel(second)
+    assert not manager.retry(second)
+
+    reopened = connect_database(path)
+    try:
+        jobs_after_restart = StorageUploadJobs(BucketCatalog(ManifestStore(reopened)))
+        states = {item["id"]: item["state"] for item in jobs_after_restart.list_jobs()}
+        assert states == {first: "cancelled", second: "cancelled"}
+        assert jobs_after_restart.claim_next() is None
+        assert jobs_after_restart.catalog.list_buckets() == ["job-bucket"]
+    finally:
+        reopened.close()
+
+
 def test_admin_job_endpoints_require_root_auth_csrf_and_do_not_expose_tokens(
     admin, monkeypatch, tmp_path
 ):
