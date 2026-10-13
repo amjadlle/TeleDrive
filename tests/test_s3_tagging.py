@@ -17,7 +17,7 @@ from botocore.config import Config
 from teledrive.s3.credentials import S3CredentialStore
 from teledrive.s3.tagging import ObjectTagStore, validate_tags, TaggingError
 from teledrive.storage.catalog import BucketCatalog
-from teledrive.storage.manifest import ManifestStore
+from teledrive.storage.manifest import ManifestStore, objects
 from test_s3_gateway import service, signed
 from test_s3_copy import copy
 
@@ -82,14 +82,11 @@ def test_tags_copy_snapshot_isolated_from_source_and_overwrites(service):
     db = service[3]()
     try:
         catalog = BucketCatalog(ManifestStore(db))
+        from sqlalchemy import select
         old = db.connection.execute(
-            __import__("sqlalchemy").select(
-                __import__("teledrive.storage.manifest", fromlist=["objects"]).objects.c.id
-            ).where(
-                __import__("teledrive.storage.manifest", fromlist=["objects"]).objects.c.object_key == "file.bin"
-            ).order_by(
-                __import__("teledrive.storage.manifest", fromlist=["objects"]).objects.c.created_at
-            )
+            select(objects.c.id).where(
+                objects.c.object_key == "file.bin"
+            ).order_by(objects.c.created_at, objects.c.id)
         ).scalars().all()
         assert len(old) == 2
         tagger = ObjectTagStore(catalog)
