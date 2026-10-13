@@ -213,5 +213,10 @@ class BucketCatalog:
                 text("DELETE FROM storage_bucket_tags WHERE bucket = :bucket"),
                 {"bucket": name},
             )
+        if inspect(self.db.engine).has_table("storage_bucket_cors"):
+            self.db.connection.execute(
+                text("DELETE FROM storage_bucket_cors WHERE bucket = :bucket"),
+                {"bucket": name},
+            )
         self.db.connection.execute(delete(buckets).where(buckets.c.name == name))
         self.db.commit()
