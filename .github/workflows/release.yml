@@ -44,7 +44,7 @@ jobs:
       - name: Install test runtime
         run: |
           python -m pip install -r requirements-web.txt
-          python -m pip install pytest httpx bandit pip-audit
+          python -m pip install pytest httpx bandit pip-audit boto3
           python -m pip check
       - name: Compile application
         run: python -m compileall -q teledrive web app tests
@@ -55,7 +55,8 @@ jobs:
             tests/test_desktop_support.py tests/test_storage_engine.py \
             tests/test_storage_recovery.py tests/test_storage_catalog.py \
             tests/test_bot_storage.py tests/test_telegram_target_resolution.py tests/test_ci_workflows.py \
-            tests/test_api_keys.py tests/test_rest_api.py tests/test_rest_transfer.py
+            tests/test_api_keys.py tests/test_rest_api.py tests/test_rest_transfer.py \
+            tests/test_s3_p0_acceptance.py
       - name: Security checks
         run: |
           bandit -q -r teledrive web -ll

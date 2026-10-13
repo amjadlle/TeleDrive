@@ -28,7 +28,9 @@ jobs:
     env:
       TELEDRIVE_E2E_BOT_TOKEN: ${{ secrets.TELEDRIVE_E2E_BOT_TOKEN }}
       TELEDRIVE_E2E_BOT_CHAT_ID: ${{ vars.TELEDRIVE_E2E_BOT_CHAT_ID }}
-      TELEDRIVE_E2E_MULTIPART: ${{ github.event_name == 'workflow_dispatch' && inputs.run_multipart && '1' || '0' }}
+      # A one-shot, explicit push marker permits P0 live acceptance on a
+      # reviewed merge without permanently uploading 5 MiB+ on every push.
+      TELEDRIVE_E2E_MULTIPART: ${{ ((github.event_name == 'workflow_dispatch' && inputs.run_multipart) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[p0-live-multipart]'))) && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09

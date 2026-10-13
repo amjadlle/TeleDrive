@@ -21,7 +21,7 @@ claim of production readiness. Recheck every workflow at the release SHA.
 
 ## P0 — release-blocking validation
 
-- [ ] **P0.1 Immutable green build:** complete Security, Storage API,
+- [x] **P0.1 Immutable green build:** complete Security, Storage API,
   Database, Desktop (Linux/Windows), and both Telegram E2E workflows on
   the *same commit SHA*. Cancelled jobs do not count.
 - [ ] **P0.2 Recovery safety:** inject crashes before/after Telegram ACK,
@@ -30,9 +30,12 @@ claim of production readiness. Recheck every workflow at the release SHA.
 - [ ] **P0.3 Credentials/security matrix:** independent revoked/expired/
   read-only credentials on REST, S3, presigned URLs, tagging, copy, and
   multipart; negative SigV4, metadata mutation and protocol abuse tests.
-- [ ] **P0.4 Real multipart:** manually dispatch Telegram Bot Storage E2E
-  with `run_multipart=true` and verify 5 MiB+ Telegram data, reparented
-  chunks, checksum, retrieval, and test-only message cleanup.
+- [ ] **P0.4 Real multipart:** run Telegram Bot Storage E2E with
+  `run_multipart=true`, or a reviewed feature-branch merge commit
+  containing `[p0-live-multipart]`. Verify 5 MiB+ Telegram data,
+  restart-persisted bot file IDs, reparented chunks, checksum,
+  idempotent completion and test-only message cleanup. Mark complete
+  only after a successful *non-skipped* live execution.
 - [ ] **P0.5 Client interoperability:** real AWS CLI and rclone required;
   investigate Cyberduck and large Range/multipart edge cases.
 
@@ -58,9 +61,9 @@ claim of production readiness. Recheck every workflow at the release SHA.
 
 ## CI evidence (snapshot only)
 
-At `916a41da1734`, standard Telegram user and bot E2E push
-workflows finished successfully on 2026-10-13. The 5 MiB+ real multipart
-path is **opt-in and was not established as passing**. Frequent feature
-pushes cancelled Security CI and Storage API Integration CI jobs; these
-checks must finish on an immutable candidate before P0.1 can close.
+At `904cb15b3cc7`, all seven push workflows completed successfully on
+2026-10-13: Security, Storage API, live PostgreSQL/MySQL, Linux/Windows
+Desktop, both standard Telegram E2E, and release verification (not an
+actual release publication). The 5 MiB+ real multipart test remains an
+explicit opt-in *until a non-skipped live run is recorded*.
 Production physical GC and full AWS S3 compliance are not implemented.

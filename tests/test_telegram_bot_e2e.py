@@ -71,8 +71,9 @@ def test_live_bot_upload_download_sha_range_and_cleanup():
 def test_live_bot_s3_multipart_moves_real_telegram_messages():
     """Manual S3 acceptance: preserve real Telegram messages across SQL reparenting.
 
-    Completes two parts; never duplicates them on Telegram. This validates the
-    storage integration behind the boto3+HTTP multipart contract tests.
+    Completes two parts after reopening the SQL database; never duplicates
+    messages on Telegram. This validates crash/restart durability, exact
+    checksum and chunk reparenting behind the boto3+HTTP contract tests.
     """
     import time
     from teledrive.storage.catalog import BucketCatalog
@@ -120,16 +121,50 @@ def test_live_bot_s3_multipart_moves_real_telegram_messages():
                     selection.append((number, etag))
                     path.unlink()
                 assert len(refs) == 2
+                sent_messages = {(ref.account, ref.chat_id, ref.message_id)
+                                 for ref in refs}
+                # Simulate a process restart between Telegram ACK+SQL staging
+                # and Complete. Persistent bot file IDs must survive too.
+                database.close()
+                database = connect_database(str(root / "state.db"))
+                manifests = ManifestStore(database)
+                catalog = BucketCatalog(manifests)
+                service = MultipartStore(catalog)
+                transport = BotApiChunkTransport(
+                    BotApiClient(token), BotFileIndex(database),
+                    chat_id=int(chat_id), account="bot-ci-multipart",
+                    min_upload_interval=1.1,
+                )
+                engine = TelegramObjectStorage(
+                    manifests, transport, chunk_size=16 * 1024 * 1024,
+                    scratch_directory=root,
+                )
+                assert len(service.list_parts(
+                    upload_id, bucket, "live/large.bin", "ci-live-access"
+                )) == 2
                 finished = await service.complete(
                     upload_id, bucket, "live/large.bin", "ci-live-access",
                     selection, engine,
                 )
                 assert finished.size == len(first) + len(last)
-                assert len(manifests.parts(finished.object_id)) == 2
+                final_refs = manifests.parts(finished.object_id)
+                assert len(final_refs) == 2
+                assert {(ref.account, ref.chat_id, ref.message_id)
+                        for ref in final_refs} == sent_messages
                 restored = root / "restored.bin"
                 await engine.download_to_path(finished.object_id, restored)
                 assert restored.read_bytes() == first + last
+                assert hashlib.sha256(restored.read_bytes()).hexdigest() == (
+                    hashlib.sha256(first + last).hexdigest()
+                )
                 assert catalog.get(bucket, "live/large.bin").item.id == finished.object_id
+                # Complete on a fresh SQL connection is idempotent. The test
+                # never sends a new Telegram upload during either completion.
+                again = await service.complete(
+                    upload_id, bucket, "live/large.bin", "ci-live-access",
+                    selection, engine,
+                )
+                assert again.object_id == finished.object_id
             finally:
                 # Explicitly clean only messages uploaded in this test. The
                 # service itself never deletes them during multipart Complete.
