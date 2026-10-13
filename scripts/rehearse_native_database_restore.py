@@ -51,7 +51,7 @@ def fingerprint(url: str, receipt: dict) -> dict:
             "head": head.item.id,
             "generation": head.generation,
             "head_sha": head.item.sha256,
-            "versions": [(v["version_id"], v["is_current"], v["is_delete_marker"])
+            "versions": [[v["version_id"], v["is_current"], v["is_delete_marker"]]
                          for v in versions],
             "truncated": truncated,
             "source_visible": catalog.is_visible_version(owner, S3_KEY, first),
@@ -65,9 +65,9 @@ def fingerprint(url: str, receipt: dict) -> dict:
                     [receipt["marker"], receipt["second"]]
                 ))
             ).scalar_one(),
-            "parts": [(p.ordinal, p.offset, p.size, p.sha256,
-                       p.account, p.chat_id, p.message_id) for p in parts],
-            "tags": ObjectTagStore(catalog).get(first),
+            "parts": [[p.ordinal, p.offset, p.size, p.sha256,
+                       p.account, p.chat_id, p.message_id] for p in parts],
+            "tags": [list(row) for row in ObjectTagStore(catalog).get(first)],
             "pending_ack": index.find_receipt(
                 pending, 0, account="ci-dr-bot", chat_id=-100900901,
                 checksum=hashlib.sha256(b"Q").hexdigest(), size=1,
