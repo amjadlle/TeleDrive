@@ -94,7 +94,7 @@ def _reject_unimplemented_write_options(request: Request) -> None:
     Do not stage bytes or contact Telegram when any option is present.
     """
     rejected = {
-        "x-amz-acl", "x-amz-grant-read", "x-amz-grant-write",
+        "x-amz-grant-read", "x-amz-grant-write",
         "x-amz-grant-full-control", "x-amz-grant-read-acp",
         "x-amz-grant-write-acp",
         "x-amz-server-side-encryption",
@@ -103,12 +103,29 @@ def _reject_unimplemented_write_options(request: Request) -> None:
         "x-amz-server-side-encryption-customer-algorithm",
         "x-amz-server-side-encryption-customer-key",
         "x-amz-server-side-encryption-customer-key-md5",
-        "x-amz-bucket-key-enabled", "x-amz-storage-class",
+        "x-amz-bucket-key-enabled",
         "x-amz-website-redirect-location", "x-amz-object-lock-mode",
         "x-amz-object-lock-retain-until-date", "x-amz-object-lock-legal-hold",
         "x-amz-request-payer", "x-amz-trailer",
         "x-amz-decoded-content-length",
     }
+    # The S3 gateway is permanently private and has exactly one storage
+    # tier, so these explicit default values do not change actual behavior.
+    # Reject every other canned ACL / storage-class rather than pretending
+    # to provide public-read, Glacier, Standard-IA or replicated durability.
+    defaults = {
+        "x-amz-acl": "private",
+        "x-amz-storage-class": "STANDARD",
+    }
+    signed = signed_header_names(request)
+    for name, expected in defaults.items():
+        actual = request.headers.get(name)
+        if actual is None:
+            continue
+        if name not in signed:
+            raise SigV4Error("AccessDenied", "S3 access mode must be signed")
+        if actual != expected:
+            raise SigV4Error("NotImplemented", "Unsupported S3 ACL or storage tier")
     if (any(name in request.headers for name in rejected)
             or request.headers.get("content-encoding", "").lower() == "aws-chunked"):
         raise SigV4Error(
