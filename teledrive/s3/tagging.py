@@ -10,13 +10,12 @@ import re
 import time
 
 from sqlalchemy import (
-    Column, ForeignKey, MetaData, String, Table, delete, insert, select, update,
+    Column, ForeignKey, String, Table, delete, insert, select, update,
 )
 from sqlalchemy.exc import IntegrityError
 
 from teledrive.storage.catalog import BucketCatalog, heads
-
-_meta = MetaData()
+from teledrive.storage.manifest import metadata as _meta
 object_tags = Table(
     "storage_object_tags", _meta,
     Column("object_id", String(36), ForeignKey("storage_objects.id"), primary_key=True),
@@ -60,7 +59,7 @@ class ObjectTagStore:
     def __init__(self, catalog: BucketCatalog):
         self.catalog = catalog
         self.db = catalog.db
-        _meta.create_all(self.db.engine)
+        _meta.create_all(self.db.engine, tables=[object_tags])
 
     def get(self, object_id: str) -> list[tuple[str, str]]:
         return list(self.db.connection.execute(
