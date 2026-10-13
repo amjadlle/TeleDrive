@@ -382,3 +382,54 @@ def test_copy_object_alias_preserves_telegram_uniqueness_live_sql(env_name, tmp_
     finally:
         first.close()
         second.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_object_tags_survive_database_restart_and_copy_on_live_sql(env_name):
+    """Tags persist without Telegram bytes; copies snapshot rather than share tags."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from uuid import uuid4
+    import hashlib
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
+    from teledrive.storage.copy import copy_object
+    from teledrive.s3.tagging import ObjectTagStore
+
+    bucket = "ci-" + uuid4().hex[:20]
+    now = int(time.time())
+    conn = connect_database(url)
+    try:
+        manifests = ManifestStore(conn)
+        catalog = BucketCatalog(manifests)
+        catalog.create_bucket(bucket, now)
+        original_id = manifests.begin(bucket, "source", 0, now)
+        manifests.finish(original_id, hashlib.sha256(b"").hexdigest(), now)
+        catalog.publish(original_id, now=now)
+        tagging = ObjectTagStore(catalog)
+        assert tagging.replace_current(bucket, "source", [
+            ("project", "TeleDrive"), ("language", "Türkçe")
+        ]) == original_id
+        clone = copy_object(catalog, bucket, "source", bucket, "copy")
+        assert clone.source_object_id == original_id
+    finally:
+        conn.close()
+
+    # Cross-process durability is modeled by a new SQL connection.
+    reopened = connect_database(url)
+    try:
+        catalog = BucketCatalog(ManifestStore(reopened))
+        tagging = ObjectTagStore(catalog)
+        assert tagging.get(catalog.get(bucket, "copy").item.id) == [
+            ("language", "Türkçe"), ("project", "TeleDrive")
+        ]
+        tagging.replace_current(bucket, "source", [("project", "changed")])
+        assert tagging.get(catalog.get(bucket, "copy").item.id) == [
+            ("language", "Türkçe"), ("project", "TeleDrive")
+        ]
+        assert tagging.get(catalog.get(bucket, "source").item.id) == [
+            ("project", "changed")
+        ]
+    finally:
+        reopened.close()
