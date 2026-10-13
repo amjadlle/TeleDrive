@@ -289,3 +289,72 @@ def test_batch_delete_produces_visible_markers_and_never_deletes_telegram(servic
     assert sum(is_marker for _, _, is_marker, _ in entries) == 2
     assert signed(service, "GET", "/backup-bucket/file.bin").status_code == 404
     assert service[2].parts == before
+
+
+
+def test_removed_version_is_invisible_to_all_tagging_methods_and_direct_store(service):
+    """S3 gateway and SQL service share the same irreversible removal fence."""
+    from teledrive.s3.tagging import ObjectTagStore, TaggingError
+    from sqlalchemy import select
+    from teledrive.s3.tagging import object_tags
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"revoked-version-must-stay-hidden" * 4097
+    assert signed(service, "PUT", "/backup-bucket/secure.bin", data).status_code == 200
+    version = _current_id(service, "secure.bin")
+    assert signed(service, "PUT",
+                  f"/backup-bucket/secure.bin?tagging&versionId={version}",
+                  b"<Tagging><TagSet><Tag><Key>safe</Key><Value>original</Value></Tag></TagSet></Tagging>").status_code == 200
+    before = service[2].uploads
+    removed = signed(service, "DELETE",
+                     f"/backup-bucket/secure.bin?versionId={version}")
+    assert removed.status_code == 204
+    for method in ("GET", "PUT", "DELETE"):
+        path = f"/backup-bucket/secure.bin?tagging&versionId={version}"
+        body = (b"<Tagging><TagSet><Tag><Key>safe</Key>"
+                b"<Value>attack</Value></Tag></TagSet></Tagging>") if method == "PUT" else b""
+        res = signed(service, method, path, body)
+        assert res.status_code == 404, (method, res.text)
+        assert b"NoSuchVersion" in res.content
+
+    db = service[3]()
+    try:
+        cat = BucketCatalog(ManifestStore(db))
+        tags = ObjectTagStore(cat)
+        assert not cat.is_visible_version("backup-bucket", "secure.bin", version)
+        with pytest.raises(TaggingError) as denied:
+            tags.replace_published("backup-bucket", "secure.bin",
+                                   version, [("safe", "attack")])
+        assert denied.value.code == "NoSuchVersion"
+        original = db.connection.execute(select(
+            object_tags.c.tag_key, object_tags.c.tag_value
+        ).where(object_tags.c.object_id == version)).all()
+        assert [tuple(x) for x in original] == [("safe", "original")]
+    finally:
+        db.close()
+    assert service[2].uploads == before
+    assert signed(service, "GET", "/backup-bucket/secure.bin").status_code == 404
+
+
+def test_published_version_visibility_requires_untampered_sql_manifest_identity(service):
+    """A corrupted published index may not make another object's bytes visible."""
+    from sqlalchemy import update
+    from teledrive.storage.manifest import objects
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/other.bin", b"private" * 791).status_code == 200
+    version = _current_id(service, "other.bin")
+    db = service[3]()
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        assert catalog.is_visible_version("backup-bucket", "other.bin", version)
+        db.connection.execute(update(objects).where(
+            objects.c.id == version
+        ).values(object_key="wrong-key.bin"))
+        db.commit()
+        assert not catalog.is_visible_version("backup-bucket", "other.bin", version)
+    finally:
+        db.close()
+    res = signed(service, "GET",
+                 f"/backup-bucket/other.bin?versionId={version}")
+    assert res.status_code in (404, 409), res.text

@@ -771,3 +771,46 @@ def test_legacy_scan_id_is_idempotent_under_live_sql_races(env_name, tmp_path):
         assert selected[0]["state"] == "queued"
     finally:
         check.close()
+
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_real_sql_revoked_version_tagging_is_fenced_on_new_connection(env_name):
+    """Two real DB sessions: a logical S3 delete revokes direct SQL tag writes."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+
+    import hashlib
+    from uuid import uuid4
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
+    from teledrive.s3.tagging import ObjectTagStore, TaggingError
+
+    db1 = connect_database(url)
+    db2 = connect_database(url)
+    try:
+        one = BucketCatalog(ManifestStore(db1))
+        two = BucketCatalog(ManifestStore(db2))
+        bucket = "ci-" + uuid4().hex[:19]
+        key = "history/İstanbul.bin"
+        one.create_bucket(bucket, int(time.time()))
+        version = one.manifests.begin(bucket, key, 0, int(time.time()))
+        one.manifests.finish(version, hashlib.sha256(b"").hexdigest(), int(time.time()))
+        one.publish(version, now=int(time.time()))
+        ObjectTagStore(two).replace_published(bucket, key, version, [("a", "before")])
+        # Close the second connection's read transaction before delete so
+        # MySQL repeatable-read never sees an intentionally stale snapshot.
+        db2.commit()
+        assert one.delete_version(bucket, key, version)
+        with pytest.raises(TaggingError) as denied:
+            ObjectTagStore(two).replace_published(
+                bucket, key, version, [("a", "after")],
+            )
+        assert denied.value.code == "NoSuchVersion"
+        assert ObjectTagStore(two).get(version) == [("a", "before")]
+        assert not one.is_visible_version(bucket, key, version)
+        assert not two.is_visible_version(bucket, key, version)
+    finally:
+        db1.close()
+        db2.close()

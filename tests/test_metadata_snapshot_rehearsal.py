@@ -64,3 +64,46 @@ def test_snapshot_verification_refuses_symlink_and_non_sqlite(tmp_path):
     alias.symlink_to(bad)
     with pytest.raises(InvalidSnapshot, match="regular"):
         verify_snapshot(alias)
+
+
+
+def test_verifier_includes_removed_versions_and_rejects_head_to_revoked_id(tmp_path):
+    db_path = tmp_path / "history.db"
+    seed(db_path)
+    conn = connect_database(str(db_path))
+    try:
+        cat = BucketCatalog(ManifestStore(conn))
+        original = cat.get("verify-ci", "a.bin").item.id
+        marker = cat.delete_marker("verify-ci", "a.bin")
+        assert cat.delete_version("verify-ci", "a.bin", marker)
+        assert cat.is_visible_version("verify-ci", "a.bin", original)
+    finally:
+        conn.close()
+    snapshot = tmp_path / "valid-history.db"
+    sha = backup_sqlite(db_path, snapshot)
+    record = verify_snapshot(snapshot, sha)
+    assert record["removed_versions"] == 1
+    assert record["versions"] == 2
+    assert record["heads"] == 1
+    with sqlite3.connect(snapshot) as raw:
+        raw.execute(
+            "UPDATE storage_object_heads SET object_id=? WHERE bucket='verify-ci'",
+            (marker,),
+        )
+        raw.commit()
+    with pytest.raises(InvalidSnapshot, match="revoked"):
+        verify_snapshot(snapshot)
+
+
+def test_verifier_rejects_orphan_removed_version_entry_even_when_sqlite_integrity_ok(tmp_path):
+    db_path = tmp_path / "orphans.db"
+    seed(db_path)
+    with sqlite3.connect(db_path) as raw:
+        raw.execute(
+            "INSERT INTO storage_removed_versions(object_id, removed_ns) "
+            "VALUES(?, ?)", ("unknown-version-id", 12),
+        )
+        raw.commit()
+        assert raw.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    with pytest.raises(InvalidSnapshot, match="published history"):
+        verify_snapshot(db_path)
