@@ -218,9 +218,74 @@ def test_boto3_tagging_over_actual_http_server(service):
         ]
         sdk.delete_object_tagging(Bucket="backup-bucket", Key="SDK")
         assert sdk.get_object_tagging(Bucket="backup-bucket", Key="SDK")["TagSet"] == []
+        sdk.put_bucket_tagging(Bucket="backup-bucket", Tagging={
+            "TagSet":[{"Key":"environment","Value":"ci"}]
+        })
+        assert sdk.get_bucket_tagging(Bucket="backup-bucket")["TagSet"] == [
+            {"Key":"environment","Value":"ci"}
+        ]
+        sdk.delete_bucket_tagging(Bucket="backup-bucket")
         assert remote.uploads == before
     finally:
         server.should_exit = True
         worker.join(timeout=10)
         socket_obj.close()
         assert not worker.is_alive()
+
+
+def test_bucket_tagging_correct_s3_missing_semantics_and_safe_removal(service):
+    remote = service[2]
+    assert signed(service, "PUT", "/bucket-with-tags").status_code == 200
+    url = "/bucket-with-tags?tagging"
+    initial = signed(service, "GET", url)
+    assert initial.status_code == 404
+    assert b"NoSuchTagSet" in initial.content
+    before = (remote.uploads, remote.downloads)
+    set_tags = signed(service, "PUT", url, tag_xml([("cost", "ops"), ("zone", "eu")]))
+    assert set_tags.status_code == 204, set_tags.text
+    assert extract_tags(signed(service, "GET", url)) == [("cost", "ops"), ("zone", "eu")]
+    assert before == (remote.uploads, remote.downloads)
+    erased = signed(service, "DELETE", url)
+    assert erased.status_code == 204
+    assert signed(service, "GET", url).status_code == 404
+    # Removing a physically empty bucket must not leave a FK-bound tag row.
+    assert signed(service, "PUT", url, tag_xml([("role","temporary")])).status_code == 204
+    assert signed(service, "DELETE", "/bucket-with-tags").status_code == 204
+    assert signed(service, "GET", url).status_code == 404
+
+
+def test_bucket_tagging_scopes_and_checksum_fail_closed(service):
+    assert signed(service, "PUT", "/bucket-with-tags").status_code == 200
+    db = service[3]()
+    try:
+        keys = S3CredentialStore(db, service[4])
+        data_reader = keys.create("object-read", ["s3:GetObject"])
+        tag_reader = keys.create("bucket-tag-read", ["s3:GetBucketTagging"])
+        tag_writer = keys.create("bucket-tag-write", ["s3:PutBucketTagging"])
+    finally:
+        db.close()
+    path = "/bucket-with-tags?tagging"
+    denied = signed(service, "GET", path, access=data_reader.access_key,
+                    secret=data_reader.secret_key)
+    assert denied.status_code == 403
+    allowed = signed(service, "PUT", path, tag_xml([("account", "1")]),
+                     access=tag_writer.access_key, secret=tag_writer.secret_key)
+    assert allowed.status_code == 204
+    assert extract_tags(signed(service, "GET", path, access=tag_reader.access_key,
+                               secret=tag_reader.secret_key)) == [("account","1")]
+    assert signed(service, "DELETE", path, access=tag_writer.access_key,
+                  secret=tag_writer.secret_key).status_code == 403
+    assert signed(service, "PUT", path, b"<Tagging><broken/>").status_code == 400
+    assert extract_tags(signed(service, "GET", path)) == [("account","1")]
+
+
+def test_bucket_tagging_is_isolated_from_object_tags(service):
+    create(service)
+    path = "/backup-bucket/file.bin?tagging"
+    assert signed(service, "PUT", path, tag_xml([("object", "only")])).status_code == 200
+    assert signed(service, "PUT", "/backup-bucket?tagging",
+                  tag_xml([("bucket", "only")])).status_code == 204
+    assert extract_tags(signed(service, "GET", path)) == [("object", "only")]
+    assert extract_tags(signed(service, "GET", "/backup-bucket?tagging")) == [("bucket", "only")]
+    assert signed(service, "DELETE", "/backup-bucket?tagging").status_code == 204
+    assert extract_tags(signed(service, "GET", path)) == [("object", "only")]
