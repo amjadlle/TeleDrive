@@ -1,0 +1,39 @@
+name: Telegram Storage E2E (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  telegram-roundtrip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TELEDRIVE_E2E_API_ID: ${{ secrets.TELEDRIVE_E2E_API_ID }}
+      TELEDRIVE_E2E_API_HASH: ${{ secrets.TELEDRIVE_E2E_API_HASH }}
+      TELEDRIVE_E2E_SESSION: ${{ secrets.TELEDRIVE_E2E_SESSION }}
+      TELEDRIVE_E2E_TARGET: ${{ vars.TELEDRIVE_E2E_TARGET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Require a dedicated test account session
+        shell: bash
+        run: |
+          if [[ -z "$TELEDRIVE_E2E_API_ID" || -z "$TELEDRIVE_E2E_API_HASH" || -z "$TELEDRIVE_E2E_SESSION" ]]; then
+            echo "::error::Configure TELEDRIVE_E2E_API_ID, TELEDRIVE_E2E_API_HASH and TELEDRIVE_E2E_SESSION"
+            exit 1
+          fi
+      - name: Install storage dependencies
+        run: |
+          python -m pip install -e .
+          python -m pip install pytest
+      - name: Real Telegram upload, retrieval, checksum and Range
+        run: python -m pytest -q tests/test_telegram_storage_e2e.py
