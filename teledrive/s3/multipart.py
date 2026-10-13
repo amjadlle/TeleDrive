@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from teledrive.storage.catalog import BucketCatalog, buckets, heads
 from teledrive.storage.engine import TelegramObjectStorage
+from teledrive.s3.object_metadata import ObjectMetadataStore
 from teledrive.storage.manifest import chunks, objects
 
 MIN_PART_SIZE = 5 * 1024 * 1024
@@ -92,7 +93,8 @@ class MultipartStore:
         self.manifests = catalog.manifests
         _meta.create_all(self.db.engine)
 
-    def initiate(self, bucket: str, key: str, owner: str, now: int | None = None) -> str:
+    def initiate(self, bucket: str, key: str, owner: str, now: int | None = None,
+                 *, http_metadata: dict[str, str] | None = None) -> str:
         if bucket not in self.catalog.list_buckets():
             raise FileNotFoundError("Bucket does not exist")
         self.catalog._keyhash(key)
@@ -104,6 +106,10 @@ class MultipartStore:
             state="active", created_at=now or int(time.time()),
             completed_object_id=None, completed_etag=None,
         ))
+        if http_metadata:
+            ObjectMetadataStore(self.catalog).stage_upload_uncommitted(
+                identifier, http_metadata,
+            )
         self.db.commit()
         return identifier
 
@@ -463,6 +469,11 @@ class MultipartStore:
                 self.db.connection.execute(insert(multipart_etags).values(
                     object_id=object_id, etag=final_etag,
                 ))
+                # Metadata set at CreateMultipartUpload becomes immutable
+                # metadata on the newly published version, not on parts.
+                ObjectMetadataStore(self.catalog).attach_upload_uncommitted(
+                    identifier, object_id
+                )
                 for position, (number, etag) in enumerate(selected):
                     self.db.connection.execute(insert(completion_parts).values(
                         upload_id=identifier, position=position,
