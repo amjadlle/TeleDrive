@@ -30,7 +30,7 @@ credentials = Table(
 )
 PERMISSIONS = frozenset({
     "s3:ListAllMyBuckets", "s3:CreateBucket", "s3:DeleteBucket",
-    "s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+    "s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:GetObjectAttributes", "s3:PutObject", "s3:DeleteObject",
     "s3:GetObjectTagging", "s3:PutObjectTagging", "s3:DeleteObjectTagging",
     "s3:GetBucketTagging", "s3:PutBucketTagging", "s3:DeleteBucketTagging",
     "s3:GetBucketCORS", "s3:PutBucketCORS",
