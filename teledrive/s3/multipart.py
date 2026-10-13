@@ -111,6 +111,34 @@ class MultipartStore:
             raise MultipartError("NoSuchUpload", "Multipart upload not found or inactive", 404)
         return row
 
+    def list_uploads(self, bucket: str, owner: str, *,
+                     prefix: str = "", after_key: str = "",
+                     after_id: str = "", limit: int = 1000):
+        """Return a bounded, owner-scoped page and whether another page exists."""
+        if not 1 <= limit <= 1000 or len(prefix.encode("utf-8")) > 1024:
+            raise MultipartError("InvalidArgument", "Invalid multipart list pagination")
+        if after_id and not after_key:
+            raise MultipartError("InvalidArgument", "Upload-id marker requires key marker")
+        stmt = select(uploads.c.id, uploads.c.object_key, uploads.c.created_at).where(
+            uploads.c.bucket == bucket,
+            uploads.c.owner_access_key == owner,
+            uploads.c.state == "active",
+        )
+        if prefix:
+            stmt = stmt.where(uploads.c.object_key.startswith(prefix, autoescape=True))
+        if after_key:
+            if after_id:
+                stmt = stmt.where(
+                    (uploads.c.object_key > after_key)
+                    | ((uploads.c.object_key == after_key) & (uploads.c.id > after_id))
+                )
+            else:
+                stmt = stmt.where(uploads.c.object_key > after_key)
+        rows = self.db.connection.execute(
+            stmt.order_by(uploads.c.object_key, uploads.c.id).limit(limit + 1)
+        ).all()
+        return rows[:limit], len(rows) > limit
+
     def list_parts(self, identifier: str, bucket: str, key: str, owner: str):
         self.require(identifier, bucket, key, owner)
         return self.db.connection.execute(
