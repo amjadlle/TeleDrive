@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import unquote
 from xml.etree import ElementTree as ET
 from defusedxml import ElementTree as SafeET
+from defusedxml.common import DefusedXmlException
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response, StreamingResponse
@@ -96,7 +97,7 @@ def _parse_tag_xml(body: bytes) -> list[tuple[str, str]]:
         raise TaggingError("MalformedXML", "Tagging XML exceeds maximum size")
     try:
         root = SafeET.fromstring(body)
-    except ET.ParseError as exc:
+    except (ET.ParseError, DefusedXmlException) as exc:
         raise TaggingError("MalformedXML", "Tagging XML is malformed") from exc
     def tag_name(node):
         return node.tag.rsplit("}", 1)[-1]
