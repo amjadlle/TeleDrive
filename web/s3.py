@@ -30,6 +30,9 @@ from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
 from teledrive.s3.batch_delete import BatchDeleteError, MAX_XML_BYTES, parse_batch, verify_body
 from teledrive.s3.conditions import http_last_modified, read_precondition
 from teledrive.s3.tagging import ObjectTagStore, BucketTagStore, TaggingError, validate_tags
+from teledrive.s3.object_metadata import (
+    ObjectMetadataStore, ObjectMetadataError, parse_object_metadata, signed_header_names,
+)
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
@@ -54,8 +57,9 @@ def _error(code: str, message: str, status: int) -> Response:
                     media_type="application/xml", status_code=status)
 
 
-def _headers(item, etag: str | None = None) -> dict[str, str]:
-    return {
+def _headers(item, etag: str | None = None,
+             metadata: dict[str, str] | None = None) -> dict[str, str]:
+    headers = {
         "ETag": '"' + (etag or item.sha256) + '"',
         "Content-Length": str(item.size),
         "Accept-Ranges": "bytes",
@@ -63,6 +67,9 @@ def _headers(item, etag: str | None = None) -> dict[str, str]:
         "Last-Modified": http_last_modified(item.created_at),
         "x-amz-version-id": item.id,
     }
+    for name, value in (metadata or {}).items():
+        headers[name] = value
+    return headers
 
 
 def _verify_upload_sha256(request: Request, digest: bytes) -> None:
@@ -538,7 +545,12 @@ async def _handle(request: Request):
         if mpu_start or mpu_part or mpu_complete or mpu_abort or mpu_list:
             mpu = MultipartStore(catalog)
             if mpu_start:
-                upload_id = mpu.initiate(bucket, key, owner)
+                http_properties = parse_object_metadata(
+                    request.headers, signed_header_names(request),
+                )
+                upload_id = mpu.initiate(
+                    bucket, key, owner, http_metadata=http_properties,
+                )
                 return Response(_xml("InitiateMultipartUploadResult", [
                     ("Bucket", bucket), ("Key", key), ("UploadId", upload_id),
                 ]), media_type="application/xml", status_code=200)
@@ -686,8 +698,18 @@ async def _handle(request: Request):
             )
             if any(request.headers.get(name) is not None for name in unsupported_headers):
                 return _error("NotImplemented", "CopyObject option is unsupported", 501)
-            if request.headers.get("x-amz-metadata-directive", "COPY") != "COPY":
-                return _error("NotImplemented", "Metadata replacement is unsupported", 501)
+            metadata_directive = request.headers.get(
+                "x-amz-metadata-directive", "COPY"
+            )
+            if metadata_directive not in {"COPY", "REPLACE"}:
+                raise ObjectMetadataError("InvalidArgument", "Invalid metadata directive")
+            copy_properties = parse_object_metadata(
+                request.headers, signed_header_names(request),
+            )
+            if metadata_directive == "COPY" and copy_properties:
+                raise ObjectMetadataError(
+                    "InvalidRequest", "Object metadata requires MetadataDirective=REPLACE"
+                )
             tag_directive = request.headers.get("x-amz-tagging-directive", "COPY")
             if tag_directive not in {"COPY", "REPLACE"}:
                 raise TaggingError("InvalidArgument", "Invalid CopyObject tagging directive")
@@ -744,6 +766,7 @@ async def _handle(request: Request):
                     catalog, src_bucket, src_key, bucket, key,
                     expected_source_id=source_item.id,
                     replacement_tags=(inline_tags or []) if tag_directive == "REPLACE" else None,
+                    replacement_metadata=copy_properties if metadata_directive == "REPLACE" else None,
                 )
             except CopyConflict:
                 return _error("OperationAborted", "Concurrent source/destination mutation", 409)
@@ -789,10 +812,16 @@ async def _handle(request: Request):
                     catalog.manifests, transport,
                     chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=root,
                 )
-                # PUT's tagging metadata and head pointer share one SQL
-                # transaction. Failed tag writes never publish an untagged key.
+                # Metadata, tags and the head pointer share one SQL
+                # transaction. A failed metadata write cannot publish a
+                # partially described object.
+                http_properties = parse_object_metadata(
+                    request.headers, signed_header_names(request),
+                )
+                http_store = ObjectMetadataStore(catalog)
                 tag_store = ObjectTagStore(catalog) if inline_tags is not None else None
                 item = await engine.put_file(bucket, key, stage)
+                http_store.attach_uncommitted(item.id, http_properties)
                 if tag_store is not None:
                     tag_store.attach_uncommitted(item.id, inline_tags)
                 catalog.publish(item.id, now=int(time.time()))
@@ -805,6 +834,7 @@ async def _handle(request: Request):
         except FileNotFoundError:
             return _error("NoSuchKey", "The specified key does not exist", 404)
         item_etag = MultipartStore(catalog).object_etag(item.id, item.sha256)
+        http_properties = ObjectMetadataStore(catalog).get(item.id)
         precondition = read_precondition(request, item_etag, item.created_at)
         if precondition == 304:
             return Response(status_code=304, headers={
@@ -814,7 +844,7 @@ async def _handle(request: Request):
         if precondition == 412:
             return _error("PreconditionFailed", "Object precondition failed", 412)
         if request.method == "HEAD":
-            return Response(status_code=200, headers=_headers(item, item_etag))
+            return Response(status_code=200, headers=_headers(item, item_etag, http_properties))
         start, end, partial = _range(request.headers.get("range"), item.size)
         transport = storage_bot_transport(db)
         scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
@@ -832,7 +862,7 @@ async def _handle(request: Request):
                 db.close()
 
         retain = True
-        headers = _headers(item, item_etag)
+        headers = _headers(item, item_etag, http_properties)
         headers["Content-Length"] = str(end - start)
         if partial:
             headers["Content-Range"] = f"bytes {start}-{end-1}/{item.size}"
@@ -840,6 +870,8 @@ async def _handle(request: Request):
     except BatchDeleteError as exc:
         return _error(exc.code, str(exc), exc.status)
     except TaggingError as exc:
+        return _error(exc.code, str(exc), exc.status)
+    except ObjectMetadataError as exc:
         return _error(exc.code, str(exc), exc.status)
     except MultipartError as exc:
         return _error(exc.code, str(exc), exc.status)
