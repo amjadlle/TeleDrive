@@ -376,9 +376,16 @@ def test_signed_md5_allows_standard_unsigned_payload_without_sacrificing_integri
     request = AWSRequest(
         method="PUT", url=url, data=body, headers={"Content-MD5": digest},
     )
-    request.context["payload_signing_enabled"] = False
-    S3SigV4Auth(Credentials(service[1].access_key, service[1].secret_key),
-                "s3", "us-east-1").add_auth(request)
+    class RcloneStyleUnsignedSigner(S3SigV4Auth):
+        # S3SigV4Auth calculates SHA-256 even if payload_signing_enabled=False;
+        # override the body canonicalization for rclone's actual wire shape.
+        def payload(self, request):
+            return "UNSIGNED-PAYLOAD"
+
+    RcloneStyleUnsignedSigner(
+        Credentials(service[1].access_key, service[1].secret_key),
+        "s3", "us-east-1",
+    ).add_auth(request)
     headers = dict(request.headers)
     assert headers.get("X-Amz-Content-SHA256") == "UNSIGNED-PAYLOAD"
     assert "content-md5" in headers["Authorization"].lower()
