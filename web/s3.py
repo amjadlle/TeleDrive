@@ -615,6 +615,7 @@ async def _handle(request: Request):
         if form_upload:
             if request.headers.get("authorization"):
                 raise SigV4Error("AccessDenied", "Ambiguous form and header authentication")
+            _reject_unimplemented_write_options(request)
             max_upload = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
             form_limit = min(FORM_LIMIT, max_upload)
             if form_limit < 1:

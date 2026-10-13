@@ -133,3 +133,48 @@ def test_browser_post_mime_upload_limit_blocks_before_remote_send(service, monke
     body = b"X" * 8192
     assert post(service, body, make_form(service, body)).status_code == 413
     assert service[2].uploads == 0
+
+
+def test_real_boto3_generated_sigv4_browser_post_policy(service):
+    """Interoperate with the SDK's real POST presigner, not a homegrown signer."""
+    import boto3
+    from botocore.config import Config
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    creds = service[1]
+    payload = b"sdk-authenticated-browser-upload" * 41
+    checksum = base64.b64encode(hashlib.sha256(payload).digest()).decode()
+    client = boto3.client(
+        "s3", endpoint_url="http://localhost:9000",
+        aws_access_key_id=creds.access_key,
+        aws_secret_access_key=creds.secret_key,
+        region_name="us-east-1", config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+        ),
+    )
+    signed_form = client.generate_presigned_post(
+        Bucket="backup-bucket", Key="sdk/form.bin",
+        Fields={"x-amz-checksum-sha256": checksum},
+        Conditions=[
+            {"x-amz-checksum-sha256": checksum},
+            ["content-length-range", 0, 8 * 1024 * 1024],
+        ],
+        ExpiresIn=120,
+    )
+    response = post(service, payload, signed_form["fields"])
+    assert response.status_code == 204, response.text
+    assert service[2].uploads == 1
+    assert signed(service, "GET", "/backup-bucket/sdk/form.bin").content == payload
+
+
+def test_browser_post_cannot_claim_unimplemented_encryption(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    blob = b"unencrypted-payload"
+    fields = make_form(service, blob)
+    response = service[0].post(
+        "/backup-bucket", data=fields,
+        files={"file": ("sensitive.bin", blob)},
+        headers={"x-amz-server-side-encryption": "AES256"},
+    )
+    assert response.status_code == 501
+    assert service[2].uploads == 0
