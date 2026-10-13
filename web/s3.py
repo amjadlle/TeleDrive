@@ -117,7 +117,9 @@ def _reject_unimplemented_write_options(request: Request) -> None:
         )
 
 
-def _verify_upload_sha256(request: Request, digest: bytes) -> None:
+def _verify_upload_sha256(
+    request: Request, digest: bytes, *, md5_digest: bytes | None = None,
+) -> None:
     """Verify actual bytes against checksum committed to the signed request.
 
     Presigned PUTs cannot use an unsigned mutable payload: the required
@@ -129,12 +131,20 @@ def _verify_upload_sha256(request: Request, digest: bytes) -> None:
     presigned = "X-Amz-Algorithm" in request.query_params
     if signed_content == hexdigest:
         return
-    if presigned and signed_checksum and hmac.compare_digest(
-        signed_checksum,
-        base64.b64encode(digest).decode("ascii"),
+    if signed_checksum and hmac.compare_digest(
+        signed_checksum, base64.b64encode(digest).decode("ascii"),
     ):
         return
-    raise SigV4Error("XAmzContentSHA256Mismatch", "Signed SHA-256 body checksum mismatch")
+    if (not presigned and signed_content == "UNSIGNED-PAYLOAD"
+            and md5_digest is not None and request.headers.get("content-md5")):
+        # Header-mode SigV4 has already proven Content-MD5 was signed.
+        signed_names = signed_header_names(request)
+        if "content-md5" in signed_names and hmac.compare_digest(
+            request.headers["content-md5"],
+            base64.b64encode(md5_digest).decode("ascii"),
+        ):
+            return
+    raise SigV4Error("XAmzContentSHA256Mismatch", "Signed upload checksum mismatch")
 
 
 def _initial_tags(request: Request, owner: str, credentials: S3CredentialStore):
@@ -790,7 +800,7 @@ async def _handle(request: Request):
                         output.write(block)
                     output.flush()
                     os.fsync(output.fileno())
-                _verify_upload_sha256(request, sha.digest())
+                _verify_upload_sha256(request, sha.digest(), md5_digest=md5.digest())
                 checksum_crc = request.headers.get("x-amz-checksum-crc32")
                 if checksum_crc and checksum_crc != base64.b64encode(
                     (crc & 0xffffffff).to_bytes(4, "big")
@@ -949,6 +959,7 @@ async def _handle(request: Request):
             fd, name = tempfile.mkstemp(prefix="s3-upload-", dir=root)
             stage = Path(name)
             digest = hashlib.sha256()
+            md5 = hashlib.md5(usedforsecurity=False)
             crc = 0
             length = 0
             try:
@@ -958,11 +969,12 @@ async def _handle(request: Request):
                         if max_bytes < 1 or length > max_bytes:
                             return _error("EntityTooLarge", "Upload exceeds configured maximum", 413)
                         digest.update(block)
+                        md5.update(block)
                         crc = zlib.crc32(block, crc)
                         dest.write(block)
                     dest.flush()
                     os.fsync(dest.fileno())
-                _verify_upload_sha256(request, digest.digest())
+                _verify_upload_sha256(request, digest.digest(), md5_digest=md5.digest())
                 checksum_crc = request.headers.get("x-amz-checksum-crc32")
                 if checksum_crc and checksum_crc != base64.b64encode((crc & 0xffffffff).to_bytes(4, "big")).decode():
                     return _error("BadDigest", "CRC32 checksum mismatch", 400)
