@@ -73,3 +73,36 @@ def test_virtual_host_requires_explicit_suffix_and_no_proxy_header_trust(service
     )
     assert forwarded.status_code == 200
     assert _vhost(service, "GET", "/", host="bad_name.s3.example.test:9000").status_code == 400
+
+
+def test_virtual_host_cors_uses_host_bucket_not_object_key_prefix(service, monkeypatch):
+    from test_s3_cors import config_xml
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/permissive-bucket").status_code == 200
+    assert signed(service, "PUT", "/permissive-bucket?cors", config_xml(
+        origins=["https://app.example.com"], methods=["GET"],
+    )).status_code == 200
+    monkeypatch.setenv("TELEDRIVE_S3_VHOST_SUFFIX", "s3.example.test")
+    client = service[0]
+    # A crafted object key starts with another bucket's name; its permissive
+    # CORS rule must not be applied to the private virtual-host bucket.
+    misleading = client.options("/permissive-bucket/private.bin", headers={
+        "Host": "backup-bucket.s3.example.test:9000",
+        "Origin": "https://app.example.com",
+        "Access-Control-Request-Method": "GET",
+    })
+    assert misleading.status_code == 403
+    legitimate = client.options("/any-object.bin", headers={
+        "Host": "permissive-bucket.s3.example.test:9000",
+        "Origin": "https://app.example.com",
+        "Access-Control-Request-Method": "GET",
+    })
+    assert legitimate.status_code == 200
+    assert legitimate.headers["access-control-allow-origin"] == "https://app.example.com"
+    invalid = client.options("/", headers={
+        "Host": "invalid_name.s3.example.test:9000",
+        "Origin": "https://app.example.com",
+        "Access-Control-Request-Method": "GET",
+    })
+    assert invalid.status_code == 400

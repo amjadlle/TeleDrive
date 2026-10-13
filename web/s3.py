@@ -1394,7 +1394,11 @@ async def _route_encoded_control_keys(request: Request, call_next):
     wants_cors = bool(origin and path != "/__health" and path.startswith("/"))
     if wants_cors:
         logical = unquote((request.scope.get("raw_path") or b"/").decode("ascii").lstrip("/"))
-        bucket = logical.split("/", 1)[0]
+        try:
+            virtual_bucket = _virtual_host_bucket(request)
+        except SigV4Error as exc:
+            return _error(exc.code, exc.message, 400)
+        bucket = virtual_bucket if virtual_bucket is not None else logical.split("/", 1)[0]
         if bucket:
             connection = None
             try:
