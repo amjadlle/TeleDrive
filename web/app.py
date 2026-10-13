@@ -16,6 +16,10 @@ from typing import Any
 import yaml
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.openapi.utils import get_openapi
+from pydantic import BaseModel, Field
+from typing import Literal
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -420,8 +424,20 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="TeleDrive Web UI",
-    version="2.0.0",
+    title="TeleDrive API",
+    version="2.1.0",
+    description=(
+        "Authenticated management API for Telegram upload accounts, queue/history, "
+        "application configuration, execution and Telegram login challenges. "
+        "Use HTTP Basic credentials and set X-TeleDrive-CSRF: 1 for state-changing requests. "
+        "Protect access with HTTPS or a trusted VPN."
+    ),
+    openapi_tags=[
+        {"name": "System", "description": "Service state and health"},
+        {"name": "Configuration", "description": "Settings, Telegram accounts, and database URL"},
+        {"name": "Uploads", "description": "Queue/history and uploader lifecycle"},
+        {"name": "Authentication", "description": "Telegram code and two-factor password handoff"},
+    ],
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -454,30 +470,70 @@ async def security_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
-        "form-action 'self'; object-src 'none'; connect-src 'self'; img-src 'self' data:; "
-        "style-src 'self' 'unsafe-inline'; script-src 'self'"
-    )
+    if request.url.path in {"/docs", "/redoc"}:
+        # FastAPI's official interactive documentation assets are served from the CDN.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+            "object-src 'none'; connect-src 'self'; img-src 'self' data: https://fastapi.tiangolo.com; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+            "form-action 'self'; object-src 'none'; connect-src 'self'; img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self'"
+        )
     if request.url.path == "/" or request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     return response
 
 
+class StartRequest(BaseModel):
+    mode: Literal["run-once", "scan-only", "connect"] = Field(
+        default="run-once", description="Run upload batch, scan only, or connect accounts."
+    )
+
+
+class TelegramAuthRequest(BaseModel):
+    account: str = Field(min_length=1, max_length=64, examples=["primary"])
+    kind: Literal["code", "password"]
+    value: str = Field(min_length=1, max_length=1024, description="Telegram code or 2FA password; never logged.")
+
+
+class OKResponse(BaseModel):
+    ok: bool = True
+
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@app.get("/")
+@app.get("/openapi.json", tags=["System"], include_in_schema=False)
+def openapi_schema(_: None = Depends(require_auth)):
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", tags=["System"], include_in_schema=False)
+def swagger_docs(_: None = Depends(require_auth)):
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="TeleDrive API · Swagger UI")
+
+
+@app.get("/redoc", tags=["System"], include_in_schema=False)
+def redoc_docs(_: None = Depends(require_auth)):
+    return get_redoc_html(openapi_url="/openapi.json", title="TeleDrive API · ReDoc")
+
+
+@app.get("/", include_in_schema=False)
 def index(_: None = Depends(require_auth)):
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/api/config")
+@app.get("/api/config", tags=["Configuration"], summary="Read configuration (secrets redacted)")
 def get_config(_: None = Depends(require_auth)):
     return _redacted_config(read_raw_config())
 
 
-@app.put("/api/config")
+@app.put("/api/config", tags=["Configuration"], response_model=OKResponse, summary="Validate and save configuration")
 def put_config(request: Request, payload: dict[str, Any] = Body(...), _: None = Depends(require_auth)):
     _same_origin(request)
     if current_process is not None and current_process.returncode is None:
@@ -491,7 +547,7 @@ def put_config(request: Request, payload: dict[str, Any] = Body(...), _: None = 
     return {"ok": True}
 
 
-@app.get("/api/dashboard")
+@app.get("/api/dashboard", tags=["System"], summary="Read queue metrics and Telegram account status")
 def dashboard(_: None = Depends(require_auth)):
     cfg = effective_config()
     conn = db_connect()
@@ -534,7 +590,7 @@ def dashboard(_: None = Depends(require_auth)):
     }
 
 
-@app.get("/api/files")
+@app.get("/api/files", tags=["Uploads"], summary="List queued or uploaded files")
 def files_endpoint(
     kind: str = Query("queue", pattern="^(queue|history)$"),
     limit: int = Query(100, ge=1, le=1000),
@@ -547,25 +603,25 @@ def files_endpoint(
         conn.close()
 
 
-@app.post("/api/process/start")
-async def process_start(request: Request, payload: dict[str, Any] = Body(default={}), _: None = Depends(require_auth)):
+@app.post("/api/process/start", tags=["Uploads"], summary="Start uploader process")
+async def process_start(request: Request, payload: StartRequest = Body(default=StartRequest()), _: None = Depends(require_auth)):
     _same_origin(request)
-    return await start_uploader(str(payload.get("mode", "run-once")))
+    return await start_uploader(payload.mode)
 
 
-@app.post("/api/process/stop")
+@app.post("/api/process/stop", tags=["Uploads"], summary="Stop uploader process")
 async def process_stop(request: Request, _: None = Depends(require_auth)):
     _same_origin(request)
     return await stop_uploader()
 
 
-@app.post("/api/auth")
-def submit_auth(request: Request, payload: dict[str, Any] = Body(...), _: None = Depends(require_auth)):
+@app.post("/api/auth", tags=["Authentication"], response_model=OKResponse, summary="Respond to a pending Telegram login prompt")
+def submit_auth(request: Request, payload: TelegramAuthRequest, _: None = Depends(require_auth)):
     global current_prompt
     _same_origin(request)
-    account = str(payload.get("account", "")).strip()
-    kind = str(payload.get("kind", "")).strip().lower()
-    value = str(payload.get("value", "")).strip()
+    account = payload.account.strip()
+    kind = payload.kind
+    value = payload.value.strip()
     if not account or kind not in {"code", "password"} or not value:
         raise HTTPException(400, "account, kind(code/password), and value are required")
     if len(value) > 1024:
@@ -586,7 +642,7 @@ def submit_auth(request: Request, payload: dict[str, Any] = Body(...), _: None =
     return {"ok": True}
 
 
-@app.get("/api/logs")
+@app.get("/api/logs", tags=["System"], summary="Read recent redacted activity logs")
 def logs(limit: int = Query(300, ge=1, le=1500), _: None = Depends(require_auth)):
     cfg = effective_config()
     combined = list(LOG_BUFFER)[-limit:]
@@ -599,6 +655,6 @@ def logs(limit: int = Query(300, ge=1, le=1500), _: None = Depends(require_auth)
     return {"lines": combined, "process": process_snapshot()}
 
 
-@app.get("/api/health")
+@app.get("/api/health", tags=["System"], response_model=OKResponse, summary="Liveness health check (unauthenticated)")
 def health():
     return {"ok": True}
