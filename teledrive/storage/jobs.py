@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .catalog import BucketCatalog
 from .engine import TelegramObjectStorage
+from .manifest import objects
 
 _meta = MetaData()
 jobs = Table(
@@ -158,6 +159,30 @@ class StorageUploadJobs:
         self.db.commit()
         return result.rowcount == 1
 
+    def mark_pending(self, ident: str, token: str, object_id: str, *,
+                     now: int) -> bool:
+        """Record an immutable pending object ID before sending remote bytes."""
+        row = self.db.connection.execute(
+            select(objects.c.bucket, objects.c.object_key, objects.c.status)
+            .where(objects.c.id == object_id)
+        ).one_or_none()
+        if row is None or row[2] != "pending":
+            raise UploadJobError("Only a PENDING manifest can be linked")
+        job = self.db.connection.execute(
+            select(jobs.c.bucket, jobs.c.object_key).where(jobs.c.id == ident)
+        ).one_or_none()
+        if job is None or tuple(job) != (row[0], row[1]):
+            raise UploadJobError("Pending upload job bucket/key mismatch")
+        changed = self.db.connection.execute(
+            update(jobs).where(
+                self._owned(ident, token, now),
+                jobs.c.state == "running",
+                jobs.c.object_id.is_(None),
+            ).values(object_id=object_id, updated_at=now)
+        )
+        self.db.commit()
+        return changed.rowcount == 1
+
     def mark_staged(self, ident: str, token: str, object_id: str, *, now: int) -> bool:
         obj = self.catalog.manifests.get(object_id)
         job = self.db.connection.execute(
@@ -281,7 +306,16 @@ class StorageUploadJobs:
         )
         try:
             object_id = claim["object_id"]
-            if object_id is None:
+            pending_resume = False
+            if object_id is not None:
+                state = self.db.connection.execute(
+                    select(objects.c.status).where(objects.c.id == object_id)
+                ).scalar_one_or_none()
+                if state == "pending":
+                    pending_resume = True
+                elif state != "ready":
+                    raise UploadJobError("Job references unavailable or failed object")
+            if object_id is None or pending_resume:
                 path, stat_info = _source_identity(
                     Path(claim["source_path"]), allowed_root
                 )
@@ -302,7 +336,20 @@ class StorageUploadJobs:
                     self.catalog.manifests, transport,
                     chunk_size=chunk_size, scratch_directory=scratch_directory,
                 )
-                obj = await engine.put_file(claim["bucket"], claim["object_key"], path)
+                if pending_resume:
+                    obj = await engine.resume_file(
+                        claim["bucket"], claim["object_key"], path, object_id,
+                    )
+                else:
+                    def link_pending(new_id):
+                        if not self.mark_pending(
+                            ident, token, new_id, now=int(time.time())
+                        ):
+                            raise UploadJobError("Job lease lost before remote send")
+                    obj = await engine.put_file(
+                        claim["bucket"], claim["object_key"], path,
+                        on_begin=link_pending,
+                    )
                 # Do not publish a fingerprint mismatch even if Telegram has
                 # already accepted chunks; they remain for future safe audit.
                 _, after = _source_identity(path, allowed_root)
