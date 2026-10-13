@@ -18,6 +18,7 @@ import zlib
 from pathlib import Path
 from urllib.parse import unquote
 from xml.etree import ElementTree as ET
+from defusedxml import ElementTree as SafeET
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response, StreamingResponse
@@ -340,7 +341,7 @@ async def _handle(request: Request):
                 if b"<!DOCTYPE" in content.upper() or b"<!ENTITY" in content.upper():
                     raise MultipartError("MalformedXML", "XML entities are not accepted")
                 try:
-                    document = ET.fromstring(content)
+                    document = SafeET.fromstring(content)
                     if document.tag.rsplit("}", 1)[-1] != "CompleteMultipartUpload":
                         raise ValueError("Wrong XML root")
                     selected = []
