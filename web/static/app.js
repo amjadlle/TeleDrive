@@ -165,6 +165,42 @@ async function loadPendingRecovery(){
 }
 $('#refreshPendingRecovery').onclick=loadPendingRecovery;
 
+async function loadObjectVersions(){
+  const bucket=$('#historyVersionBucket').value.trim();
+  const key=$('#historyVersionKey').value;
+  const target=$('#objectVersionsRows');
+  const summary=$('#objectVersionGeneration');
+  if(!bucket||!key){toast('Bucket and key are required',true);return}
+  try{
+    const d=await api('/api/v1/admin/storage/versions?bucket='+
+      encodeURIComponent(bucket)+'&key='+encodeURIComponent(key));
+    summary.textContent='Current generation: '+d.generation;
+    const versions=d.versions||[];
+    target.innerHTML=versions.length?versions.map(v=>
+      '<tr><td><code>'+esc(v.version_id)+'</code>'+(v.is_current?' <span class="pill ready">current</span>':'')+'</td>'
+      +'<td>'+Number(v.size)+'</td><td><code>'+esc(v.sha256)+'</code></td>'
+      +'<td>'+fmtTs(Math.floor(v.committed_ns/1000000000))+'</td>'
+      +'<td><button class="btn compact object-version-restore" data-id="'+esc(v.version_id)+'">Restore</button></td></tr>'
+    ).join(''):'<tr><td colspan="5">No indexed published versions for this key</td></tr>';
+    $('.object-version-restore').forEach(button=>button.onclick=async()=>{
+      if(!confirm('Restore this historical version as a new immutable HEAD? Telegram media is referenced, never reuploaded or deleted.'))return;
+      button.disabled=true;
+      try{
+        const result=await api('/api/v1/admin/storage/versions/'+
+          encodeURIComponent(button.dataset.id)+'/restore',{
+          method:'POST',body:JSON.stringify({
+            bucket,key,expected_generation:d.generation
+          }),
+        });
+        toast('Version restored: '+result.id);
+        await loadObjectVersions();
+      }catch(e){toast(e.message,true)}
+      finally{button.disabled=false}
+    });
+  }catch(e){target.textContent='History unavailable: '+e.message;summary.textContent=''}
+}
+$('#loadObjectVersions').onclick=loadObjectVersions;
+
 async function loadStorageJobs(){
   const target=$('#storageJobsRows');
   try{

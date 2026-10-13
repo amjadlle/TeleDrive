@@ -869,6 +869,30 @@ def _storage_job_root() -> Path:
     return root
 
 
+@app.get("/api/v1/admin/storage/versions", tags=["Storage versions"],
+         summary="Admin listing of published historical versions for restore")
+def admin_list_published_versions(
+    bucket: str = Query(..., min_length=3, max_length=63),
+    key: str = Query(..., min_length=1, max_length=1024),
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: None = Depends(require_auth),
+):
+    conn = db_connect()
+    try:
+        catalog = BucketCatalog(ManifestStore(conn))
+        if bucket not in catalog.list_buckets():
+            raise HTTPException(404, "Bucket not found")
+        try:
+            current = catalog.get(bucket, key)
+            generation = current.generation
+        except FileNotFoundError:
+            generation = 0
+        return {"bucket": bucket, "key": key, "generation": generation,
+                "versions": catalog.list_versions(bucket, key, limit=limit)}
+    finally:
+        conn.close()
+
+
 @app.post("/api/v1/admin/storage/versions/{version_id}/restore",
           tags=["Storage versions"],
           summary="Restore a previously published immutable version without Telegram uploads")

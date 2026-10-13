@@ -161,6 +161,16 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 <div class="scroll section"><table><thead><tr><th>Bucket</th><th>Object key</th><th>Upload ID</th><th>Lease expired</th><th>Action</th></tr></thead><tbody id="s3RecoveryRows"></tbody></table></div>
 </div>
 <div class="card section">
+<h3>Immutable object history and restore</h3>
+<p class="muted">Inspect known published versions of a key and restore an immutable snapshot. A restore creates a new version pointing at the original Telegram chunks; no Telegram payload is copied or deleted. Versions published before the history index was installed might not appear.</p>
+<div class="form-grid section">
+<div><label>Bucket</label><input id="historyVersionBucket" class="input" placeholder="backup-bucket"></div>
+<div><label>Object key</label><input id="historyVersionKey" class="input" placeholder="archives/archive.bin"></div>
+</div>
+<div class="row section"><button class="btn compact" id="loadObjectVersions">Load versions</button><span class="muted" id="objectVersionGeneration"></span></div>
+<div class="scroll section"><table><thead><tr><th>Version ID</th><th>Bytes</th><th>SHA-256</th><th>Published</th><th>Action</th></tr></thead><tbody id="objectVersionsRows"></tbody></table></div>
+</div>
+<div class="card section">
 <h3>Durable Telegram upload jobs</h3>
 <p class="muted">Queue an existing local file under the operator-configured <code>TELEDRIVE_JOB_SOURCE_ROOT</code>. The source remains on disk until uploaded to Telegram. Jobs survive SQL restart, use expiring worker leases and never overwrite a concurrently changed object head. Retrying a failed upload can create new Telegram chunks; historical media remains protected.</p>
 <div class="form-grid section">

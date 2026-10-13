@@ -167,3 +167,7 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
 - Versions before installation of this index are not reliably recoverable
   as *published* from old READY journals alone, so no speculative backfill.
   Full S3 `ListObjectVersions`/delete-marker semantics remain pending.
+
+- Root-admin GET `/api/v1/admin/storage/versions` and WebUI
+  API Management present proven published history, snapshot SHA-256,
+  generation and authenticated/CSRF-protected alias-based restore.
