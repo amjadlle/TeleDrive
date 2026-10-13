@@ -412,12 +412,23 @@ print(s3.get_bucket_tagging(Bucket="backup-bucket")["TagSet"])
 s3.delete_bucket_tagging(Bucket="backup-bucket")
 ~~~
 
-**Limits:** Version-specific `?versionId=` tagging and inline
-`x-amz-tagging` on initial PutObject are not implemented and explicitly
-rejected; first upload the object, then call PutObjectTagging. Bucket GET
-without an existing tag set returns S3 `NoSuchTagSet`, while untagged
-objects return an empty tag set. XML DTD/entities, invalid MD5/SHA-256
-checksums, duplicate keys and exceeding S3 tag limits are rejected.
+**Signed inline tags are supported:** S3 `PutObject` accepts the
+URL-encoded `x-amz-tagging` header only when included in AWS
+`SignedHeaders` and the credential has `s3:PutObjectTagging` permission.
+The tags are attached to the new immutable object in the same SQL
+transaction as publishing its current head; malformed/unauthorized tags
+are rejected **before** any Telegram upload. `CopyObject` also accepts
+`x-amz-tagging-directive: REPLACE`, with an optional signed tagging
+header, without transferring Telegram bytes. COPY of a tagged source
+requires both `s3:GetObjectTagging` and `s3:PutObjectTagging` in
+addition to normal copy permissions. Copy operations with replacement
+tags require `s3:PutObjectTagging`.
+
+**Remaining limits:** Version-specific `?versionId=` tagging is not
+implemented and is explicitly rejected. Bucket GET without a tag set
+returns S3 `NoSuchTagSet`, whereas untagged objects return an empty
+tag set. XML DTD/entities, invalid MD5/SHA-256 checksums, duplicate keys
+and exceeding tag limits are rejected.
 
 **Not yet supported:** virtual-host-style buckets, AWS chunked or
 checksum-unbound PUT bodies, ACL/policy APIs, version listing, lifecycle,
@@ -526,8 +537,8 @@ operation. Use HTTPS or a trusted VPN for any remote admin traffic.
   complete S3 ListObjectVersions / restore APIs.
 - **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT,
   CopyObject, and object/bucket tagging now work. Still pending: presigned
-  multipart POST, inline PutObject tagging, version-ID tagging, advanced S3
-  checksum variants, SSE and user metadata, virtual-host-style requests,
+  multipart POST, version-ID tagging, advanced S3 checksum variants,
+  SSE and user metadata, virtual-host-style requests,
   bucket policies and lifecycle.
 - **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
   Cyberduck), restart during upload/complete, rate limits, account revocation,
