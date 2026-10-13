@@ -451,12 +451,21 @@ async def _handle(request: Request):
         mpu_list = bool(mpu_id and request.method == "GET")
         is_object_attributes = bool(separator and "attributes" in request.query_params)
         is_object_tagging = bool(separator and "tagging" in request.query_params)
+        is_version_tagging = bool(is_object_tagging and "versionId" in request.query_params)
+        if is_version_tagging and (
+            len(request.query_params.getlist("versionId")) != 1
+            or any(name not in {"tagging", "versionId"} and not name.startswith("X-Amz-")
+                   for name in request.query_params)
+        ):
+            return _error("InvalidArgument", "Ambiguous versioned tagging selector", 400)
         is_bucket_tagging = bool(bucket and not separator and "tagging" in request.query_params)
         is_bucket_cors = bool(bucket and not separator and "cors" in request.query_params)
         if (is_object_tagging or is_bucket_tagging) and any(
-            k in request.query_params for k in ("uploads", "uploadId", "versionId")
+            k in request.query_params for k in ("uploads", "uploadId")
         ):
-            return _error("NotImplemented", "Tagging with multipart/version selectors unsupported", 501)
+            return _error("NotImplemented", "Tagging with multipart selectors unsupported", 501)
+        if is_bucket_tagging and "versionId" in request.query_params:
+            return _error("NotImplemented", "Bucket tags cannot select object versions", 501)
         if is_object_attributes:
             if request.method != "GET" or any(
                 p in request.query_params for p in ("uploadId", "uploads", "tagging", "versionId")
@@ -510,7 +519,7 @@ async def _handle(request: Request):
             "encryption", "object-lock", "publicAccessBlock", "versionId",
         }
         if any(parameter in request.query_params and (
-            (parameter != "versionId" or not is_version_read)
+            (parameter != "versionId" or not (is_version_read or is_version_tagging))
             and (parameter != "versions" or not is_version_listing)
         ) for parameter in unsupported):
             return _error("NotImplemented", "This S3 extension is not implemented", 501)
@@ -776,23 +785,52 @@ async def _handle(request: Request):
             return _error("InvalidObjectName", "Object key is empty", 400)
 
         if is_object_tagging:
-            try:
-                target = catalog.get(bucket, key)
-            except FileNotFoundError:
-                return _error("NoSuchKey", "Object does not exist", 404)
+            if is_version_tagging:
+                selected_id = request.query_params.get("versionId", "")
+                if not selected_id or len(selected_id) > 80:
+                    return _error("InvalidArgument", "Invalid object VersionId", 400)
+                proven = db.connection.execute(
+                    select(published_versions.c.object_id).where(
+                        published_versions.c.object_id == selected_id,
+                        published_versions.c.bucket == bucket,
+                        published_versions.c.key_hash == catalog._keyhash(key),
+                    )
+                ).scalar_one_or_none()
+                if proven is None:
+                    return _error("NoSuchVersion", "Object version is not published", 404)
+                try:
+                    version_item = catalog.manifests.get(selected_id)
+                except FileNotFoundError:
+                    return _error("NoSuchVersion", "Object version is not ready", 404)
+                if version_item.bucket != bucket or version_item.key != key:
+                    return _error("NoSuchVersion", "Version ownership mismatch", 404)
+                target_id = selected_id
+            else:
+                try:
+                    target_id = catalog.get(bucket, key).item.id
+                except FileNotFoundError:
+                    return _error("NoSuchKey", "Object does not exist", 404)
             tags = ObjectTagStore(catalog)
             if request.method == "GET":
-                return Response(_tag_xml(tags.get(target.item.id)),
-                                media_type="application/xml", status_code=200)
+                return Response(_tag_xml(tags.get(target_id)),
+                                media_type="application/xml", status_code=200,
+                                headers={"x-amz-version-id": target_id})
             if request.method == "PUT":
-                tags.replace_current(bucket, key, await _tag_request_tags(request))
-                return Response(status_code=200)
+                parsed = await _tag_request_tags(request)
+                if is_version_tagging:
+                    tags.replace_published(bucket, key, target_id, parsed)
+                else:
+                    tags.replace_current(bucket, key, parsed)
+                return Response(status_code=200, headers={"x-amz-version-id": target_id})
             if request.method == "DELETE":
                 async for block in request.stream():
                     if block:
                         raise TaggingError("InvalidRequest", "DeleteObjectTagging must have no body")
-                tags.replace_current(bucket, key, [])
-                return Response(status_code=204)
+                if is_version_tagging:
+                    tags.replace_published(bucket, key, target_id, [])
+                else:
+                    tags.replace_current(bucket, key, [])
+                return Response(status_code=204, headers={"x-amz-version-id": target_id})
             return _error("NotImplemented", "Unsupported object tagging method", 501)
 
         if mpu_start or mpu_part or mpu_complete or mpu_abort or mpu_list:

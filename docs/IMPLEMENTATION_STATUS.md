@@ -254,3 +254,11 @@ verification and explicit retention approvals are implemented.
 - This is a **limited subset**: delete markers, S3 versioning controls,
   version deletion, delimiter and alternate encoding remain unsupported.
   Unlinked published objects remain safely discoverable and physically intact.
+
+## P1.3 S3 VersionId tagging
+
+- S3 GET/PUT/DELETE `?tagging&versionId=<published-id>` is scoped to
+  the exact bucket/key and a proof-of-publication record. Historical
+  tags never alter current-version tags; physical Telegram bytes remain
+  immutable. Unknown/staged version IDs return NoSuchVersion. Permission
+  and revocation checks use the existing independent tagging scopes.

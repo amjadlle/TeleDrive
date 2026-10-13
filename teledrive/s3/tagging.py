@@ -14,8 +14,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 
-from teledrive.storage.catalog import BucketCatalog, heads, catalog_metadata
-from teledrive.storage.manifest import metadata as _meta
+from teledrive.storage.catalog import BucketCatalog, heads, published_versions, catalog_metadata
+from teledrive.storage.manifest import metadata as _meta, objects
 object_tags = Table(
     "storage_object_tags", _meta,
     Column("object_id", String(36), ForeignKey("storage_objects.id"), primary_key=True),
@@ -100,6 +100,50 @@ class ObjectTagStore:
                 ))
             self.db.commit()
             return current.item.id
+        except BaseException:
+            self.db.connection.rollback()
+            raise
+
+    def replace_published(self, bucket: str, key: str, identifier: str,
+                          tags: list[tuple[str, str]]) -> None:
+        """Mutate tags on only a proven published immutable version.
+
+        Unknown/unpublished READY staging is never writable through VersionId.
+        SQL row lock fences concurrent physical metadata modifications while
+        the actual Telegram payload remains immutable.
+        """
+        tags = validate_tags(tags)
+        try:
+            row = self.db.connection.execute(
+                select(objects.c.id)
+                .select_from(published_versions.join(
+                    objects, published_versions.c.object_id == objects.c.id
+                )).where(
+                    published_versions.c.object_id == identifier,
+                    published_versions.c.bucket == bucket,
+                    published_versions.c.key_hash == self.catalog._keyhash(key),
+                    objects.c.bucket == bucket,
+                    objects.c.object_key == key,
+                    objects.c.status == "ready",
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise TaggingError("NoSuchVersion", "Object version not published", 404)
+            locked = self.db.connection.execute(
+                update(objects).where(
+                    objects.c.id == identifier, objects.c.status == "ready",
+                ).values(updated_at=objects.c.updated_at)
+            )
+            if locked.rowcount != 1:
+                raise TaggingError("NoSuchVersion", "Object version not readable", 404)
+            self.db.connection.execute(
+                delete(object_tags).where(object_tags.c.object_id == identifier)
+            )
+            for tag_key, tag_value in tags:
+                self.db.connection.execute(insert(object_tags).values(
+                    object_id=identifier, tag_key=tag_key, tag_value=tag_value,
+                ))
+            self.db.commit()
         except BaseException:
             self.db.connection.rollback()
             raise
