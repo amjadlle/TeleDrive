@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 from teledrive.storage.catalog import (
-    BucketCatalog, heads, catalog_metadata,
+    BucketCatalog, heads, removed_versions, catalog_metadata,
 )
 from teledrive.storage.manifest import metadata as _meta, objects
 object_tags = Table(
@@ -127,7 +127,14 @@ class ObjectTagStore:
                     objects.c.status == "ready",
                 ).values(updated_at=objects.c.updated_at)
             )
-            if locked.rowcount != 1 or not self.catalog.is_visible_version(
+            if locked.rowcount != 1:
+                raise TaggingError("NoSuchVersion", "Object version unavailable", 404)
+            revoked = self.db.connection.execute(
+                select(removed_versions.c.object_id).where(
+                    removed_versions.c.object_id == identifier
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if revoked is not None or not self.catalog.is_visible_version(
                 bucket, key, identifier
             ):
                 raise TaggingError("NoSuchVersion", "Object version revoked or unpublished", 404)

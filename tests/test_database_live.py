@@ -882,3 +882,51 @@ def test_four_workers_compete_to_revoke_one_published_version(env_name):
         assert denied.value.code == "NoSuchVersion"
     finally:
         verification.close()
+
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_version_revocation_bypasses_stale_repeatable_read_snapshots(env_name):
+    """Live SQL credentials/read transactions must not resurrect revoked IDs."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    import hashlib
+    from uuid import uuid4
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
+    from teledrive.s3.tagging import ObjectTagStore, TaggingError
+
+    bucket = "ci-" + uuid4().hex[:19]
+    key = "snapshots/old-version.bin"
+    seed = connect_database(url)
+    first_reader = connect_database(url)
+    second_reader = connect_database(url)
+    try:
+        catalog = BucketCatalog(ManifestStore(seed))
+        catalog.create_bucket(bucket, int(time.time()))
+        identifier = catalog.manifests.begin(bucket, key, 0, int(time.time()))
+        catalog.manifests.finish(identifier, hashlib.sha256(b"").hexdigest(),
+                                 int(time.time()))
+        catalog.publish(identifier, now=int(time.time()))
+        reader1 = BucketCatalog(ManifestStore(first_reader))
+        reader2 = BucketCatalog(ManifestStore(second_reader))
+        # Both independent sessions establish a snapshot *before* revocation.
+        assert reader1.is_visible_version(bucket, key, identifier)
+        assert reader2.is_visible_version(bucket, key, identifier)
+        assert catalog.delete_version(bucket, key, identifier)
+        # Locking reads override old repeatable-read visibility; duplicate
+        # DELETE resolves to False rather than raising an IntegrityError.
+        assert reader1.delete_version(bucket, key, identifier) is False
+        tagger = ObjectTagStore(reader2)
+        with pytest.raises(TaggingError) as refused:
+            tagger.replace_published(bucket, key, identifier, [("backdoor", "no")])
+        assert refused.value.code == "NoSuchVersion"
+        first_reader.commit()
+        second_reader.commit()
+        assert not reader1.is_visible_version(bucket, key, identifier)
+        assert not reader2.is_visible_version(bucket, key, identifier)
+    finally:
+        seed.close()
+        first_reader.close()
+        second_reader.close()

@@ -207,7 +207,19 @@ class BucketCatalog:
                     objects.c.status.in_(("ready", "delete-marker")),
                 ).values(updated_at=objects.c.updated_at)
             )
-            if lock.rowcount != 1 or not self.is_visible_version(
+            if lock.rowcount != 1:
+                self.db.connection.rollback()
+                return False
+            # A plain SELECT can read an obsolete REPEATABLE READ snapshot on
+            # MySQL, established earlier by the S3 credential lookup. This
+            # locking current-read observes another session's committed
+            # revocation even if our original snapshot predates it.
+            revoked = self.db.connection.execute(
+                select(removed_versions.c.object_id).where(
+                    removed_versions.c.object_id == version_id,
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if revoked is not None or not self.is_visible_version(
                 bucket, key, version_id
             ):
                 self.db.connection.rollback()
@@ -252,6 +264,13 @@ class BucketCatalog:
                     raise ValueError("Version HEAD changed concurrently")
             self.db.commit()
             return True
+        except IntegrityError:
+            # An idempotent duplicate DELETE is not a server error. Keep the
+            # fail-closed behavior if a different constraint is violated.
+            self.db.connection.rollback()
+            if not self.is_visible_version(bucket, key, version_id):
+                return False
+            raise
         except BaseException:
             self.db.connection.rollback()
             raise
