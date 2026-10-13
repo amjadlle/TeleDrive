@@ -162,3 +162,54 @@ def test_real_rclone_sync_and_integrity(live_s3, tmp_path, service):
     cli("deletefile", "td:rclone-test/deep/path/one.bin")
     assert cli("lsf", "td:rclone-test/deep/path", "--files-only").strip() == ""
     assert transport.uploads >= 2 and transport.downloads >= 2
+
+
+def test_real_aws_cli_high_level_sync_round_trip_and_delete(live_s3, tmp_path):
+    """Exercise aws s3 sync directory semantics, not just s3api single-object calls."""
+    aws = _client("aws")
+    endpoint, issued, remote = live_s3
+    env = dict(os.environ)
+    env.update({
+        "AWS_ACCESS_KEY_ID": issued.access_key,
+        "AWS_SECRET_ACCESS_KEY": issued.secret_key,
+        "AWS_DEFAULT_REGION": "us-east-1",
+        "AWS_EC2_METADATA_DISABLED": "true",
+        "AWS_MAX_ATTEMPTS": "1",
+        "AWS_PAGER": "",
+        "AWS_CONFIG_FILE": str(tmp_path / "aws-config"),
+    })
+    (tmp_path / "aws-config").write_text(
+        "[default]\ns3 =\n    addressing_style = path\n"
+        "    payload_signing_enabled = true\n", encoding="utf-8",
+    )
+
+    def cli(*args):
+        return _run([aws, "--endpoint-url", endpoint, *args], env=env)
+
+    cli("s3api", "create-bucket", "--bucket", "aws-sync-test")
+    original = tmp_path / "original"
+    original.mkdir()
+    (original / "sub").mkdir()
+    first = b"hello" + bytes(range(256)) * 37
+    second = b"world" + b"\x00\xff" * 500
+    (original / "sub" / "one.bin").write_bytes(first)
+    (original / "two.bin").write_bytes(second)
+    cli("s3", "sync", str(original), "s3://aws-sync-test/archive/",
+        "--size-only")
+    downloaded = tmp_path / "downloaded"
+    cli("s3", "sync", "s3://aws-sync-test/archive/", str(downloaded),
+        "--size-only")
+    assert (downloaded / "sub" / "one.bin").read_bytes() == first
+    assert (downloaded / "two.bin").read_bytes() == second
+
+    changed = b"changed" * 1200
+    (original / "sub" / "one.bin").write_bytes(changed)
+    (original / "two.bin").unlink()
+    cli("s3", "sync", str(original), "s3://aws-sync-test/archive/",
+        "--size-only", "--delete")
+    dest2 = tmp_path / "downloaded2"
+    cli("s3", "sync", "s3://aws-sync-test/archive/", str(dest2),
+        "--size-only")
+    assert (dest2 / "sub" / "one.bin").read_bytes() == changed
+    assert not (dest2 / "two.bin").exists()
+    assert remote.uploads >= 3 and remote.downloads >= 3
