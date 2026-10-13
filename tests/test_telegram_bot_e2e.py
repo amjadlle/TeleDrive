@@ -986,103 +986,126 @@ def test_live_bot_five_durable_jobs_three_sql_workers_different_sizes():
                 async def download_file(self, remote_path, destination):
                     await api.download_file(remote_path, destination)
 
-            connections = []
-            results = []
-            cleanup = None
             try:
-                for _ in range(3):
-                    connection = connect_database(str(dbpath))
-                    connections.append(connection)
-                    # Schema initialization completes before workers race.
-                    StorageUploadJobs(BucketCatalog(ManifestStore(connection)))
-                    connection.commit()
-                transport_api = SerializedTelegram()
-                await BotApiChunkTransport(
-                    transport_api, BotFileIndex(connections[0]),
-                    chat_id=int(chat), account="bot-ci-3workers",
-                ).verify_target()
-
-                async def worker(connection):
-                    queue = StorageUploadJobs(BucketCatalog(ManifestStore(connection)))
-                    transport = BotApiChunkTransport(
-                        transport_api, BotFileIndex(connection),
-                        chat_id=int(chat), account="bot-ci-3workers",
-                        min_upload_interval=0,
-                    )
-                    owned = []
-                    for _ in range(8):
-                        result = await queue.run_next(
-                            transport, allowed_root=root,
-                            scratch_directory=root, chunk_size=65536,
-                        )
-                        if result is None:
-                            break
-                        owned.append(result)
-                    return owned
-
-                produced = await asyncio.gather(
-                    *(worker(connection) for connection in connections)
-                )
-                results = [item for worker_rows in produced for item in worker_rows]
-                assert len(results) == len(payloads), results
-                assert len({item["id"] for item in results}) == len(payloads)
-                assert all(item["state"] == "done" for item in results)
-                assert len(posted) == 7 and len(set(posted)) == 7
-            finally:
-                for connection in connections:
-                    connection.close()
-
-            cleanup = connect_database(str(dbpath))
-            try:
-                catalog = BucketCatalog(ManifestStore(cleanup))
-                queue = StorageUploadJobs(catalog)
-                jobs = queue.list_jobs(limit=100)
-                assert len(jobs) == 5
-                assert all(job["state"] == "done" and job["attempts"] == 1
-                           for job in jobs)
-                transport = BotApiChunkTransport(
-                    api, BotFileIndex(cleanup), chat_id=int(chat),
-                    account="bot-ci-3workers",
-                )
-                engine = TelegramObjectStorage(
-                    catalog.manifests, transport, chunk_size=65536,
-                    scratch_directory=root,
-                )
-                for key, expected in payloads.items():
-                    obj = catalog.get("ci-real-workers", key).item
-                    assert obj.sha256 == hashlib.sha256(expected).hexdigest()
-                    (root / key.replace("/", "-")).unlink()
-                    restored = root / ("restored-" + str(len(expected)) + ".bin")
-                    await engine.download_to_path(obj.id, restored)
-                    assert restored.read_bytes() == expected
-                    for start, stop in (
-                        (0, min(13, len(expected))),
-                        (max(0, len(expected)-7), len(expected)),
-                        (len(expected), len(expected)),
-                    ):
-                        window = b"".join([block async for block in engine.iter_bytes(
-                            obj.id, start=start, end=stop, block_size=7,
-                        )])
-                        assert window == expected[start:stop]
-            finally:
-                # The independent receipt index, not test-local filenames or
-                # guessed Telegram history, strictly scopes physical deletion.
+                connections = []
+                results = []
+                cleanup = None
                 try:
-                    if cleanup is not None:
+                    for _ in range(3):
+                        connection = connect_database(str(dbpath))
+                        connections.append(connection)
+                        # Schema initialization completes before workers race.
+                        StorageUploadJobs(BucketCatalog(ManifestStore(connection)))
+                        connection.commit()
+                    transport_api = SerializedTelegram()
+                    await BotApiChunkTransport(
+                        transport_api, BotFileIndex(connections[0]),
+                        chat_id=int(chat), account="bot-ci-3workers",
+                    ).verify_target()
+
+                    async def worker(connection):
+                        queue = StorageUploadJobs(BucketCatalog(ManifestStore(connection)))
                         transport = BotApiChunkTransport(
-                            api, BotFileIndex(cleanup), chat_id=int(chat),
-                            account="bot-ci-3workers",
+                            transport_api, BotFileIndex(connection),
+                            chat_id=int(chat), account="bot-ci-3workers",
+                            min_upload_interval=0,
                         )
-                        for account, peer, message in cleanup.connection.execute(select(
-                            _bot_files.c.account, _bot_files.c.chat_id,
-                            _bot_files.c.message_id,
-                        )).all():
-                            await transport.delete(SimpleNamespace(
-                                account=account, chat_id=int(peer),
-                                message_id=int(message),
-                            ))
+                        owned = []
+                        for _ in range(8):
+                            result = await queue.run_next(
+                                transport, allowed_root=root,
+                                scratch_directory=root, chunk_size=65536,
+                            )
+                            if result is None:
+                                break
+                            owned.append(result)
+                        return owned
+
+                    produced = await asyncio.gather(
+                        *(worker(connection) for connection in connections)
+                    )
+                    results = [item for worker_rows in produced for item in worker_rows]
+                    assert len(results) == len(payloads), results
+                    assert len({item["id"] for item in results}) == len(payloads)
+                    assert all(item["state"] == "done" for item in results)
+                    assert len(posted) == 7 and len(set(posted)) == 7
                 finally:
-                    if cleanup is not None:
-                        cleanup.close()
+                    for connection in connections:
+                        connection.close()
+
+                cleanup = connect_database(str(dbpath))
+                try:
+                    catalog = BucketCatalog(ManifestStore(cleanup))
+                    queue = StorageUploadJobs(catalog)
+                    jobs = queue.list_jobs(limit=100)
+                    assert len(jobs) == 5
+                    assert all(job["state"] == "done" and job["attempts"] == 1
+                               for job in jobs)
+                    transport = BotApiChunkTransport(
+                        api, BotFileIndex(cleanup), chat_id=int(chat),
+                        account="bot-ci-3workers",
+                    )
+                    engine = TelegramObjectStorage(
+                        catalog.manifests, transport, chunk_size=65536,
+                        scratch_directory=root,
+                    )
+                    for key, expected in payloads.items():
+                        obj = catalog.get("ci-real-workers", key).item
+                        assert obj.sha256 == hashlib.sha256(expected).hexdigest()
+                        (root / key.replace("/", "-")).unlink()
+                        restored = root / ("restored-" + str(len(expected)) + ".bin")
+                        await engine.download_to_path(obj.id, restored)
+                        assert restored.read_bytes() == expected
+                        for start, stop in (
+                            (0, min(13, len(expected))),
+                            (max(0, len(expected)-7), len(expected)),
+                            (len(expected), len(expected)),
+                        ):
+                            window = b"".join([block async for block in engine.iter_bytes(
+                                obj.id, start=start, end=stop, block_size=7,
+                            )])
+                            assert window == expected[start:stop]
+                finally:
+                    # The independent receipt index, not test-local filenames or
+                    # guessed Telegram history, strictly scopes physical deletion.
+                    try:
+                        if cleanup is not None:
+                            transport = BotApiChunkTransport(
+                                api, BotFileIndex(cleanup), chat_id=int(chat),
+                                account="bot-ci-3workers",
+                            )
+                            for account, peer, message in cleanup.connection.execute(select(
+                                _bot_files.c.account, _bot_files.c.chat_id,
+                                _bot_files.c.message_id,
+                            )).all():
+                                await transport.delete(SimpleNamespace(
+                                    account=account, chat_id=int(peer),
+                                    message_id=int(message),
+                                ))
+                    finally:
+                        if cleanup is not None:
+                            cleanup.close()
+
+            finally:
+                # Always retry test-owned cleanup, including a worker error
+                # before result verification. No Telegram history scan or
+                # broad channel deletion is ever performed.
+                emergency_db = connect_database(str(dbpath))
+                try:
+                    emergency_transport = BotApiChunkTransport(
+                        api, BotFileIndex(emergency_db), chat_id=int(chat),
+                        account="bot-ci-3workers",
+                    )
+                    pending_ids = emergency_db.connection.execute(select(
+                        _bot_files.c.account, _bot_files.c.chat_id,
+                        _bot_files.c.message_id,
+                    )).all()
+                    for account, peer, message in pending_ids:
+                        await emergency_transport.delete(SimpleNamespace(
+                            account=account, chat_id=int(peer),
+                            message_id=int(message),
+                        ))
+                finally:
+                    emergency_db.close()
 
     asyncio.run(scenario())
