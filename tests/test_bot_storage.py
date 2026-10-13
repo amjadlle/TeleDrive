@@ -304,3 +304,118 @@ def test_bot_download_does_not_delete_preexisting_destination(tmp_path, monkeypa
     with pytest.raises(BotApiError, match="download failed"):
         api._download_sync("documents/file.bin", destination)
     assert destination.read_bytes() == b"important original"
+
+
+def _uncommitted_bot_ack(tmp_path, *, payload=None, copies=1):
+    """A crash after BotFileIndex ACK, before ManifestStore.append()."""
+    import time
+    from sqlalchemy import update
+    from teledrive.storage.manifest import writer_fences
+    database_path = str(tmp_path / "ack.sqlite")
+    db = connect_database(database_path)
+    api = FakeBotApi()
+    transport = BotApiChunkTransport(
+        api, BotFileIndex(db), chat_id=api.chat_id,
+        min_upload_interval=0,
+    )
+    manifests = ManifestStore(db)
+    content = payload if payload is not None else b"receipt-resume-" * 185
+    source = tmp_path / "source.bin"
+    source.write_bytes(content)
+    object_id = manifests.begin("bot-ci", "recovered.bin", len(content), int(time.time()))
+    manifests.start_writer(object_id, "original-writer", int(time.time()), ttl=120)
+    chunk = tmp_path / "first-chunk.bin"
+    chunk.write_bytes(content[:2048])
+    for _ in range(copies):
+        run(transport.upload(chunk, object_id=object_id, ordinal=0,
+                             checksum=hashlib.sha256(content[:2048]).hexdigest()))
+    assert manifests.recovery_parts(object_id) == []
+    db.connection.execute(update(writer_fences).where(
+        writer_fences.c.object_id == object_id
+    ).values(lease_until=0))
+    db.commit()
+    db.close()
+    return database_path, api, source, object_id
+
+
+def test_bot_ack_receipt_survives_sql_restart_and_reuses_telegram_bytes(tmp_path):
+    import time
+    path, api, source, object_id = _uncommitted_bot_ack(tmp_path)
+    uploads_before = api.counter
+    reopened = connect_database(path)
+    try:
+        transport = BotApiChunkTransport(
+            api, BotFileIndex(reopened), chat_id=api.chat_id,
+            min_upload_interval=0,
+        )
+        manifest = ManifestStore(reopened)
+        restored = run(TelegramObjectStorage(
+            manifest, transport, chunk_size=2048,
+        ).resume_file("bot-ci", "recovered.bin", source, object_id))
+        # First Telegram chunk had ACK but no chunk journal. Only the tail
+        # is sent after verifying the existing Telegram payload against source.
+        assert api.counter == uploads_before + 1
+        assert restored.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
+        assert [p.ordinal for p in manifest.parts(object_id)] == [0, 1]
+        assert manifest.parts(object_id)[0].message_id == 1
+        assert restored.id == object_id
+    finally:
+        reopened.close()
+
+
+def test_bot_ack_recovery_rejects_corrupt_remote_data_before_reupload(tmp_path):
+    from teledrive.storage.engine import IntegrityError
+    path, api, source, object_id = _uncommitted_bot_ack(tmp_path)
+    api.documents["bot-file-1"] = b"corrupt"
+    reopened = connect_database(path)
+    try:
+        engine = TelegramObjectStorage(
+            ManifestStore(reopened),
+            BotApiChunkTransport(api, BotFileIndex(reopened),
+                                 chat_id=api.chat_id, min_upload_interval=0),
+            chunk_size=2048,
+        )
+        with pytest.raises(IntegrityError, match="Recovered ACK bytes"):
+            run(engine.resume_file("bot-ci", "recovered.bin", source, object_id))
+        assert api.counter == 1
+        assert engine.manifests.recovery_parts(object_id) == []
+    finally:
+        reopened.close()
+
+
+def test_bot_ack_recovery_refuses_ambiguous_duplicate_receipts(tmp_path):
+    path, api, source, object_id = _uncommitted_bot_ack(tmp_path, copies=2)
+    reopened = connect_database(path)
+    try:
+        transport = BotApiChunkTransport(
+            api, BotFileIndex(reopened), chat_id=api.chat_id,
+            min_upload_interval=0,
+        )
+        with pytest.raises(BotApiError, match="Ambiguous"):
+            run(TelegramObjectStorage(
+                ManifestStore(reopened), transport, chunk_size=2048,
+            ).resume_file("bot-ci", "recovered.bin", source, object_id))
+        assert api.counter == 2
+        assert ManifestStore(reopened).recovery_parts(object_id) == []
+    finally:
+        reopened.close()
+
+
+def test_bot_ack_receipt_rejects_foreign_checksum_and_bad_source(tmp_path):
+    path, api, source, object_id = _uncommitted_bot_ack(tmp_path)
+    reopened = connect_database(path)
+    try:
+        index = BotFileIndex(reopened)
+        with pytest.raises(BotApiError, match="does not match"):
+            index.find_receipt(
+                object_id, 0, account="another", chat_id=api.chat_id,
+                checksum=hashlib.sha256(source.read_bytes()[:2048]).hexdigest(),
+                size=2048,
+            )
+        with pytest.raises(BotApiError, match="does not match"):
+            index.find_receipt(
+                object_id, 0, account="bot", chat_id=api.chat_id,
+                checksum="0" * 64, size=2048,
+            )
+    finally:
+        reopened.close()

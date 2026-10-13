@@ -168,8 +168,10 @@ class TelegramObjectStorage:
 
         All saved Telegram messages and the corresponding source ranges are
         independently read/verified before uploading any missing tail bytes.
-        A partial remote ACK absent from SQL may be retransmitted and leaves
-        an orphan for the separately approved collector. No deletion occurs.
+        A Bot API ACK committed to its SQL receipt index (but not to the
+        chunk journal) can be recovered after independent byte-for-byte
+        verification. Unknown ACKs still require manual reconciliation.
+        No Telegram message is ever deleted by resume.
         """
         source = Path(source)
         with _regular_source(source) as handle:
@@ -229,10 +231,33 @@ class TelegramObjectStorage:
                         with part.open("xb") as output:
                             output.write(data)
                         part.chmod(0o600)
-                        account, chat_id, message_id = await self.transport.upload(
-                            part, object_id=identifier, ordinal=ordinal,
-                            checksum=checksum,
+                        find_receipt = getattr(self.transport, "recover_receipt", None)
+                        receipt = (
+                            find_receipt(identifier, ordinal, checksum, len(data))
+                            if callable(find_receipt) else None
                         )
+                        if receipt is not None:
+                            # SQL ACK receipt is NOT proof of Telegram content.
+                            # Reject missing/changed/foreign data instead of
+                            # silently retransmitting or adopting wrong bytes.
+                            if (receipt.ordinal != ordinal or receipt.size != len(data)
+                                    or receipt.sha256 != checksum):
+                                raise IntegrityError("Recovered ACK chunk metadata mismatch")
+                            recovered = root / f"receipt-{ordinal:08d}"
+                            await self.transport.download(receipt, recovered)
+                            if (not recovered.is_file() or recovered.is_symlink()
+                                    or recovered.stat().st_size != len(data)
+                                    or recovered.read_bytes() != data):
+                                raise IntegrityError("Recovered ACK bytes differ from source")
+                            recovered.unlink()
+                            account, chat_id, message_id = (
+                                receipt.account, receipt.chat_id, receipt.message_id
+                            )
+                        else:
+                            account, chat_id, message_id = await self.transport.upload(
+                                part, object_id=identifier, ordinal=ordinal,
+                                checksum=checksum,
+                            )
                         if lost.is_set() or not self.manifests.heartbeat_writer(
                             identifier, token, int(time.time()), self.writer_ttl_seconds
                         ):

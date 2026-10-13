@@ -230,10 +230,10 @@ verification and explicit retention approvals are implemented.
   candidate planner and explicit current-HEAD migration preview.
 
 ### Still open — do not claim these are implemented
-- **P1 remaining:** Telegram ACK-without-journal reconciliation for Bot
-  API, legacy folder uploader merge, multi-worker soak, S3 delete markers,
-  generic presigned multipart forms, migration and
-  real Telegram restoration exercises.
+- **P1 remaining:** Bot API ACK-without-receipt loss (not discoverable via
+  Bot API), legacy folder uploader merge, multi-worker soak, S3 delete markers,
+  generic browser presigned POST, migration and
+  real Telegram restoration exercises. Receipt-persisted ACKs now reconcile.
 - **P2 remaining:** audited retention-approved physical GC, S3 SSE/policy/
   lifecycle semantics, DNS/TLS and external virtual-host/Cyberduck acceptance,
   Telegram rebuild, live full DR/fault/rate-limit benchmarks and installers.
@@ -407,3 +407,23 @@ verification and explicit retention approvals are implemented.
 - All CRC64NVME declarations use one verified checksum helper: small
   XML/tagging/CORS writes also compare actual bytes, rather than ever
   acknowledging a digest that only PUT/UploadPart checks.
+
+
+## P1.1 Bot API ACK receipt reconciliation (durable subset)
+
+- After a successful Telegram Bot API `sendDocument` ACK, the BotFileIndex
+  atomically commits a file ID and a new keyed receipt recording object ID,
+  ordinal, expected size and full SHA-256. This receipt is separate from
+  the immutable chunk journal, closing the recoverable window where the
+  receipt was committed but `ManifestStore.append` was not.
+- A worker reclaiming an expired PENDING writer consults receipts only for
+  the next missing chunk; it independently downloads bytes from Telegram,
+  checks exact source byte equality, then journals the proven message under
+  its fresh writer fencing token. Ambiguous, foreign, missing or changed
+  receipts fail closed. No automatic Telegram deletion or speculative HEAD
+  publication occurs.
+- **Limit:** A successful Telegram send whose response or SQL receipt commit
+  was itself lost cannot be rediscovered from Bot API channel history; that
+  interval still requires external owner-authorized Telegram reconciliation.
+- Cross-SQL-restart resume, no duplicate-send, corrupt receipt, ambiguous
+  duplicate and foreign-account negative cases run in Storage API CI.

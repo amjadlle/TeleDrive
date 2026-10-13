@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import BigInteger, Column, MetaData, String, Table, insert, select, delete
+from sqlalchemy import BigInteger, Column, Integer, Index, MetaData, String, Table, insert, select, delete
 
 from .manifest import ChunkReference
 
@@ -36,6 +36,22 @@ _bot_files = Table(
     Column("message_id", BigInteger, primary_key=True),
     Column("file_id", String(1024), nullable=False),
 )
+# Successfully acknowledged messages are indexed *before* the engine
+# journals a chunk. This closes the recoverable ACK->manifest SQL crash
+# window when the upload receipt commit itself succeeded. It cannot recover
+# a response lost before this SQL commit (Bot API has no message history).
+_bot_receipts = Table(
+    "storage_bot_upload_receipts", _bot_metadata,
+    Column("account", String(255), primary_key=True),
+    Column("chat_id", BigInteger, primary_key=True),
+    Column("message_id", BigInteger, primary_key=True),
+    Column("object_id", String(36), nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("size", BigInteger, nullable=False),
+)
+Index("ix_storage_bot_upload_receipts_object",
+      _bot_receipts.c.object_id, _bot_receipts.c.ordinal)
 
 
 class BotApiError(RuntimeError):
@@ -55,6 +71,60 @@ class BotFileIndex:
         ))
         self.db.commit()
 
+    def put_receipt(self, account: str, chat_id: int, message_id: int,
+                    file_id: str, *, object_id: str, ordinal: int,
+                    checksum: str, size: int) -> None:
+        """Commit the file ID and upload receipt atomically after Telegram ACK."""
+        if (not object_id or len(object_id) > 36 or ordinal < 0 or size <= 0
+                or len(checksum) != 64
+                or any(c not in "0123456789abcdef" for c in checksum)):
+            raise ValueError("Invalid Bot upload receipt")
+        try:
+            with self.db.connection.begin_nested():
+                self.db.connection.execute(insert(_bot_files).values(
+                    account=account, chat_id=chat_id,
+                    message_id=message_id, file_id=file_id,
+                ))
+                self.db.connection.execute(insert(_bot_receipts).values(
+                    account=account, chat_id=chat_id, message_id=message_id,
+                    object_id=object_id, ordinal=ordinal,
+                    sha256=checksum, size=size,
+                ))
+            self.db.commit()
+        except BaseException:
+            self.db.connection.rollback()
+            raise
+
+    def find_receipt(self, object_id: str, ordinal: int, *,
+                     account: str, chat_id: int, checksum: str,
+                     size: int) -> ChunkReference | None:
+        """Return only one exact known ACK, never guess between duplicates.
+
+        The caller MUST read back and compare Telegram bytes against its
+        immutable source before using the receipt as a chunk journal entry.
+        """
+        rows = self.db.connection.execute(
+            select(_bot_receipts).where(
+                _bot_receipts.c.object_id == object_id,
+                _bot_receipts.c.ordinal == ordinal,
+            ).limit(2)
+        ).mappings().all()
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise BotApiError("Ambiguous Bot API upload receipts; manual reconciliation required")
+        receipt = rows[0]
+        if (receipt["account"] != account or int(receipt["chat_id"]) != chat_id
+                or receipt["sha256"] != checksum or int(receipt["size"]) != size):
+            raise BotApiError("Bot API upload receipt does not match source chunk")
+        # A deleted/unindexed file ID is never a recovery candidate.
+        self.get(account, chat_id, int(receipt["message_id"]))
+        return ChunkReference(
+            ordinal=ordinal, offset=0, size=size, sha256=checksum,
+            account=account, chat_id=chat_id,
+            message_id=int(receipt["message_id"]),
+        )
+
     def get(self, account: str, chat_id: int, message_id: int) -> str:
         result = self.db.connection.execute(select(_bot_files.c.file_id).where(
             _bot_files.c.account == account,
@@ -66,12 +136,24 @@ class BotFileIndex:
         return result
 
     def forget(self, account: str, chat_id: int, message_id: int) -> None:
-        self.db.connection.execute(delete(_bot_files).where(
+        conditions = (
             _bot_files.c.account == account,
             _bot_files.c.chat_id == chat_id,
             _bot_files.c.message_id == message_id,
-        ))
-        self.db.commit()
+        )
+        receipt_conditions = (
+            _bot_receipts.c.account == account,
+            _bot_receipts.c.chat_id == chat_id,
+            _bot_receipts.c.message_id == message_id,
+        )
+        try:
+            with self.db.connection.begin_nested():
+                self.db.connection.execute(delete(_bot_receipts).where(*receipt_conditions))
+                self.db.connection.execute(delete(_bot_files).where(*conditions))
+            self.db.commit()
+        except BaseException:
+            self.db.connection.rollback()
+            raise
 
 
 class _TelegramHTTPSRedirects(urllib.request.HTTPRedirectHandler):
@@ -246,8 +328,20 @@ class BotApiChunkTransport:
             raise BotApiError("Bot API did not return a document ID") from None
         if chat != self.chat_id or mid <= 0 or not fid:
             raise BotApiError("Bot API returned an unexpected upload target or file ID")
-        self.index.put(self.account, chat, mid, fid)
+        self.index.put_receipt(
+            self.account, chat, mid, fid,
+            object_id=object_id, ordinal=ordinal, checksum=checksum,
+            size=path.stat().st_size,
+        )
         return self.account, chat, mid
+
+    def recover_receipt(self, object_id: str, ordinal: int,
+                        checksum: str, size: int) -> ChunkReference | None:
+        """Candidate only: resume_file independently verifies its Telegram bytes."""
+        return self.index.find_receipt(
+            object_id, ordinal, account=self.account, chat_id=self.chat_id,
+            checksum=checksum, size=size,
+        )
 
     async def download(self, reference: ChunkReference, destination: Path) -> None:
         if reference.account != self.account or reference.chat_id != self.chat_id:
