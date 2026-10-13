@@ -153,6 +153,8 @@ def seed(url: str, receipt_path: Path, source: Path):
 def verify(url: str, receipt_path: Path):
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     restored = fingerprint(url, receipt)
+    # JSON receipts normalize tuple rows to arrays; compare typed JSON views.
+    restored = json.loads(json.dumps(restored, ensure_ascii=False))
     assert restored == receipt["fingerprint"], {
         "expected": receipt["fingerprint"], "restored": restored,
     }
@@ -186,7 +188,9 @@ def main() -> int:
         if not args.restore_database or args.restore_database == "teledrive":
             parser.error("verify must target a separate, nonproduction database")
         from sqlalchemy.engine.url import make_url
-        url = str(make_url(url).set(database=args.restore_database))
+        url = make_url(url).set(database=args.restore_database).render_as_string(
+            hide_password=False,
+        )
         verify(url, args.receipt)
     return 0
 
