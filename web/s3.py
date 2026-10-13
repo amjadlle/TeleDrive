@@ -1037,7 +1037,13 @@ async def _handle(request: Request):
             headers["Content-Range"] = f"bytes {start}-{end-1}/{item.size}"
         return StreamingResponse(stream(), status_code=206 if partial else 200, headers=headers)
     except WritePreconditionError as exc:
-        return _error(exc.code, str(exc), exc.status)
+        response = _error(exc.code, str(exc), exc.status)
+        if request.method == "PUT":
+            # Conditional writes can fail before their request body is read.
+            # Never reuse an HTTP/1.1 connection with an unread PUT payload:
+            # boto3 otherwise receives an invalid next-request 400 from h11.
+            response.headers["Connection"] = "close"
+        return response
     except BatchDeleteError as exc:
         return _error(exc.code, str(exc), exc.status)
     except CORSError as exc:
