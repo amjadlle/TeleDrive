@@ -195,13 +195,26 @@ class BucketCatalog:
         version (including a prior marker); this is a compare-and-swap in the
         same SQL transaction as the version revocation.
         """
-        if not self.is_visible_version(bucket, key, version_id):
-            return False
         digest = self._keyhash(key)
-        head = self.db.connection.execute(select(
-            heads.c.object_id, heads.c.generation,
-        ).where(heads.c.bucket == bucket, heads.c.key_hash == digest)).first()
         try:
+            # Serialize revocation with version-specific tag edits on the
+            # underlying object row, even for historical (non-HEAD) versions.
+            # A second DELETE waits for this write lock and then observes the
+            # committed logical removal rather than leaking a unique-key error.
+            lock = self.db.connection.execute(
+                update(objects).where(
+                    objects.c.id == version_id,
+                    objects.c.status.in_(("ready", "delete-marker")),
+                ).values(updated_at=objects.c.updated_at)
+            )
+            if lock.rowcount != 1 or not self.is_visible_version(
+                bucket, key, version_id
+            ):
+                self.db.connection.rollback()
+                return False
+            head = self.db.connection.execute(select(
+                heads.c.object_id, heads.c.generation,
+            ).where(heads.c.bucket == bucket, heads.c.key_hash == digest)).first()
             self.db.connection.execute(insert(removed_versions).values(
                 object_id=version_id, removed_ns=time.time_ns(),
             ))
