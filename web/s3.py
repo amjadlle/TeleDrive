@@ -30,6 +30,8 @@ from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
 from teledrive.s3.batch_delete import BatchDeleteError, MAX_XML_BYTES, parse_batch, verify_body
 from teledrive.s3.conditions import http_last_modified, read_precondition
 from teledrive.s3.tagging import ObjectTagStore, BucketTagStore, TaggingError, validate_tags
+from teledrive.s3.cors import (BucketCORSStore, CORSError, MAX_CORS_XML_BYTES,
+    parse_cors_xml, cors_xml, matching_rule, response_cors_headers)
 from teledrive.s3.object_metadata import (
     ObjectMetadataStore, ObjectMetadataError, parse_object_metadata, signed_header_names,
 )
@@ -383,6 +385,7 @@ async def _handle(request: Request):
         mpu_list = bool(mpu_id and request.method == "GET")
         is_object_tagging = bool(separator and "tagging" in request.query_params)
         is_bucket_tagging = bool(bucket and not separator and "tagging" in request.query_params)
+        is_bucket_cors = bool(bucket and not separator and "cors" in request.query_params)
         if (is_object_tagging or is_bucket_tagging) and any(
             k in request.query_params for k in ("uploads", "uploadId", "versionId")
         ):
@@ -403,6 +406,12 @@ async def _handle(request: Request):
                 "PUT": "s3:PutBucketTagging",
                 "DELETE": "s3:DeleteBucketTagging",
             }.get(request.method)
+        elif is_bucket_cors:
+            action = {
+                "GET": "s3:GetBucketCORS",
+                "PUT": "s3:PutBucketCORS",
+                "DELETE": "s3:PutBucketCORS",
+            }.get(request.method)
         elif bucket and not separator and "location" in request.query_params:
             action = "s3:GetBucketLocation" if request.method == "GET" else None
         elif mpu_start or mpu_part or mpu_complete:
@@ -421,7 +430,7 @@ async def _handle(request: Request):
         # ordinary object reads/writes (e.g. ?tagging, ?versioning, ?acl).
         unsupported = {
             "acl", "versioning", "versions", "lifecycle", "policy",
-            "notification", "cors", "replication",
+            "notification", "replication",
             "retention", "legal-hold", "logging",
             "encryption", "object-lock", "publicAccessBlock", "versionId",
         }
@@ -480,6 +489,37 @@ async def _handle(request: Request):
                         ET.SubElement(deleted, "Key").text = key_to_delete
                 return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml", status_code=200)
+            if is_bucket_cors:
+                if bucket not in catalog.list_buckets():
+                    return _error("NoSuchBucket", "Bucket does not exist", 404)
+                cors_store = BucketCORSStore(catalog)
+                if request.method == "GET":
+                    rules = cors_store.get(bucket)
+                    if rules is None:
+                        return _error("NoSuchCORSConfiguration", "No CORS configuration", 404)
+                    return Response(cors_xml(rules), media_type="application/xml")
+                if request.method == "PUT":
+                    body = bytearray()
+                    async for block in request.stream():
+                        body.extend(block)
+                        if len(body) > MAX_CORS_XML_BYTES:
+                            raise CORSError("MalformedXML", "CORS XML exceeds 64 KiB")
+                    _verify_upload_sha256(request, hashlib.sha256(body).digest())
+                    md5_header = request.headers.get("content-md5")
+                    if md5_header and not hmac.compare_digest(
+                        md5_header,
+                        base64.b64encode(hashlib.md5(body, usedforsecurity=False).digest()).decode()
+                    ):
+                        raise CORSError("BadDigest", "Content-MD5 mismatch")
+                    cors_store.replace(bucket, parse_cors_xml(bytes(body)))
+                    return Response(status_code=200)
+                if request.method == "DELETE":
+                    async for block in request.stream():
+                        if block:
+                            raise CORSError("InvalidRequest", "DeleteBucketCors must not have a body")
+                    cors_store.replace(bucket, [])
+                    return Response(status_code=204)
+                return _error("NotImplemented", "Unsupported bucket CORS operation", 501)
             if is_bucket_tagging:
                 if bucket not in catalog.list_buckets():
                     return _error("NoSuchBucket", "Bucket does not exist", 404)
@@ -955,6 +995,8 @@ async def _handle(request: Request):
         return StreamingResponse(stream(), status_code=206 if partial else 200, headers=headers)
     except BatchDeleteError as exc:
         return _error(exc.code, str(exc), exc.status)
+    except CORSError as exc:
+        return _error(exc.code, str(exc), exc.status)
     except TaggingError as exc:
         return _error(exc.code, str(exc), exc.status)
     except ObjectMetadataError as exc:
@@ -980,14 +1022,65 @@ async def _handle(request: Request):
 
 @app.middleware("http")
 async def _route_encoded_control_keys(request: Request, call_next):
-    """FastAPI's default {path:path} regex does not match decoded newlines.
+    """Preserve S3 opaque keys and enforce bucket CORS independently of SigV4.
 
-    Encoded control characters are legitimate opaque S3 object key bytes.
-    Route only those paths directly to the same signature-verified gateway;
-    the rest continue through normal Starlette routing. The raw URL path,
-    not the decoded scope path, is used for SigV4 verification.
+    A browser OPTIONS preflight has no AWS signature but cannot read/write
+    anything. Actual S3 methods still require the normal signed authorization.
     """
     path = request.scope.get("path", "")
+    origin = request.headers.get("origin", "")
+    wants_cors = bool(origin and path != "/__health" and path.startswith("/"))
+    if wants_cors:
+        logical = unquote((request.scope.get("raw_path") or b"/").decode("ascii").lstrip("/"))
+        bucket = logical.split("/", 1)[0]
+        if bucket:
+            connection = None
+            try:
+                connection = db_connect()
+                catalog = BucketCatalog(ManifestStore(connection))
+                if bucket in catalog.list_buckets():
+                    rules = BucketCORSStore(catalog).get(bucket) or []
+                else:
+                    rules = []
+                is_preflight = request.method == "OPTIONS"
+                cors_method = (request.headers.get("access-control-request-method", "")
+                               if is_preflight else request.method)
+                headers_string = (request.headers.get("access-control-request-headers", "")
+                                  if is_preflight else "")
+                requested = ([h.strip() for h in headers_string.split(",") if h.strip()]
+                             if headers_string else [])
+                # Cross-origin browser clients may send many headers; bound
+                # their CORS preflight processing without trusting the Origin.
+                if (len(headers_string) > 2048 or len(requested) > 32
+                        or any(not h.isascii() for h in requested)):
+                    return _error("AccessForbidden", "CORS preflight rejected", 403)
+                matched = matching_rule(rules, origin, cors_method, requested)
+                if is_preflight:
+                    if not matched:
+                        return _error("AccessForbidden", "CORS preflight rejected", 403)
+                    return Response(status_code=200, headers=response_cors_headers(
+                        matched, origin, preflight=True, requested_headers=requested
+                    ))
+            except Exception:
+                if request.method == "OPTIONS":
+                    return _error("ServiceUnavailable", "CORS lookup unavailable", 503)
+                raise
+            finally:
+                if connection is not None:
+                    connection.close()
+            # Do not bypass signature validation for actual HTTP methods.
+            if path != "/__health" and any(ord(ch) < 32 for ch in path):
+                response = await _handle(request)
+            else:
+                response = await call_next(request)
+            if matched:
+                for name, value in response_cors_headers(
+                    matched, origin, preflight=False
+                ).items():
+                    response.headers[name] = value
+            return response
+    if request.method == "OPTIONS":
+        return _error("AccessForbidden", "CORS preflight rejected", 403)
     if path != "/__health" and any(ord(character) < 32 for character in path):
         return await _handle(request)
     return await call_next(request)
