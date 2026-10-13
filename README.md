@@ -32,6 +32,22 @@ Docker mounts: **./config → /config** (settings), **./data → /data** (sessio
 
 The Docker config example is [examples/config.docker.yaml](examples/config.docker.yaml). No desktop environment, X11 or PySide6 is needed inside Docker.
 
+## OpenAPI / Web API reference
+
+The Docker Web UI publishes **authenticated interactive API documentation** at:
+
+- **/docs** — Swagger UI
+- **/redoc** — ReDoc
+- **/openapi.json** — OpenAPI JSON specification
+
+Example (local host):
+
+~~~bash
+curl -u admin:YOUR_PASSWORD http://127.0.0.1:8080/openapi.json
+~~~
+
+These endpoints require the same HTTP Basic credentials as the administration UI. On requests that mutate state (`POST`, `PUT`), also send `X-TeleDrive-CSRF: 1`. The API should be accessed over an HTTPS reverse proxy or VPN when remote.
+
 ## Multi-account strategies
 
 | Strategy | Behavior |
@@ -80,7 +96,7 @@ Some drivers, especially ODBC variants, also require system libraries in a deriv
 
 ## Desktop app (Windows/Linux)
 
-A PySide6 desktop UI remains available. The desktop example is [examples/config.desktop.yaml](examples/config.desktop.yaml); the application creates its own configuration under the user's application data directory.
+A PySide6 desktop UI remains available, including multiple Telegram accounts, strategy selection, database URL settings, account-scoped login/2FA and SQLAlchemy-backed queue/history. The desktop example is [examples/config.desktop.yaml](examples/config.desktop.yaml); the application creates its own configuration under the user's application data directory.
 
 ~~~bash
 python -m pip install -r requirements.txt
