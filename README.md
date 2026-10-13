@@ -383,6 +383,42 @@ advanced copy headers are not yet supported and are rejected explicitly.
 Physical garbage collection MUST follow shared alias references; deleting
 source Telegram media while an alias exists would corrupt copied objects.
 
+**S3 Object/ Bucket Tagging implemented:** `GetObjectTagging`,
+`PutObjectTagging`, `DeleteObjectTagging`, `GetBucketTagging`,
+`PutBucketTagging`, `DeleteBucketTagging`. Each action has an independent
+S3 key permission; normal `s3:GetObject` does **not** permit reading tags.
+Tags are stored as small SQL metadata (10 tags maximum, strict key/value
+limits), never as payloads on another storage backend. Tag editing does not
+transfer Telegram file bytes. Object tags belong to immutable object IDs;
+when a key is overwritten, the new object starts with no tags while older
+version tags remain in metadata. CopyObject snapshots its source tags
+atomically into the new object, so later source changes do not alter the copy.
+Empty bucket deletion removes its bucket tags transactionally.
+
+Example boto3 calls:
+
+~~~python
+s3.put_object_tagging(
+    Bucket="backup-bucket", Key="test.txt",
+    Tagging={"TagSet": [{"Key": "project", "Value": "TeleDrive"}]},
+)
+print(s3.get_object_tagging(Bucket="backup-bucket", Key="test.txt")["TagSet"])
+s3.delete_object_tagging(Bucket="backup-bucket", Key="test.txt")
+s3.put_bucket_tagging(
+    Bucket="backup-bucket",
+    Tagging={"TagSet": [{"Key": "team", "Value": "storage"}]},
+)
+print(s3.get_bucket_tagging(Bucket="backup-bucket")["TagSet"])
+s3.delete_bucket_tagging(Bucket="backup-bucket")
+~~~
+
+**Limits:** Version-specific `?versionId=` tagging and inline
+`x-amz-tagging` on initial PutObject are not implemented and explicitly
+rejected; first upload the object, then call PutObjectTagging. Bucket GET
+without an existing tag set returns S3 `NoSuchTagSet`, while untagged
+objects return an empty tag set. XML DTD/entities, invalid MD5/SHA-256
+checksums, duplicate keys and exceeding S3 tag limits are rejected.
+
 **Not yet supported:** virtual-host-style buckets, AWS chunked or
 checksum-unbound PUT bodies, ACL/policy APIs, version listing, lifecycle,
 object lock, notifications, replication, advanced multipart checksum modes
@@ -488,10 +524,11 @@ operation. Use HTTPS or a trusted VPN for any remote admin traffic.
 - **Physical lifecycle/versioning:** DeleteObject currently unlinks the
   current pointer; historical data remains and is not yet exposed through
   complete S3 ListObjectVersions / restore APIs.
-- **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT
-  now work, but presigned multipart POST, S3 multipart checksum variants,
-  SSE/metadata/tags, CopyObject, virtual-host requests, bucket policies and
-  lifecycle still require separate acceptance-tested phases.
+- **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT,
+  CopyObject, and object/bucket tagging now work. Still pending: presigned
+  multipart POST, inline PutObject tagging, version-ID tagging, advanced S3
+  checksum variants, SSE and user metadata, virtual-host-style requests,
+  bucket policies and lifecycle.
 - **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
   Cyberduck), restart during upload/complete, rate limits, account revocation,
   multiple simultaneous workers, and opt-in live Telegram multipart
