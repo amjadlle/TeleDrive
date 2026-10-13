@@ -4,7 +4,7 @@
 Prerequisites:
   python -m pip install "Telethon>=1.36,<2"
   gh auth login
-  python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage"
+  python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot
 
 Telethon asks for a login code on first sign-in, and for 2FA only if enabled.
 The StringSession is never printed or written to disk.
@@ -40,6 +40,17 @@ def require_github_cli(repo: str) -> None:
             raise RuntimeError(message)
 
 
+def store_variable(repo: str, name: str, value: str) -> None:
+    """Store public channel peer ID as a GitHub Actions repository variable."""
+    subprocess.run(
+        ["gh", "variable", "set", name, "--repo", repo],
+        input=value,
+        text=True,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+
 def store_secret(repo: str, name: str, value: str) -> None:
     """Pass the secret on stdin, never via command-line arguments or files."""
     subprocess.run(
@@ -61,7 +72,8 @@ async def find_channel(client: TelegramClient, title: str) -> list:
     return matches
 
 
-async def setup(repo: str, title: str, create_if_missing: bool) -> None:
+async def setup(repo: str, title: str, create_if_missing: bool,
+                configure_bot: bool = False) -> None:
     require_github_cli(repo)
 
     api_id = int(input("Telegram test account API ID: ").strip())
@@ -120,6 +132,26 @@ async def setup(repo: str, title: str, create_if_missing: bool) -> None:
             store_secret(repo, secret_name, secret_value)
             print(f"Saved GitHub Actions secret: {secret_name}")
 
+        # Bot API requires a numeric private-channel chat_id; it cannot
+        # discover private channels by title. The user session can resolve
+        # that ID during this one-time setup, so no manual ID lookup.
+        channel_id = int(matches[0].id)
+        store_variable(repo, "TELEDRIVE_E2E_BOT_CHAT_ID", str(channel_id))
+        print("Saved GitHub Actions variable: TELEDRIVE_E2E_BOT_CHAT_ID")
+        if configure_bot:
+            bot_token = getpass.getpass("Token from @BotFather (hidden): ").strip()
+            if not bot_token:
+                raise ValueError("Bot token cannot be empty.")
+            # Validate locally before creating the GitHub secret.
+            from teledrive.storage.bot_api_adapter import BotApiClient
+            bot_api = BotApiClient(bot_token)
+            identity = await bot_api.call("getMe", {})
+            if not identity.get("is_bot"):
+                raise RuntimeError("BotFather token did not authenticate a bot.")
+            store_secret(repo, "TELEDRIVE_E2E_BOT_TOKEN", bot_token)
+            print("Saved GitHub Actions secret: TELEDRIVE_E2E_BOT_TOKEN")
+            print("Ensure this bot is channel ADMIN with post and delete permissions.")
+
         print(
             "\nE2E credentials configured. No session or API hash was displayed.\n"
             "Run the manual Telegram Storage E2E workflow after its YAML file "
@@ -136,11 +168,13 @@ def main() -> None:
                         help="Unique private Telegram broadcast channel title")
     parser.add_argument("--create-if-missing", action="store_true",
                         help="Create the private broadcast channel on the test account")
+    parser.add_argument("--configure-bot", action="store_true",
+                        help="Also configure the BotFather token as a GitHub Secret")
     args = parser.parse_args()
     if not args.channel.strip():
         parser.error("--channel cannot be empty")
     try:
-        asyncio.run(setup(args.repo, args.channel.strip(), args.create_if_missing))
+        asyncio.run(setup(args.repo, args.channel.strip(), args.create_if_missing, args.configure_bot))
     except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Setup failed: {error}", file=sys.stderr)
         raise SystemExit(1) from None
