@@ -179,8 +179,26 @@ class BotFileIndex:
                 or len(checksum) != 64
                 or any(c not in "0123456789abcdef" for c in checksum)):
             raise ValueError("Invalid Bot upload receipt")
+        if (not account or not chat_id or type(message_id) is not int
+                or message_id <= 0 or not isinstance(file_id, str)
+                or not 0 < len(file_id) <= 4096):
+            raise ValueError("Invalid Bot upload receipt message identity")
         try:
             with self.db.connection.begin_nested():
+                # Manual evidence must agree with the immutable pre-send
+                # source identity. Reject an "ACK" for a different source
+                # before committing either a file ID or a receipt.
+                intent = self.db.connection.execute(select(
+                    _bot_send_intents.c.sha256, _bot_send_intents.c.size,
+                ).where(
+                    *self._intent_predicate(account, chat_id, object_id, ordinal),
+                ).with_for_update()).one_or_none()
+                if intent is not None and (
+                    intent.sha256 != checksum or int(intent.size) != size
+                ):
+                    raise BotApiError(
+                        "Bot API recovery receipt conflicts with original send intent"
+                    )
                 self.db.connection.execute(insert(_bot_files).values(
                     account=account, chat_id=chat_id,
                     message_id=message_id, file_id=file_id,
