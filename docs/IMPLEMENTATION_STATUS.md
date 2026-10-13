@@ -645,3 +645,17 @@ verification and explicit retention approvals are implemented.
 - **This signoff is for the tested feature-branch subset, not a blanket P1
   production readiness certification.** A later document-only commit does
   not change the underlying tested implementation but still gets its own CI.
+
+### P1.4 bounded Telegram 429 retry policy
+
+- The Bot API adapter decodes only explicit Telegram 429 responses with
+  verified integer retry_after seconds (1..3600), without logging or
+  exposing the API token. A single retried send is allowed after a server
+  rejection and only when the requested cooldown is <=60 seconds.
+- Retry and per-chat minimum intervals are serialized on the transport.
+  Unknown HTTP/timeout errors remain fail-closed and are **not retried**:
+  Telegram may already have accepted the document before its ACK was lost.
+  A successful retried ACK is still durably indexed before chunk journaling.
+- Deterministic HTTP 429, repeat-429, >60-second cooldown, one-success-after-
+  cooldown, and ambiguous-network-failure tests assert the exact number of
+  actual Telegram sends/receipt writes without intentionally flooding CI.

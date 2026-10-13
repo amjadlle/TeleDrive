@@ -58,6 +58,20 @@ class BotApiError(RuntimeError):
     """Safe error: never includes Bot API token, URL or Telegram response text."""
 
 
+class BotApiRateLimited(BotApiError):
+    """Telegram explicitly refused a request (no remote send was accepted).
+
+    This is distinct from ambiguous socket timeout/read errors, which must
+    never be blindly retried after a potentially accepted message.
+    """
+
+    def __init__(self, retry_after: int):
+        if type(retry_after) is not int or not 1 <= retry_after <= 3600:
+            raise ValueError("Invalid Bot API retry_after")
+        self.retry_after = retry_after
+        super().__init__("Telegram Bot API 429: retry after server cooldown")
+
+
 class BotFileIndex:
     """Durable Bot API file_id lookup shared across object engine restarts."""
 
@@ -238,11 +252,27 @@ class BotApiClient:
             if len(raw) > 2 * 1024 * 1024:
                 raise BotApiError(f"Bot API {method} response exceeded size limit")
             parsed = json.loads(raw)
-        except (urllib.error.HTTPError, urllib.error.URLError,
-                TimeoutError, OSError, ValueError) as exc:
+        except urllib.error.HTTPError as exc:
+            # Telegram returns retry_after on HTTP 429, normally in a JSON
+            # error body. Only a positively identified rejection may retry.
+            if exc.code == 429:
+                try:
+                    response = json.loads(exc.read(8192))
+                    seconds = response.get("parameters", {}).get("retry_after")
+                except (ValueError, TypeError, AttributeError, OSError):
+                    seconds = None
+                if type(seconds) is int and 1 <= seconds <= 3600:
+                    raise BotApiRateLimited(seconds) from None
+            raise BotApiError(f"Bot API {method} request failed") from None
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError):
             raise BotApiError(f"Bot API {method} request failed") from None
         if not isinstance(parsed, dict) or parsed.get("ok") is not True:
             code = parsed.get("error_code", "unknown") if isinstance(parsed, dict) else "unknown"
+            if code == 429 and isinstance(parsed, dict):
+                params = parsed.get("parameters")
+                seconds = params.get("retry_after") if isinstance(params, dict) else None
+                if type(seconds) is int and 1 <= seconds <= 3600:
+                    raise BotApiRateLimited(seconds)
             raise BotApiError(f"Bot API {method} rejected request (code {code})")
         result = parsed.get("result")
         if result is True:  # deleteMessage and other success-only methods
@@ -328,16 +358,30 @@ class BotApiChunkTransport:
         # Telegram advises roughly one message per second per chat for bots.
         # Serializing uploads on this transport avoids self-inflicted 429s.
         async with self._upload_lock:
-            pause = max(0.0, self._next_upload - time.monotonic())
-            if pause:
-                await asyncio.sleep(pause)
-            try:
-                message = await self.api.call("sendDocument", {
-                    "chat_id": self.chat_id,
-                    "caption": f"teledrive:{object_id}:{ordinal}:{checksum[:16]}",
-                }, source=path)
-            finally:
-                self._next_upload = time.monotonic() + self._min_upload_interval
+            # One bounded retry is safe ONLY after an explicit Telegram 429:
+            # it proves the previous send was rejected. An unknown network
+            # failure can mean an ACK was lost after upload; never retry it.
+            for attempt in range(2):
+                pause = max(0.0, self._next_upload - time.monotonic())
+                if pause:
+                    await asyncio.sleep(pause)
+                try:
+                    message = await self.api.call("sendDocument", {
+                        "chat_id": self.chat_id,
+                        "caption": f"teledrive:{object_id}:{ordinal}:{checksum[:16]}",
+                    }, source=path)
+                    break
+                except BotApiRateLimited as exc:
+                    self._next_upload = time.monotonic() + max(
+                        self._min_upload_interval, exc.retry_after,
+                    )
+                    if attempt or exc.retry_after > 60:
+                        raise
+                finally:
+                    self._next_upload = max(
+                        self._next_upload,
+                        time.monotonic() + self._min_upload_interval,
+                    )
         try:
             mid = int(message["message_id"])
             chat = int(message["chat"]["id"])

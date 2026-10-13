@@ -10,7 +10,7 @@ import pytest
 from teledrive.db import connect_database
 from teledrive.storage import ManifestStore, TelegramObjectStorage
 from teledrive.storage.bot_api_adapter import (
-    BOT_DOWNLOAD_LIMIT, BotApiChunkTransport, BotApiClient, BotApiError,
+    BOT_DOWNLOAD_LIMIT, BotApiChunkTransport, BotApiClient, BotApiError, BotApiRateLimited,
     BotFileIndex,
 )
 from teledrive.storage.manifest import ChunkReference
@@ -528,3 +528,131 @@ def test_bot_exact_download_cap_allowed_and_cap_plus_one_rejected_without_send(s
         ))
     assert api.counter == 1
     run(transport.delete(reference))
+
+
+def test_explicit_telegram_429_retries_once_without_duplicate_remote_media(storage, tmp_path):
+    database, remote, _, _ = storage
+    class RejectedOnce(FakeBotApi):
+        def __init__(self):
+            super().__init__()
+            self.attempts = 0
+
+        async def call(self, method, fields, source=None):
+            if method == "sendDocument":
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise BotApiRateLimited(1)
+            return await super().call(method, fields, source)
+
+    api = RejectedOnce()
+    transport = BotApiChunkTransport(
+        api, BotFileIndex(database), chat_id=api.chat_id,
+        min_upload_interval=0,
+    )
+    source = tmp_path / "rate-limited.bin"
+    payload = os.urandom(257)
+    source.write_bytes(payload)
+    obj = run(TelegramObjectStorage(
+        ManifestStore(database), transport, chunk_size=1024,
+        scratch_directory=tmp_path,
+    ).put_file("ci", "safe-retry", source))
+    assert api.attempts == 2 and api.counter == 1
+    ref = ManifestStore(database).parts(obj.id)[0]
+    assert transport.index.find_receipt(
+        obj.id, 0, account="bot", chat_id=api.chat_id,
+        checksum=hashlib.sha256(payload).hexdigest(), size=len(payload),
+    ).message_id == ref.message_id
+    restored = tmp_path / "rate-limited-restored.bin"
+    run(transport.download(ref, restored))
+    assert restored.read_bytes() == payload
+
+
+@pytest.mark.parametrize("cooldowns,expected_attempts", [
+    ([1, 1], 2), ([61], 1),
+])
+def test_telegram_429_is_bounded_and_never_creates_ambiguous_receipts(
+    storage, tmp_path, cooldowns, expected_attempts,
+):
+    db, _, _, _ = storage
+
+    class AlwaysRejected(FakeBotApi):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def call(self, method, fields, source=None):
+            if method == "sendDocument":
+                pause = cooldowns[min(self.calls, len(cooldowns)-1)]
+                self.calls += 1
+                raise BotApiRateLimited(pause)
+            return await super().call(method, fields, source)
+
+    remote = AlwaysRejected()
+    transport = BotApiChunkTransport(
+        remote, BotFileIndex(db), chat_id=remote.chat_id,
+        min_upload_interval=0,
+    )
+    payload = tmp_path / "blocked.bin"
+    payload.write_bytes(b"definitely-not-accepted")
+    with pytest.raises(BotApiRateLimited):
+        run(transport.upload(
+            payload, object_id="fenced-ci", ordinal=0,
+            checksum=hashlib.sha256(payload.read_bytes()).hexdigest(),
+        ))
+    assert remote.calls == expected_attempts
+    assert remote.counter == 0
+    assert transport.index.unjournaled_count() == 0
+
+
+def test_bot_api_http_429_extracts_bounded_retry_after_without_leaking_token(monkeypatch):
+    import io
+    import json
+    import urllib.error
+    import teledrive.storage.bot_api_adapter as module
+    token = "123456:TEST_SECRET_ONLY"
+    bot = BotApiClient(token)
+
+    class Denied:
+        def open(self, request, timeout):
+            body = json.dumps({
+                "ok": False, "error_code": 429,
+                "parameters": {"retry_after": 3},
+            }).encode()
+            raise urllib.error.HTTPError(
+                request.full_url, 429, "Too Many Requests",
+                None, io.BytesIO(body),
+            )
+
+    monkeypatch.setattr(module, "_telegram_https_opener", lambda: Denied())
+    with pytest.raises(BotApiRateLimited) as caught:
+        bot._call_sync("sendDocument", {"chat_id": -1001234})
+    assert caught.value.retry_after == 3
+    assert token not in str(caught.value)
+
+
+def test_bot_api_network_uncertainty_does_not_retry_send(storage, tmp_path):
+    db, _, _, _ = storage
+
+    class Indeterminate(FakeBotApi):
+        attempts = 0
+
+        async def call(self, method, fields, source=None):
+            if method == "sendDocument":
+                self.attempts += 1
+                raise BotApiError("Bot API sendDocument request failed")
+            return await super().call(method, fields, source)
+
+    api = Indeterminate()
+    transport = BotApiChunkTransport(
+        api, BotFileIndex(db), chat_id=api.chat_id,
+        min_upload_interval=0,
+    )
+    source = tmp_path / "uncertain.bin"
+    source.write_bytes(b"may-have-been-accepted")
+    with pytest.raises(BotApiError, match="request failed"):
+        run(transport.upload(
+            source, object_id="uncertain", ordinal=0,
+            checksum=hashlib.sha256(source.read_bytes()).hexdigest(),
+        ))
+    assert api.attempts == 1
+    assert transport.index.unjournaled_count() == 0
