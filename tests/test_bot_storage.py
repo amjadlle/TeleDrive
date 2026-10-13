@@ -499,3 +499,32 @@ def test_bot_offline_16mib_boundary_chunking_and_full_integrity(
         assert len(fake.deleted) == expected_chunks
     finally:
         db.close()
+
+
+def test_bot_exact_download_cap_allowed_and_cap_plus_one_rejected_without_send(storage, tmp_path):
+    """Verify both sides of the 20 MiB Bot API getFile/download boundary."""
+    _, api, transport, _ = storage
+    source = tmp_path / "exact-20mib.bin"
+    data = os.urandom(BOT_DOWNLOAD_LIMIT)
+    source.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    account, chat, mid = run(transport.upload(
+        source, object_id="cap-test", ordinal=0, checksum=digest,
+    ))
+    assert api.counter == 1 and chat == api.chat_id
+    reference = ChunkReference(
+        ordinal=0, offset=0, size=len(data), sha256=digest,
+        account=account, chat_id=chat, message_id=mid,
+    )
+    fetched = tmp_path / "exact-20mib-remote.bin"
+    run(transport.download(reference, fetched))
+    assert hashlib.sha256(fetched.read_bytes()).hexdigest() == digest
+    with source.open("ab") as stream:
+        stream.write(b"!")
+    with pytest.raises(ValueError, match="20 MiB"):
+        run(transport.upload(
+            source, object_id="cap-test", ordinal=1,
+            checksum=hashlib.sha256(data + b"!").hexdigest(),
+        ))
+    assert api.counter == 1
+    run(transport.delete(reference))

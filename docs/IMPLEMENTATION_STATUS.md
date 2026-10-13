@@ -562,3 +562,34 @@ verification and explicit retention approvals are implemented.
   certify later code changes.
 - Scope: deterministic concurrency and SQL visibility, not a production
   multi-host Telegram 429/revocation soak. No physical Telegram GC enabled.
+
+
+## P1.4 live Telegram variable-size stress and recovery matrix (2026-10-14)
+
+- Live dedicated **Bot API** channel receives 0 B, 1 B, 2,047 B, 2,048 B,
+  2,049 B, 65,537 B and 1,048,593 B uploads. All data is randomized; each
+  case validates Telegram returned message IDs, per-chunk SHA-256, exact
+  contiguous offsets, full Telegram readback, four bounded Range requests,
+  empty Range, and reopening the SQLite file-ID journal after deleting the
+  original local source. Every test cleans up ONLY the IDs it just uploaded.
+- Live dedicated **Telethon** account receives 0 B, 1 B, 2,048 B, 2,049 B,
+  65,537 B and 1,048,593 B. Independent restarts re-download the real remote
+  payload; the upload-tracking transport records ACKs before SQL append so
+  cleanup is scoped even after a mid-journal assertion failure.
+- Live **durable Bot API SQL job** test uploads 262,157 B across five remote
+  chunks, reopens metadata before claim and final readback, verifies exactly
+  one job finished, and rejects a concurrently queued mutated local source
+  without publishing a second HEAD.
+- Live **SQLite backup/restore** tests cover both 3,071 B (two chunks) and
+  1,048,593 B (five chunks) with independent checksum and ranged Telegram
+  readback from the restored snapshot.
+- **One-shot opt-in large test:** the existing `[p0-live-multipart]` push
+  marker triggers actual 5 MiB+ multipart assembly and real 5 MiB+1 and
+  16 MiB+37 single Telegram Bot documents. The default CI deliberately
+  skips those tests to limit bandwidth and respect Telegram flood control.
+  Each chunk remains below the Bot API 20 MiB getFile limit; offline exact
+  20 MiB success / 20 MiB+1 rejection validates the hard bound.
+- First fresh live matrix evidence: Telegram user E2E `38470657196` passed
+  **8/8** and Bot E2E `38470588698` passed **9/9** (3 heavy tests skipped).
+  Later SHA-bound queue, backup and manual-large acceptance must be checked
+  independently; prior successful runs do not certify new commits.
