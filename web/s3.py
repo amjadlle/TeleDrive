@@ -633,7 +633,7 @@ async def _handle(request: Request):
             unsupported_headers = (
                 "x-amz-copy-source-if-modified-since",
                 "x-amz-copy-source-if-unmodified-since",
-                "x-amz-copy-source-range", "x-amz-tagging",
+                "x-amz-copy-source-range",
                 "x-amz-server-side-encryption", "x-amz-storage-class",
             )
             if any(request.headers.get(name) is not None for name in unsupported_headers):
