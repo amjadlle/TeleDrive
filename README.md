@@ -211,51 +211,68 @@ or an automated migration of legacy `files` entries. This module is a foundation
 not a production-ready S3 service. The legacy folder uploader continues to work
 independently until migration and shared job orchestration are added.
 
-### Real Telegram E2E test (requires your dedicated test account)
+### Real Telegram E2E test (requires a dedicated test account)
 
-The repository includes `.github/workflows/telegram-storage-e2e.yml`.
-It is **manual only**, cannot execute without configured GitHub Secrets, and
-does not run on pull requests or untrusted forks. GitHub requires manually
-dispatchable workflows to exist on the repository's default branch; merge the
-workflow before starting it via the Actions tab.
+The repository includes a **manual-only** GitHub Actions workflow at
+`.github/workflows/telegram-storage-e2e.yml`. It does not run on pull requests
+or forks. GitHub requires `workflow_dispatch` workflow files to exist on the
+repository's default branch before they can be started from the Actions tab.
+Keep a dedicated Telegram test account and a *private broadcast channel*.
 
-Configure under **Settings → Secrets and variables → Actions**:
+#### One-command local bootstrap (recommended)
 
-| Secret | Value |
+First, create Telegram API credentials for the **test account** under
+[my.telegram.org](https://my.telegram.org) → **API development tools**.
+Telegram API ID and API hash cannot be derived from a channel title.
+
+Install [GitHub CLI](https://cli.github.com/), sign into the repository-owning
+GitHub account, and install Telethon:
+
+~~~bash
+gh auth login
+python -m pip install "Telethon>=1.36,<2"
+python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing
+~~~
+
+The script:
+
+1. Prompts locally for Telegram API ID, API hash, and the dedicated test phone.
+2. Requests a Telegram **login code** for a new session. Telethon prompts for
+   the **2FA password only if the Telegram account has 2FA enabled**.
+3. Finds the private broadcast test channel by its exact title
+   (case-insensitive); if `--create-if-missing` is passed, creates a new
+   **private broadcast channel** when none exists.
+4. Refuses to continue if multiple private broadcast channels share the name.
+5. Generates an authorized Telethon `StringSession`, and sends the following
+   four values via standard input to `gh secret set`, **without displaying
+   the session, API hash, or persisting a session file**:
+
+| GitHub Actions secret | Value |
 | --- | --- |
 | `TELEDRIVE_E2E_API_ID` | Test account's Telegram API ID |
 | `TELEDRIVE_E2E_API_HASH` | Test account's Telegram API hash |
-| `TELEDRIVE_E2E_SESSION` | Authorized Telethon StringSession for a dedicated test account |
+| `TELEDRIVE_E2E_SESSION` | Authorized Telethon StringSession |
+| `TELEDRIVE_E2E_CHANNEL_NAME` | Exact private broadcast channel title |
 
-Optional **Actions variable**: `TELEDRIVE_E2E_TARGET`, defaults to `me`.
-Use a dedicated account and a private test target. These values are **not**
-needed for the regular Security, Desktop, and Database CI workflows.
+The channel name is configured as a Secret for consistent automated setup,
+although it is not itself sensitive. The E2E workflow discovers the corresponding
+private channel from the authorized account's dialogs **on each test run**;
+no numeric channel ID is required. The legacy Actions variable
+`TELEDRIVE_E2E_TARGET` remains supported only if the channel-name secret is
+not provided. Configure at least one destination; new installations should
+use `TELEDRIVE_E2E_CHANNEL_NAME`.
 
-To generate the StringSession, install Telethon on a trusted local machine
-and run this Python snippet **locally** (never in GitHub Actions or a public issue):
+The setup must run on a trusted **local** computer, not GitHub-hosted Actions,
+because the first authorization needs an interactive Telegram login code.
+Re-running the local setup creates a fresh login session and replaces the
+stored StringSession. Never send a StringSession, 2FA password or login code
+to anyone, and never commit them or expose them in CI logs. Revoke a
+compromised session in **Telegram → Settings → Devices**.
 
-~~~python
-import asyncio
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-
-async def create_test_session():
-    api_id = int(input("API ID: "))
-    api_hash = input("API hash: ").strip()
-    async with TelegramClient(StringSession(), api_id, api_hash) as client:
-        print("Keep this secret! Telethon session:", client.session.save())
-
-asyncio.run(create_test_session())
-~~~
-
-Move the printed session directly to the GitHub secret. A Telethon session
-grants account-level access; never post it into chat, commits, screenshots
-or CI logs. Revoke the test session in Telegram's Devices settings if exposed.
-
-The E2E scenario uploads a 4,097-byte random file across three Telegram
-messages, downloads and SHA-256-verifies it, tests a cross-chunk Range,
-and deletes only the messages created by the run. It requires the test account
-to have working Telegram access, which ordinary CI cannot simulate.
+The E2E scenario uploads 4,097 random bytes across three Telegram messages,
+downloads and SHA-256-verifies the bytes, checks a cross-chunk Range, and
+deletes the messages recorded for that test run. It requires functional
+Telegram network access; normal CI cannot simulate the live round trip.
 
 ## Credits and license
 
