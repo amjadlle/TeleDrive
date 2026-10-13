@@ -202,6 +202,8 @@ async def _handle(request: Request):
                 "GET": "s3:GetObject", "HEAD": "s3:GetObject",
                 "PUT": "s3:PutObject", "DELETE": "s3:DeleteObject",
             }.get(request.method)
+        mpu_bucket_list = bool(bucket and not separator and "uploads" in request.query_params
+                               and request.method == "GET")
         mpu_start = bool(separator and "uploads" in request.query_params and request.method == "POST")
         mpu_id = request.query_params.get("uploadId") if separator else None
         mpu_part = bool(mpu_id and request.method == "PUT" and "partNumber" in request.query_params)
@@ -210,13 +212,15 @@ async def _handle(request: Request):
         mpu_list = bool(mpu_id and request.method == "GET")
         if mpu_start or mpu_part or mpu_complete:
             action = "s3:PutObject"
+        elif mpu_bucket_list:
+            action = "s3:ListBucket"
         elif mpu_abort:
             action = "s3:DeleteObject"
         elif mpu_list:
             action = "s3:GetObject"
         elif "uploads" in request.query_params or "uploadId" in request.query_params:
             return _error("NotImplemented", "This multipart operation is unsupported", 501)
-        if action is None:
+        if action is None or (separator and "partNumber" in request.query_params and not mpu_part):
             return _error("NotImplemented", "This S3 operation is not supported yet", 501)
         # Unknown control-plane query operations must not be misinterpreted as
         # ordinary object reads/writes (e.g. ?tagging, ?versioning, ?acl).
@@ -256,6 +260,36 @@ async def _handle(request: Request):
                 return _error("NoSuchBucket", "The specified bucket does not exist", 404)
             if request.method == "HEAD":
                 return Response(status_code=200)
+            if mpu_bucket_list:
+                records, more = MultipartStore(catalog).list_uploads(
+                    bucket, owner,
+                    prefix=request.query_params.get("prefix", ""),
+                    after_key=request.query_params.get("key-marker", ""),
+                    after_id=request.query_params.get("upload-id-marker", ""),
+                    limit=int(request.query_params.get("max-uploads", "1000")),
+                )
+                root = ET.Element("ListMultipartUploadsResult", xmlns=NAMESPACE)
+                for label, val in (
+                    ("Bucket", bucket),
+                    ("KeyMarker", request.query_params.get("key-marker", "")),
+                    ("UploadIdMarker", request.query_params.get("upload-id-marker", "")),
+                    ("MaxUploads", request.query_params.get("max-uploads", "1000")),
+                    ("IsTruncated", str(more).lower()),
+                ):
+                    ET.SubElement(root, label).text = str(val)
+                if more and records:
+                    ET.SubElement(root, "NextKeyMarker").text = records[-1].object_key
+                    ET.SubElement(root, "NextUploadIdMarker").text = records[-1].id
+                for record in records:
+                    item = ET.SubElement(root, "Upload")
+                    for label, value in (
+                        ("Key", record.object_key), ("UploadId", record.id),
+                        ("Initiated", time.strftime("%Y-%m-%dT%H:%M:%S.000Z",
+                                                    time.gmtime(record.created_at))),
+                    ):
+                        ET.SubElement(item, label).text = str(value)
+                return Response(ET.tostring(root, encoding="utf-8", xml_declaration=True),
+                                media_type="application/xml")
             if request.query_params.get("list-type") not in (None, "2"):
                 return _error("NotImplemented", "Only ListObjectsV2 is supported", 501)
             prefix = request.query_params.get("prefix", "")
