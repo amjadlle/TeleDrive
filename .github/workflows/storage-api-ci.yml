@@ -77,4 +77,5 @@ jobs:
             tests/test_s3_recovery.py \
             tests/test_s3_presigned.py \
             tests/test_s3_copy.py \
-            tests/test_storage_gc_audit.py
+            tests/test_storage_gc_audit.py \
+            tests/test_storage_gc_admin.py
