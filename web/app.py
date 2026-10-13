@@ -882,6 +882,15 @@ async def put_object_content(
         catalog = BucketCatalog(manifests)
         if bucket not in catalog.list_buckets():
             raise HTTPException(404, "Bucket not found")
+        if generation is not None:
+            try:
+                current_generation = catalog.get(bucket, key).generation
+            except FileNotFoundError:
+                current_generation = 0
+            if current_generation != generation:
+                # Reject stale conditional writes BEFORE staging/uploading any
+                # bytes to Telegram. Recheck atomically at final publication.
+                raise HTTPException(409, "Object generation precondition failed")
         transport = storage_bot_transport(conn)
         # Verify Telegram access BEFORE consuming a potentially large body.
         await transport.verify_target()
