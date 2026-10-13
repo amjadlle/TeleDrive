@@ -10,6 +10,7 @@ import hashlib
 import re
 import time
 from dataclasses import dataclass
+from uuid import uuid4
 
 from sqlalchemy import (
     BigInteger, Column, ForeignKey, MetaData, String, Table, Index,
@@ -39,6 +40,13 @@ published_versions = Table(
     Column("bucket", String(63), nullable=False),
     Column("key_hash", String(64), nullable=False),
     Column("committed_ns", BigInteger, nullable=False),
+)
+# Logical S3 VersionId deletion revokes visibility but NEVER removes Telegram
+# media, manifests or aliases. Existing deployments receive an additive table.
+removed_versions = Table(
+    "storage_removed_versions", catalog_metadata,
+    Column("object_id", String(36), ForeignKey("storage_objects.id"), primary_key=True),
+    Column("removed_ns", BigInteger, nullable=False),
 )
 Index("ix_storage_published_versions_key",
       published_versions.c.bucket, published_versions.c.key_hash,
@@ -103,6 +111,144 @@ class BucketCatalog:
         if item.bucket != bucket or item.key != key:
             raise RuntimeError("Object key digest collision; refusing unsafe resolution")
         return ObjectHead(item, int(row[1]))
+
+    def is_visible_version(self, bucket: str, key: str, version_id: str) -> bool:
+        """Require exact published key proof AND absence of a removal record."""
+        row = self.db.connection.execute(
+            select(published_versions.c.object_id)
+            .select_from(published_versions.outerjoin(
+                removed_versions,
+                removed_versions.c.object_id == published_versions.c.object_id,
+            )).where(
+                published_versions.c.object_id == version_id,
+                published_versions.c.bucket == bucket,
+                published_versions.c.key_hash == self._keyhash(key),
+                removed_versions.c.object_id.is_(None),
+            )
+        ).scalar_one_or_none()
+        return row is not None
+
+    def delete_marker(self, bucket: str, key: str, *,
+                      expected_generation: int | None = None,
+                      expected_object_id: str | None = None) -> str:
+        """Publish a zero-byte logical tombstone with one atomic head CAS.
+
+        The marker is NOT a ready payload manifest; Telegram is never touched.
+        A concurrent write must not be overwritten by a stale DELETE.
+        """
+        if bucket not in self.list_buckets():
+            raise FileNotFoundError("Bucket does not exist")
+        digest = self._keyhash(key)
+        row = self.db.connection.execute(select(
+            heads.c.object_id, heads.c.generation,
+        ).where(heads.c.bucket == bucket, heads.c.key_hash == digest)).first()
+        if expected_object_id is not None and (row is None or row[0] != expected_object_id):
+            raise ValueError("Delete precondition object ID changed")
+        if expected_generation is not None and (
+            (int(row[1]) if row else 0) != expected_generation
+        ):
+            raise ValueError("Delete precondition generation changed")
+        marker = str(uuid4())
+        now = int(time.time())
+        try:
+            self.db.connection.execute(insert(objects).values(
+                id=marker, bucket=bucket, object_key=key,
+                status="delete-marker", size=0, sha256=None,
+                created_at=now, updated_at=now, error=None,
+            ))
+            if row is None:
+                try:
+                    with self.db.connection.begin_nested():
+                        self.db.connection.execute(insert(heads).values(
+                            bucket=bucket, key_hash=digest, object_id=marker,
+                            generation=1, updated_at=now,
+                        ))
+                except IntegrityError as exc:
+                    raise ValueError("Concurrent object creation") from exc
+            else:
+                changed = self.db.connection.execute(update(heads).where(
+                    heads.c.bucket == bucket, heads.c.key_hash == digest,
+                    heads.c.object_id == row[0],
+                    heads.c.generation == row[1],
+                ).values(object_id=marker, generation=int(row[1]) + 1, updated_at=now))
+                if changed.rowcount != 1:
+                    raise ValueError("Concurrent object deletion/write")
+            self.db.connection.execute(insert(published_versions).values(
+                object_id=marker, bucket=bucket, key_hash=digest,
+                committed_ns=time.time_ns(),
+            ))
+            self.db.commit()
+            return marker
+        except BaseException:
+            self.db.connection.rollback()
+            raise
+
+    def delete_version(self, bucket: str, key: str, version_id: str) -> bool:
+        """Hide an exact published VersionId, retaining immutable remote data.
+
+        If the selected version owns HEAD, advance to the latest remaining
+        version (including a prior marker); this is a compare-and-swap in the
+        same SQL transaction as the version revocation.
+        """
+        if not self.is_visible_version(bucket, key, version_id):
+            return False
+        digest = self._keyhash(key)
+        head = self.db.connection.execute(select(
+            heads.c.object_id, heads.c.generation,
+        ).where(heads.c.bucket == bucket, heads.c.key_hash == digest)).first()
+        try:
+            self.db.connection.execute(insert(removed_versions).values(
+                object_id=version_id, removed_ns=time.time_ns(),
+            ))
+            if head is not None and head[0] == version_id:
+                previous = self.db.connection.execute(
+                    select(published_versions.c.object_id)
+                    .select_from(published_versions.join(
+                        objects, objects.c.id == published_versions.c.object_id,
+                    ).outerjoin(removed_versions,
+                        removed_versions.c.object_id == published_versions.c.object_id,
+                    )).where(
+                        published_versions.c.bucket == bucket,
+                        published_versions.c.key_hash == digest,
+                        objects.c.object_key == key,
+                        objects.c.status.in_(("ready", "delete-marker")),
+                        removed_versions.c.object_id.is_(None),
+                    ).order_by(
+                        published_versions.c.committed_ns.desc(),
+                        published_versions.c.object_id.desc(),
+                    ).limit(1)
+                ).scalar_one_or_none()
+                selector = (
+                    heads.c.bucket == bucket, heads.c.key_hash == digest,
+                    heads.c.object_id == version_id,
+                    heads.c.generation == head[1],
+                )
+                if previous is None:
+                    changed = self.db.connection.execute(delete(heads).where(*selector))
+                else:
+                    changed = self.db.connection.execute(update(heads).where(
+                        *selector
+                    ).values(object_id=previous, generation=int(head[1]) + 1,
+                             updated_at=int(time.time())))
+                if changed.rowcount != 1:
+                    raise ValueError("Version HEAD changed concurrently")
+            self.db.commit()
+            return True
+        except BaseException:
+            self.db.connection.rollback()
+            raise
+
+    def current_marker(self, bucket: str, key: str) -> str | None:
+        digest = self._keyhash(key)
+        return self.db.connection.execute(
+            select(objects.c.id).select_from(heads.join(
+                objects, heads.c.object_id == objects.c.id,
+            )).where(
+                heads.c.bucket == bucket, heads.c.key_hash == digest,
+                objects.c.bucket == bucket, objects.c.object_key == key,
+                objects.c.status == "delete-marker",
+            )
+        ).scalar_one_or_none()
 
     def _record_published_uncommitted(self, item: StoredObject) -> None:
         """Append a proven head-version record in its publication transaction.
@@ -174,8 +320,12 @@ class BucketCatalog:
                    objects.c.size, objects.c.sha256)
             .select_from(published_versions.join(
                 objects, published_versions.c.object_id == objects.c.id
+            ).outerjoin(
+                removed_versions,
+                removed_versions.c.object_id == published_versions.c.object_id,
             ))
             .where(
+                removed_versions.c.object_id.is_(None),
                 published_versions.c.bucket == bucket,
                 published_versions.c.key_hash == digest,
                 objects.c.status == "ready",
@@ -206,7 +356,7 @@ class BucketCatalog:
         Never include READY manifests that did not win HEAD publication.
         The pagination marker must correspond to a published version of
         exactly the supplied bucket/key; dangling or forged markers fail.
-        No physical delete markers are fabricated.
+        Delete markers are modeled as SQL-only published tombstones.
         """
         if not 1 <= limit <= 1000 or len(prefix.encode("utf-8")) > 1024:
             raise ValueError("Invalid version-list pagination")
@@ -215,7 +365,8 @@ class BucketCatalog:
         where = [
             published_versions.c.bucket == bucket,
             objects.c.bucket == bucket,
-            objects.c.status == "ready",
+            objects.c.status.in_(("ready", "delete-marker")),
+            removed_versions.c.object_id.is_(None),
         ]
         if prefix:
             where.append(objects.c.object_key.startswith(prefix, autoescape=True))
@@ -226,11 +377,15 @@ class BucketCatalog:
                     select(published_versions.c.committed_ns)
                     .select_from(published_versions.join(
                         objects, published_versions.c.object_id == objects.c.id
+                    ).outerjoin(
+                        removed_versions,
+                        removed_versions.c.object_id == published_versions.c.object_id,
                     )).where(
+                        removed_versions.c.object_id.is_(None),
                         published_versions.c.bucket == bucket,
                         objects.c.object_key == key_marker,
                         published_versions.c.object_id == version_marker,
-                        objects.c.status == "ready",
+                        objects.c.status.in_(("ready", "delete-marker")),
                     )
                 ).scalar_one_or_none()
                 if selected is None:
@@ -255,11 +410,15 @@ class BucketCatalog:
                 published_versions.c.object_id,
                 published_versions.c.committed_ns,
                 objects.c.object_key, objects.c.size, objects.c.sha256,
+                objects.c.status.label("object_status"),
                 heads.c.object_id.label("current_id"),
             )
             .select_from(
                 published_versions.join(
                     objects, published_versions.c.object_id == objects.c.id
+                ).outerjoin(
+                    removed_versions,
+                    removed_versions.c.object_id == published_versions.c.object_id,
                 ).outerjoin(
                     heads,
                     and_(
@@ -283,6 +442,7 @@ class BucketCatalog:
                 "committed_ns": int(row["committed_ns"]),
                 "size": int(row["size"]),
                 "sha256": row["sha256"],
+                "is_delete_marker": row["object_status"] == "delete-marker",
                 "is_current": row["current_id"] is not None,
             }
             for row in rows[:limit]
@@ -321,9 +481,13 @@ class BucketCatalog:
             self.db.commit()
             return ObjectHead(item, 1)
 
-        current = self.manifests.get(existing[0])
-        if current.bucket != item.bucket or current.key != item.key:
+        old = self.db.connection.execute(select(
+            objects.c.bucket, objects.c.object_key, objects.c.status,
+        ).where(objects.c.id == existing[0])).one_or_none()
+        if old is None or old[0] != item.bucket or old[1] != item.key:
             raise RuntimeError("Object hash collision detected")
+        if old[2] not in ("ready", "delete-marker"):
+            raise RuntimeError("Current head refers to a non-published object")
         generation = int(existing[1])
         if expected_object_id is not None and expected_object_id != existing[0]:
             raise ValueError("Object changed; object ID precondition failed")

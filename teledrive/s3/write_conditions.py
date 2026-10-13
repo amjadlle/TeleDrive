@@ -56,6 +56,18 @@ def check_write_precondition(request, catalog: BucketCatalog, bucket: str,
             raise WritePreconditionError("NotImplemented", "PUT If-None-Match supports only *", 501)
         if head is not None:
             raise WritePreconditionError("PreconditionFailed", "Object already exists", 412)
+        # A tombstone is absent for If-None-Match:* but its SQL HEAD
+        # still carries a CAS generation, preventing delete/recreate races.
+        if head is None:
+            from teledrive.storage.catalog import heads
+            from sqlalchemy import select
+            digest = catalog._keyhash(key)
+            marker = catalog.current_marker(bucket, key)
+            if marker is not None:
+                generation = catalog.db.connection.execute(select(
+                    heads.c.generation
+                ).where(heads.c.bucket == bucket, heads.c.key_hash == digest)).scalar_one()
+                return ExpectedHead(generation=int(generation), object_id=marker)
         return ExpectedHead(generation=0, object_id=None)
 
     if not if_match or (if_match != "*" and

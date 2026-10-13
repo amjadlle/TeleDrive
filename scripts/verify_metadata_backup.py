@@ -50,7 +50,7 @@ def verify_snapshot(path: Path, expected_sha256: str | None = None) -> dict:
                 "FROM storage_object_heads h LEFT JOIN storage_objects o "
                 "ON o.id=h.object_id"
             ):
-                if (status != "ready" or original_bucket != bucket
+                if (status not in ("ready", "delete-marker") or original_bucket != bucket
                         or hashlib.sha256(key.encode()).hexdigest() != key_hash):
                     raise InvalidSnapshot("Current HEAD manifest is inconsistent")
             for key_hash, key, bucket, original_bucket, status in db.execute(
@@ -58,7 +58,7 @@ def verify_snapshot(path: Path, expected_sha256: str | None = None) -> dict:
                 "FROM storage_published_versions v LEFT JOIN storage_objects o "
                 "ON o.id=v.object_id"
             ):
-                if (status != "ready" or original_bucket != bucket
+                if (status not in ("ready", "delete-marker") or original_bucket != bucket
                         or hashlib.sha256(key.encode()).hexdigest() != key_hash):
                     raise InvalidSnapshot("Published version metadata is inconsistent")
             def count(table):

@@ -13,7 +13,7 @@ from uuid import uuid4
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError
 
-from teledrive.storage.catalog import BucketCatalog, heads, published_versions
+from teledrive.storage.catalog import BucketCatalog, heads
 from teledrive.storage.manifest import object_aliases, objects
 from teledrive.s3.multipart import MultipartStore, multipart_etags
 from teledrive.s3.tagging import ObjectTagStore
@@ -54,12 +54,7 @@ def copy_object(
     if source_version_id is not None:
         # The caller may restore only a version previously published to this
         # exact bucket/key, never arbitrary READY objects or staged MPU parts.
-        found = db.connection.execute(select(published_versions.c.object_id).where(
-            published_versions.c.object_id == source_version_id,
-            published_versions.c.bucket == source_bucket,
-            published_versions.c.key_hash == catalog._keyhash(source_key),
-        )).scalar_one_or_none()
-        if not found:
+        if not catalog.is_visible_version(source_bucket, source_key, source_version_id):
             raise FileNotFoundError("Published object version not found")
         source = manifests.get(source_version_id)
         if source.bucket != source_bucket or source.key != source_key:
@@ -127,8 +122,11 @@ def copy_object(
                 or expected_destination_object_id != current[0]
             ):
                 raise CopyConflict("Destination generation changed")
-            old = manifests.get(current[0])
-            if old.bucket != destination_bucket or old.key != destination_key:
+            old = db.connection.execute(select(
+                objects.c.bucket, objects.c.object_key, objects.c.status,
+            ).where(objects.c.id == current[0])).one_or_none()
+            if (old is None or old[0] != destination_bucket or old[1] != destination_key
+                    or old[2] not in ("ready", "delete-marker")):
                 raise ValueError("Destination hash collision")
             updated = db.connection.execute(update(heads).where(
                 heads.c.bucket == destination_bucket,
