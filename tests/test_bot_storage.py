@@ -182,3 +182,61 @@ def test_token_bearing_request_allows_only_telegram_https_redirect():
         request, None, 302, "Found", {}, "https://api.telegram.org/file/bot123/data"
     )
     assert result.full_url.startswith("https://api.telegram.org/")
+
+
+def test_bot_api_multipart_contains_valid_headers_and_binary_payload(tmp_path):
+    blob = tmp_path / "payload.bin"
+    blob.write_bytes(b"\x00\xff\x13actual-binary")
+    body, content_type = BotApiClient._multipart(
+        {"chat_id": "-1001234567890", "caption": "teledrive:test:0:abcdef"}, blob
+    )
+    boundary = content_type.partition("boundary=")[2].encode("ascii")
+    assert boundary
+    assert b'Content-Disposition: form-data; name="document"; filename="chunk.bin"\r\n' in body
+    assert b'Content-Type: application/octet-stream\r\n\r\n' in body
+    assert b"\r\n\r\n-1001234567890\r\n" in body
+    assert b"\x00\xff\x13actual-binary" in body
+    assert body.endswith(b"--" + boundary + b"--\r\n")
+
+
+def test_bot_corruption_never_publishes_partial_download(tmp_path, storage):
+    from teledrive.storage.engine import IntegrityError
+
+    _, api, _, engine = storage
+    payload = b"original-chunk-payload"
+    source = tmp_path / "source.bin"
+    source.write_bytes(payload)
+    obj = run(engine.put_file("ci", "bot/corrupt", source))
+    api.documents["bot-file-1"] = b"damaged!"
+    output = tmp_path / "must-not-exist"
+    with pytest.raises(IntegrityError, match="checksum mismatch"):
+        run(engine.download_to_path(obj.id, output))
+    assert not output.exists()
+
+
+def test_bot_rejects_upload_response_for_other_chat(storage, tmp_path):
+    _, api, transport, _ = storage
+    api.chat_id = -1002222222222
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"abc")
+    with pytest.raises(BotApiError, match="unexpected upload target"):
+        run(transport.upload(source, object_id="test", ordinal=0, checksum="f" * 64))
+
+
+def test_missing_telegram_document_and_missing_file_path_fail_closed(storage, tmp_path):
+    _, api, transport, engine = storage
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"abc")
+    obj = run(engine.put_file("ci", "bot/missing", source))
+    part = engine.manifests.parts(obj.id)[0]
+
+    original_call = api.call
+
+    async def invalid_file(method, fields, source=None):
+        if method == "getFile":
+            return {}
+        return await original_call(method, fields, source)
+    api.call = invalid_file
+
+    with pytest.raises(BotApiError, match="no download path"):
+        run(transport.download(part, tmp_path / "no-file"))
