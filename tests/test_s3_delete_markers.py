@@ -129,9 +129,12 @@ def test_missing_foreign_staged_and_deleted_version_ids_never_leak(service):
     for path in (
         "/backup-bucket/one.bin?versionId=",
         "/backup-bucket/one.bin?versionId=abc&versionId=xyz",
-        "/backup-bucket/one.bin?versionId=abc&tagging",
     ):
         assert signed(service, "DELETE", path).status_code == 400
+    # Tagging is an independent versioned operation. Unknown IDs return
+    # NoSuchVersion, not a malformed delete-version selector.
+    assert signed(service, "DELETE",
+                  "/backup-bucket/one.bin?tagging&versionId=abc").status_code == 404
     assert signed(service, "GET", "/backup-bucket/one.bin").content == b"one"
     assert service[2].uploads == before
 
@@ -215,3 +218,74 @@ def test_version_tagging_selector_is_not_shadowed_by_version_delete(service):
                      f"/backup-bucket/file.bin?tagging&versionId={version}&bogus=1")
     assert invalid.status_code in (400, 501)
     assert signed(service, "GET", "/backup-bucket/file.bin").content == b"kept"
+
+
+def test_delete_version_requires_delete_scope_and_signed_query(service):
+    from botocore.auth import S3SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+    from teledrive.s3.credentials import S3CredentialStore
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/file.bin", b"protect").status_code == 200
+    version = _current_id(service)
+    db = service[3]()
+    try:
+        read_only = S3CredentialStore(db, service[4]).create(
+            "read-only-version", ["s3:GetObject", "s3:ListBucketVersions"],
+        )
+    finally:
+        db.close()
+    denied = signed(service, "DELETE",
+                    f"/backup-bucket/file.bin?versionId={version}",
+                    access=read_only.access_key, secret=read_only.secret_key)
+    assert denied.status_code == 403
+    path = f"/backup-bucket/file.bin?versionId={version}"
+    req = AWSRequest(method="DELETE", url="http://localhost:9000" + path,
+                     data=b"", headers={
+                         "x-amz-content-sha256": hashlib.sha256(b"").hexdigest(),
+                     })
+    S3SigV4Auth(Credentials(service[1].access_key, service[1].secret_key),
+                "s3", "us-east-1").add_auth(req)
+    # Keep the authenticated header signature but change the query selector.
+    changed = service[0].delete(
+        "/backup-bucket/file.bin?versionId=forged", headers=dict(req.headers)
+    )
+    assert changed.status_code == 403
+    assert signed(service, "GET", f"/backup-bucket/file.bin?versionId={version}").content == b"protect"
+
+
+def test_marker_is_retained_by_online_metadata_snapshot(tmp_path, service):
+    from scripts.backup_metadata import backup_sqlite
+    from scripts.verify_metadata_backup import verify_snapshot
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/file.bin", b"backup-me").status_code == 200
+    marker = signed(service, "DELETE", "/backup-bucket/file.bin").headers["x-amz-version-id"]
+    database = tmp_path / "state.db"
+    snapshot = tmp_path / "snapshot.db"
+    checksum = backup_sqlite(database, snapshot)
+    result = verify_snapshot(snapshot, checksum)
+    assert result["valid"] is True
+    assert result["versions"] == 2
+    assert result["heads"] == 1
+    assert result["telegram_chunk_refs"] == 1
+    assert signed(service, "GET", f"/backup-bucket/file.bin?versionId={marker}").status_code == 405
+
+
+def test_batch_delete_produces_visible_markers_and_never_deletes_telegram(service):
+    import base64
+    from test_s3_batch_delete import delete_xml
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/file.bin", b"batch-data").status_code == 200
+    data = delete_xml(["file.bin", "unlisted.bin"])
+    before = dict(service[2].parts)
+    digest = base64.b64encode(hashlib.md5(data, usedforsecurity=False).digest()).decode()
+    response = signed(service, "POST", "/backup-bucket?delete", data,
+                      extra_headers={"Content-MD5": digest})
+    assert response.status_code == 200, response.text
+    entries, _ = _versions(service)
+    assert sum(is_marker for _, _, is_marker, _ in entries) == 2
+    assert signed(service, "GET", "/backup-bucket/file.bin").status_code == 404
+    assert service[2].parts == before

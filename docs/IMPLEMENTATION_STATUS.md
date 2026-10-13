@@ -512,3 +512,13 @@ verification and explicit retention approvals are implemented.
   `DELETE ?tagging&versionId=` never deletes the object VersionId. GC live
   head metrics exclude SQL-only delete markers; immutable Telegram references
   are still preserved and counted separately.
+
+
+### P1 S3 delete-marker regression coverage
+
+- Signed HTTP integration tests cover marker visibility and ordering, stable
+  pagination, VersionId deletion and rollback to previous history, foreign
+  and staged IDs, conditional replacement, CopySource and tagging isolation,
+  scoped credentials, tampered signed selectors, batch-delete response and
+  SQLite snapshot retention. All tests exercise metadata-only deletion;
+  physical Telegram removal remains disabled.
