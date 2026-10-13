@@ -142,7 +142,13 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 </div>
 <div class="card section"><h3>Existing S3 credentials</h3>
 <div class="scroll"><table><thead><tr><th>Name</th><th>Access Key ID</th><th>Permissions</th><th>Created</th><th>Status</th><th>Actions</th></tr></thead><tbody id="s3KeysRows"></tbody></table></div>
-<p class="tiny">Local S3 endpoint: <code>http://127.0.0.1:9000</code> (enable with Docker Compose profile <code>s3</code>). This initial subset supports path-style SigV4 bucket/object operations; multipart and presigned URLs are not yet supported.</p>
+<p class="tiny">Local S3 endpoint: <code>http://127.0.0.1:9000</code> (enable with Docker Compose profile <code>s3</code>). Supports signed path-style bucket/object operations, multipart uploads and checksum-bound presigned URLs. Advanced S3 operations are still being developed.</p>
+</div>
+<div class="card section">
+<h3>S3 multipart recovery</h3>
+<p class="muted">Review abandoned <code>completing</code> uploads before recovery. Only leases expired for at least one hour are eligible. Recovery returns an upload to <code>active</code> for a client retry; it never deletes Telegram messages.</p>
+<div class="row"><button class="btn compact" id="refreshS3Recovery">Scan stale completions</button></div>
+<div class="scroll section"><table><thead><tr><th>Bucket</th><th>Object key</th><th>Upload ID</th><th>Lease expired</th><th>Action</th></tr></thead><tbody id="s3RecoveryRows"></tbody></table></div>
 </div>
 <div class="card section"><h3>API endpoints</h3>
 <p><code>/api/v1/buckets</code> · <code>/api/v1/buckets/{bucket}/objects</code></p>
