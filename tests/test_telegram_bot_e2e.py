@@ -290,8 +290,10 @@ def test_live_bot_sqlite_snapshot_restores_remote_telegram_object(payload_size, 
     pytest.param(2047, 2048, id="chunk-minus-one"),
     pytest.param(2048, 2048, id="exact-chunk"),
     pytest.param(2049, 2048, id="chunk-plus-one"),
+    pytest.param(8192, 8192, id="exact-8KiB-chunk"),
     pytest.param(65537, 16384, id="64KiB-plus-one"),
     pytest.param(1048593, 262144, id="1MiB-plus-17"),
+    pytest.param(2 * 1024 * 1024 + 17, 1024 * 1024, id="2MiB-plus-17"),
 ])
 def test_live_bot_real_payload_size_matrix_and_sql_restart(size, chunk_size):
     """Independent real send/getFile/download for empty, boundaries and MiB data.
