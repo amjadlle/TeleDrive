@@ -154,3 +154,58 @@ def test_presigned_expiration_is_enforced_without_sleep(service):
         assert caught.value.code == "AccessDenied"
     finally:
         db.close()
+
+
+def test_presigned_delete_uses_object_scope_and_expires_with_key_revoke(service):
+    client, _, _, connect, master = service
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/delete-me.bin", b"still-in-telegram").status_code == 200
+    url = sdk(service).generate_presigned_url(
+        "delete_object",
+        Params={"Bucket": "backup-bucket", "Key": "delete-me.bin"},
+        ExpiresIn=120,
+        HttpMethod="DELETE",
+    )
+    deleted = request_url(client, "DELETE", url)
+    assert deleted.status_code == 204
+    assert signed(service, "GET", "/backup-bucket/delete-me.bin").status_code == 404
+    # A read-only credential may sign a URL, but it must never acquire DELETE.
+    db = connect()
+    try:
+        reader = S3CredentialStore(db, master).create(
+            "presign-reader", ["s3:GetObject"]
+        )
+    finally:
+        db.close()
+    readonly = sdk(service, reader.access_key, reader.secret_key).generate_presigned_url(
+        "delete_object",
+        Params={"Bucket": "backup-bucket", "Key": "delete-me.bin"},
+        ExpiresIn=120, HttpMethod="DELETE",
+    )
+    rejected = request_url(client, "DELETE", readonly)
+    assert rejected.status_code == 403
+    assert b"AccessDenied" in rejected.content
+
+
+def test_presigned_unicode_key_and_mutated_expiration_fail_closed(service):
+    client, _, _, _, _ = service
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    from urllib.parse import quote
+    key = "folders/café space %.bin"
+    body = b"UTF-8-key-and-path"
+    path = "/backup-bucket/" + quote(key, safe="/")
+    assert signed(service, "PUT", path, body).status_code == 200
+    url = sdk(service).generate_presigned_url(
+        "get_object", Params={"Bucket": "backup-bucket", "Key": key},
+        ExpiresIn=120,
+    )
+    response = request_url(client, "GET", url)
+    assert response.status_code == 200, response.text
+    assert response.content == body
+    parsed = urlsplit(url)
+    forged = parsed.path + "?" + parsed.query.replace(
+        "X-Amz-Expires=120", "X-Amz-Expires=600"
+    )
+    invalid = client.get(forged)
+    assert invalid.status_code == 403
+    assert b"SignatureDoesNotMatch" in invalid.content
