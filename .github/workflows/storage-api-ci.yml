@@ -72,4 +72,5 @@ jobs:
             tests/test_bot_storage.py \
             tests/test_s3_gateway.py \
             tests/test_s3_credentials.py \
-            tests/test_s3_admin.py
+            tests/test_s3_admin.py \
+            tests/test_s3_multipart.py
