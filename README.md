@@ -188,6 +188,58 @@ docker compose config --quiet
 
 Security CI also builds the image, exercises the live Web API/authentication, and performs dependency and image scans.
 
+## REST API and credential management — incremental implementation
+
+TeleDrive now includes a database-backed **API Management** page in the Docker
+WebUI and Desktop UI. An administrator can create scoped Bearer API keys, list
+metadata, rotate and revoke them. Only SHA-256 token digests are persisted.
+Full secrets are shown **once**. The same metadata DB makes tokens available
+to both interfaces, provided they point at the same database.
+
+Implemented REST v1 endpoints:
+
+- `GET/POST /api/v1/admin/keys`, `POST /api/v1/admin/keys/{id}/rotate`,
+  `DELETE /api/v1/admin/keys/{id}` (Basic + CSRF, WebUI administrators).
+- `GET/POST/DELETE /api/v1/buckets` (scoped Bearer tokens).
+- `GET /api/v1/buckets/{bucket}/objects`, `DELETE` on the same path
+  with a `key` query parameter (metadata list and logical unlink).
+- `PUT /api/v1/buckets/{bucket}/content?key=...` with raw
+  `application/octet-stream`: streams to bounded temporary staging and
+  uploads to **Telegram Bot API**, then commits the object manifest/current
+  pointer before returning HTTP 201.
+- `GET /api/v1/buckets/{bucket}/content?key=...`: streams checksum-verified
+  Telegram object chunks with HTTP Range support.
+
+Example upload after generating a key with `objects:write` permission:
+
+~~~bash
+curl -f -X PUT 'http://127.0.0.1:8080/api/v1/buckets/backups/content?key=folder%2Ffile.bin' \
+  -H "Authorization: Bearer $TELEDRIVE_API_KEY" \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary '@file.bin'
+~~~
+
+**Initial transport requirement:** REST binary PUT/GET currently needs a
+Telegram Bot API account with administrator/post rights in a **private Telegram
+channel**. Configure `TELEDRIVE_STORAGE_BOT_TOKEN` and
+`TELEDRIVE_STORAGE_BOT_CHAT_ID` in the private local `.env` file. The official
+Telegram-hosted Bot API limits file downloads to 20 MiB; the storage engine
+uses 16 MiB Telegram chunks to work within that limit. The default REST
+maximum upload is 2 GiB, configurable with
+`TELEDRIVE_REST_MAX_UPLOAD_BYTES`. No S3 server or S3-primary storage is
+involved. The original multi-user-account folder uploader remains available.
+
+**Not yet supported by REST transfer:** direct Telethon user-account sessions,
+generic asynchronous job tracking/resume, full multipart upload, presigned
+URLs, or production S3 SigV4 endpoints. API keys are not AWS S3 credentials.
+Object unlink retains immutable Telegram manifests; physical deletion waits
+for safely verified garbage collection. API tokens with unused future scopes
+do not enable those features until their endpoints are implemented.
+
+Only expose the WebUI/API over trusted HTTPS or a VPN. The new binary route is
+subject to a configured byte quota and requires an explicit Bearer token;
+admin key issuance requires HTTP Basic authentication plus CSRF protection.
+
 ## Telegram-only object storage: Phase 1 foundation
 
 A new `teledrive.storage` module provides immutable object manifests and
