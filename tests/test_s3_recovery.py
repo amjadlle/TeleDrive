@@ -53,8 +53,9 @@ def test_expired_completion_requires_explicit_admin_execute(admin):
     db, manager = _store(url)
     try:
         assert manager._renew_completion(uid, token, now, 120) is False
-        assert manager.require(uid, "recovery-bucket", "data/file.bin", "creator",
-                               allow_completed=False).get("state") == "completing"
+        assert db.connection.execute(select(uploads.c.state).where(
+            uploads.c.id == uid
+        )).scalar_one() == "completing"
     finally:
         db.close()
     restored = client.post(endpoint, json={"execute": True}, auth=auth,
