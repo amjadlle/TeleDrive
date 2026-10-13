@@ -242,68 +242,93 @@ CI exercises unindexed crash orphans, corrupt/missing marker ownership,
 incomplete scans, partial deletion retry, safe exclusion of READY objects
 and database cleanup transactions on live PostgreSQL/MySQL.
 
-### Real Telegram E2E test (requires a dedicated test account)
+### Telegram user + bot storage E2E (private channel)
 
-The repository includes a **manual-only** GitHub Actions workflow at
-`.github/workflows/telegram-storage-e2e.yml`. It does not run on pull requests
-or forks. GitHub requires `workflow_dispatch` workflow files to exist on the
-repository's default branch before they can be started from the Actions tab.
-Keep a dedicated Telegram test account and a *private broadcast channel*.
+TeleDrive keeps **two distinct Telegram upload paths**:
+- **User account (Telethon / MTProto):** full user session; can resolve a
+  private channel from its title and recover historical messages.
+- **Bot account (official Bot HTTP API):** token-based storage and CI without
+  a user session, but private-channel access requires a numeric chat ID and
+  channel administrator permissions. Bot API cannot retrieve arbitrary past
+  channel messages using message IDs alone, so TeleDrive persistently stores
+  the uploaded document's file ID in the SQL \`storage_bot_file_ids\` table.
 
-#### One-command local bootstrap (recommended)
+Both routes use the **same TelegramObjectStorage manifest, SHA-256 verification,
+range reads, and Telegram-only payload storage**. Bot API index-based uploads
+currently do **not** implement the MTProto recovery/orphan-discovery interface;
+that difference is intentionally explicit and will need additional design
+before full production feature parity.
 
-First, create Telegram API credentials for the **test account** under
-[my.telegram.org](https://my.telegram.org) → **API development tools**.
-Telegram API ID and API hash cannot be derived from a channel title.
+#### One-time setup for both modes
 
-Install [GitHub CLI](https://cli.github.com/), sign into the repository-owning
-GitHub account, and install Telethon:
+1. Create a **dedicated Telegram test user account** and get its API ID and API
+   hash from [my.telegram.org](https://my.telegram.org) → API development tools.
+2. Use Telegram's [@BotFather](https://t.me/BotFather) to create a dedicated
+   test bot and obtain its **bot token**. API ID/hash are not sufficient to
+   authenticate a bot with the Bot HTTP API.
+3. Install [GitHub CLI](https://cli.github.com/) locally and authenticate.
+   With Python 3.11+ and Telethon installed, run from the TeleDrive repository:
 
 ~~~bash
 gh auth login
-python -m pip install "Telethon>=1.36,<2"
-python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing
+python -m pip install -e .
+python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot
 ~~~
 
-The script:
+The script asks once for API ID, API hash, Telegram test phone, and the
+Telegram login code. A **2FA password is requested only if 2FA is enabled**.
+It creates or finds the *private broadcast channel* under that user, and
+refuses ambiguous duplicate names. The script prompts **locally** for your
+BotFather token and checks it via the Bot API.
 
-1. Prompts locally for Telegram API ID, API hash, and the dedicated test phone.
-2. Requests a Telegram **login code** for a new session. Telethon prompts for
-   the **2FA password only if the Telegram account has 2FA enabled**.
-3. Finds the private broadcast test channel by its exact title
-   (case-insensitive); if `--create-if-missing` is passed, creates a new
-   **private broadcast channel** when none exists.
-4. Refuses to continue if multiple private broadcast channels share the name.
-5. Generates an authorized Telethon `StringSession`, and sends the following
-   four values via standard input to `gh secret set`, **without displaying
-   the session, API hash, or persisting a session file**:
+The script stores the following values directly through GitHub CLI, without
+displaying or writing the Telegram StringSession to a session file:
 
-| GitHub Actions secret | Value |
-| --- | --- |
-| `TELEDRIVE_E2E_API_ID` | Test account's Telegram API ID |
-| `TELEDRIVE_E2E_API_HASH` | Test account's Telegram API hash |
-| `TELEDRIVE_E2E_SESSION` | Authorized Telethon StringSession |
-| `TELEDRIVE_E2E_CHANNEL_NAME` | Exact private broadcast channel title |
+| GitHub Actions setting | Type | Value |
+| --- | --- | --- |
+| \`TELEDRIVE_E2E_API_ID\` | Secret | Test user's Telegram API ID |
+| \`TELEDRIVE_E2E_API_HASH\` | Secret | Test user's API hash |
+| \`TELEDRIVE_E2E_SESSION\` | Secret | Authorized user StringSession |
+| \`TELEDRIVE_E2E_CHANNEL_NAME\` | Secret | Private test channel title |
+| \`TELEDRIVE_E2E_BOT_TOKEN\` | Secret | Test bot token from BotFather |
+| \`TELEDRIVE_E2E_BOT_CHAT_ID\` | Variable | Numeric private channel ID resolved by test user |
 
-The channel name is configured as a Secret for consistent automated setup,
-although it is not itself sensitive. The E2E workflow discovers the corresponding
-private channel from the authorized account's dialogs **on each test run**;
-no numeric channel ID is required. The legacy Actions variable
-`TELEDRIVE_E2E_TARGET` remains supported only if the channel-name secret is
-not provided. Configure at least one destination; new installations should
-use `TELEDRIVE_E2E_CHANNEL_NAME`.
+**Manual Telegram permission step:** Add the dedicated bot as an
+**administrator of the private test channel** and grant it *Post Messages*
+and *Delete Messages*. A bot cannot list all private channels by name, and
+GitHub Actions cannot infer a Telegram user's numeric channel ID from API
+ID and API hash alone. The local bootstrap handles the channel-ID lookup.
 
-The setup must run on a trusted **local** computer, not GitHub-hosted Actions,
-because the first authorization needs an interactive Telegram login code.
-Re-running the local setup creates a fresh login session and replaces the
-stored StringSession. Never send a StringSession, 2FA password or login code
-to anyone, and never commit them or expose them in CI logs. Revoke a
-compromised session in **Telegram → Settings → Devices**.
+If you only need the user-account mode, omit \`--configure-bot\`. The bot E2E
+will be skipped until its bot token is configured. Do not give the bot access
+to personal or production channels.
 
-The E2E scenario uploads 4,097 random bytes across three Telegram messages,
-downloads and SHA-256-verifies the bytes, checks a cross-chunk Range, and
-deletes the messages recorded for that test run. It requires functional
-Telegram network access; normal CI cannot simulate the live round trip.
+#### Automated CI and tests
+
+- \`.github/workflows/telegram-storage-e2e.yml\`: real **user account** E2E.
+- \`.github/workflows/telegram-bot-e2e.yml\`: real **bot account** E2E.
+- Both run on pushes to \`main\` and \`feature/docker-webui-multiaccount\`,
+  as well as manual dispatch. They **skip with a notice when credentials
+  are not configured**; a green skipped run is not proof of real access.
+- \`tests/test_telegram_target_resolution.py\` and \`tests/test_bot_storage.py\`
+  run offline on Security CI, without any Telegram secrets.
+- Each live test uploads a fresh 4,097-byte object in three Telegram
+  messages, downloads and verifies its SHA-256, tests a cross-chunk
+  [start,end) range, and deletes only the message IDs recorded for the run.
+
+The **official cloud Bot API** currently permits uploads up to 50 MB but
+downloads only up to **20 MB per file**, so use bot chunk sizes at or below
+16 MiB for production-like workloads; larger Telegram user account chunks
+do not have that same Bot API restriction. The Bot API index records metadata,
+not payload bytes. Recovery after a remote upload succeeds but before
+SQL journaling completes needs further work in bot mode.
+
+Keep both tokens and sessions out of chat messages, screenshots, CI logs and
+source control. Revoke a compromised user session in Telegram Settings →
+Devices, or regenerate a compromised bot token through @BotFather. Real
+Telegram E2E runs **cannot succeed** until their required credentials and
+permissions exist. Workflow dispatch requires the YAML to be on the repo's
+default branch; push-triggered runs can run directly on the feature branch.
 
 ## Credits and license
 
