@@ -49,6 +49,13 @@ parts = Table(
     Column("size", BigInteger, nullable=False),
     Column("updated_at", BigInteger, nullable=False),
 )
+completion_parts = Table(
+    "storage_multipart_completion_parts", _meta,
+    Column("upload_id", String(36), ForeignKey("storage_multipart_uploads.id"), primary_key=True),
+    Column("position", Integer, primary_key=True),
+    Column("number", Integer, nullable=False),
+    Column("etag", String(64), nullable=False),
+)
 multipart_etags = Table(
     "storage_multipart_etags", _meta,
     Column("object_id", String(36), primary_key=True),
@@ -175,6 +182,14 @@ class MultipartStore:
         self._validate_selection(selected)
         row = self.require(identifier, bucket, key, owner, allow_completed=True)
         if row["state"] == "completed":
+            # A retry can return the committed result only for exactly the
+            # same part selection. Another completion body is not equivalent.
+            original = self.db.connection.execute(select(
+                completion_parts.c.number, completion_parts.c.etag
+            ).where(completion_parts.c.upload_id == identifier)
+             .order_by(completion_parts.c.position)).all()
+            if [(p.number, p.etag) for p in original] != selected:
+                raise MultipartError("InvalidPart", "Completion part list differs from committed object")
             final = self.manifests.get(row["completed_object_id"])
             return CompletedUpload(final.id, row["completed_etag"], final.size)
         # A DB conditional update fences concurrent completion, abort and part writes.
@@ -254,6 +269,11 @@ class MultipartStore:
                 self.db.connection.execute(insert(multipart_etags).values(
                     object_id=object_id, etag=final_etag,
                 ))
+                for position, (number, etag) in enumerate(selected):
+                    self.db.connection.execute(insert(completion_parts).values(
+                        upload_id=identifier, position=position,
+                        number=number, etag=etag,
+                    ))
 
                 keyhash = self.catalog._keyhash(key)
                 current = self.db.connection.execute(select(
