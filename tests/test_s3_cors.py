@@ -214,7 +214,16 @@ def test_real_boto3_bucket_cors_over_http_socket(service):
             sdk.get_bucket_cors(Bucket="cors-sdk")
             assert False, "Deleted CORS must return NoSuchCORSConfiguration"
         except botocore.exceptions.ClientError as exc:
-            assert exc.response["Error"]["Code"] == "NoSuchCORSConfiguration"
+            # Botocore sometimes reports an empty error Code for 404 bucket
+            # subresource responses; require the actual HTTP status here.
+            assert exc.response["ResponseMetadata"]["HTTPStatusCode"] == 404
+        # Separately verify TeleDrive's exact S3 XML error contract, rather
+        # than relying on botocore's lossy HTTP error parser.
+        raw = signed(service, "GET", "/cors-sdk?cors")
+        assert raw.status_code == 404
+        assert ET.fromstring(raw.content).findtext(
+            "{http://s3.amazonaws.com/doc/2006-03-01/}Code"
+        ) == "NoSuchCORSConfiguration"
         assert (remote.uploads, remote.downloads) == before
     finally:
         server.should_exit = True
