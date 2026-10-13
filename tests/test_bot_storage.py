@@ -59,7 +59,7 @@ class FakeBotApi:
 def storage(tmp_path):
     database = connect_database(str(tmp_path / "bot-manifest.db"))
     api = FakeBotApi()
-    transport = BotApiChunkTransport(api, BotFileIndex(database), chat_id=api.chat_id)
+    transport = BotApiChunkTransport(api, BotFileIndex(database), chat_id=api.chat_id, min_upload_interval=0)
     engine = TelegramObjectStorage(ManifestStore(database), transport, chunk_size=2048)
     try:
         yield database, api, transport, engine
@@ -92,7 +92,7 @@ def test_bot_roundtrip_sha256_range_and_cleanup(tmp_path, storage):
 
     assert run(read_range()) == payload[2047:2051]
     # The Bot API file index is backed by SQL, not transient Python state.
-    new_transport = BotApiChunkTransport(api, BotFileIndex(database), chat_id=api.chat_id)
+    new_transport = BotApiChunkTransport(api, BotFileIndex(database), chat_id=api.chat_id, min_upload_interval=0)
     dest2 = tmp_path / "new_transport.bin"
     run(new_transport.download(parts[0], dest2))
     assert dest2.read_bytes() == payload[:2048]
