@@ -19,7 +19,7 @@ from sqlalchemy import (
     BigInteger, Column, Integer, MetaData, String, Table, Text,
     and_, or_, insert, select, update,
 )
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .catalog import BucketCatalog
 from .engine import TelegramObjectStorage
@@ -163,30 +163,49 @@ class StorageUploadJobs:
     def claim_next(self, *, now: int | None = None, ttl: int = 120) -> dict | None:
         if ttl < 5:
             raise ValueError("Job lease TTL must be >= 5")
-        now = int(time.time()) if now is None else now
-        eligible = or_(
-            jobs.c.state == "queued",
-            and_(jobs.c.state.in_(("running", "staged", "publishing")),
-                 jobs.c.lease_until < now),
-        )
-        candidates = self.db.connection.execute(
-            select(jobs.c.id)
-            .where(eligible).order_by(jobs.c.created_at, jobs.c.id).limit(10)
-        ).scalars().all()
-        for ident in candidates:
-            token = uuid4().hex
-            result = self.db.connection.execute(
-                update(jobs).where(jobs.c.id == ident, eligible)
-                .values(state="running", lease_token=token,
-                        lease_until=now + ttl, updated_at=now,
-                        attempts=jobs.c.attempts + 1)
+        # Independent SQLite workers can both read the same queued row
+        # before one upgrades its read transaction to a writer. WAL then
+        # raises SQLITE_BUSY_SNAPSHOT instead of waiting for a stale write.
+        # Roll back and resnapshot rather than leaking the lock failure to
+        # the operator; PostgreSQL/MySQL CAS still choose a single owner.
+        for attempt in range(12):
+            timestamp = int(time.time()) if now is None else now
+            eligible = or_(
+                jobs.c.state == "queued",
+                and_(jobs.c.state.in_(("running", "staged", "publishing")),
+                     jobs.c.lease_until < timestamp),
             )
-            self.db.commit()
-            if result.rowcount == 1:
-                row = self.db.connection.execute(
-                    select(jobs).where(jobs.c.id == ident)
-                ).mappings().one()
-                return dict(row)
+            try:
+                candidates = self.db.connection.execute(
+                    select(jobs.c.id)
+                    .where(eligible).order_by(jobs.c.created_at, jobs.c.id).limit(10)
+                ).scalars().all()
+                for ident in candidates:
+                    token = uuid4().hex
+                    result = self.db.connection.execute(
+                        update(jobs).where(jobs.c.id == ident, eligible)
+                        .values(state="running", lease_token=token,
+                                lease_until=timestamp + ttl, updated_at=timestamp,
+                                attempts=jobs.c.attempts + 1)
+                    )
+                    self.db.commit()
+                    if result.rowcount == 1:
+                        row = self.db.connection.execute(
+                            select(jobs).where(jobs.c.id == ident)
+                        ).mappings().one()
+                        return dict(row)
+                self.db.connection.rollback()
+                return None
+            except OperationalError as exc:
+                self.db.connection.rollback()
+                # Retry only SQLite write-contention errors; broken database
+                # connections and other dialect errors are not transient
+                # claim races and must remain visible.
+                if (self.db.engine.dialect.name != "sqlite"
+                        or "locked" not in str(exc).lower()
+                        or attempt == 11):
+                    raise
+                time.sleep(min(0.025 * (attempt + 1), 0.2))
         return None
 
     def _owned(self, ident: str, token: str, now: int):

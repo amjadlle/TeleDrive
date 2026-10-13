@@ -427,3 +427,16 @@ verification and explicit retention approvals are implemented.
   interval still requires external owner-authorized Telegram reconciliation.
 - Cross-SQL-restart resume, no duplicate-send, corrupt receipt, ambiguous
   duplicate and foreign-account negative cases run in Storage API CI.
+
+
+## P1.4 independent multi-worker SQL soak (deterministic)
+
+- Three independent operating-system worker processes start simultaneously
+  against a shared SQLite WAL queue, claim twelve distinct jobs and publish
+  100% verified Telegram disk-stub payloads. The test proves each job is
+  claimed once, every HEAD is immutable and all remote chunks are accounted
+  for. SQLite locked-snapshot contention in queue claims now retries with
+  bounded rollback/resnapshot instead of failing active workers.
+- This is deterministic multi-process SQL/engine acceptance. Actual Telegram
+  429/revocation stress, distributed PostgreSQL/MySQL throughput and extended
+  live soak remain separate operational requirements.
