@@ -150,6 +150,12 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 <div class="row"><button class="btn compact" id="refreshS3Recovery">Scan stale completions</button></div>
 <div class="scroll section"><table><thead><tr><th>Bucket</th><th>Object key</th><th>Upload ID</th><th>Lease expired</th><th>Action</th></tr></thead><tbody id="s3RecoveryRows"></tbody></table></div>
 </div>
+<div class="card section">
+<h3>Telegram storage reference audit</h3>
+<p class="muted">Non-destructive inventory covering live objects, historical manifests, copied-object aliases and multipart parts. No Telegram messages can be deleted from this screen.</p>
+<div class="row"><button class="btn compact" id="runGCAudit">Inspect protected storage references</button></div>
+<pre class="section" id="gcAuditSummary" style="white-space:pre-wrap;overflow-wrap:anywhere">Not scanned</pre>
+</div>
 <div class="card section"><h3>API endpoints</h3>
 <p><code>/api/v1/buckets</code> · <code>/api/v1/buckets/{bucket}/objects</code></p>
 <p class="tiny">Use <code>Authorization: Bearer &lt;token&gt;</code> for scoped endpoints. Administrative key management still requires the WebUI Basic login and CSRF header. The Telegram binary upload and S3 protocol endpoints are under development.</p>
