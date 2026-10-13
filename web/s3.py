@@ -68,7 +68,13 @@ def _headers(item, etag: str | None = None,
         "x-amz-version-id": item.id,
     }
     for name, value in (metadata or {}).items():
-        headers[name] = value
+        # HTTP header names are case-insensitive. Do not emit both
+        # Content-Type (the default) and content-type (persisted metadata):
+        # SDK clients otherwise interpret them as a comma-joined MIME type.
+        if name.lower() == "content-type":
+            headers["Content-Type"] = value
+        else:
+            headers[name] = value
     return headers
 
 
