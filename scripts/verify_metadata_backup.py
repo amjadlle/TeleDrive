@@ -17,7 +17,8 @@ class InvalidSnapshot(RuntimeError):
 
 
 REQUIRED = ("storage_objects", "storage_chunks", "storage_object_heads",
-            "storage_object_aliases", "storage_published_versions")
+            "storage_object_aliases", "storage_published_versions",
+            "storage_removed_versions")
 
 
 def verify_snapshot(path: Path, expected_sha256: str | None = None) -> dict:
@@ -61,6 +62,17 @@ def verify_snapshot(path: Path, expected_sha256: str | None = None) -> dict:
                 if (status not in ("ready", "delete-marker") or original_bucket != bucket
                         or hashlib.sha256(key.encode()).hexdigest() != key_hash):
                     raise InvalidSnapshot("Published version metadata is inconsistent")
+            if db.execute(
+                "SELECT 1 FROM storage_removed_versions r "
+                "LEFT JOIN storage_published_versions p ON p.object_id=r.object_id "
+                "WHERE p.object_id IS NULL LIMIT 1"
+            ).fetchone():
+                raise InvalidSnapshot("Removed VersionId lacks published history")
+            if db.execute(
+                "SELECT 1 FROM storage_object_heads h "
+                "JOIN storage_removed_versions r ON r.object_id=h.object_id LIMIT 1"
+            ).fetchone():
+                raise InvalidSnapshot("Current HEAD points to a revoked version")
             def count(table):
                 return int(db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0])
             summary = {
@@ -68,6 +80,7 @@ def verify_snapshot(path: Path, expected_sha256: str | None = None) -> dict:
                 "objects": count("storage_objects"),
                 "heads": count("storage_object_heads"),
                 "versions": count("storage_published_versions"),
+                "removed_versions": count("storage_removed_versions"),
                 "telegram_chunk_refs": count("storage_chunks"),
                 "physical_deletion_performed": False,
             }

@@ -14,7 +14,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 
-from teledrive.storage.catalog import BucketCatalog, heads, published_versions, catalog_metadata
+from teledrive.storage.catalog import (
+    BucketCatalog, heads, published_versions, removed_versions, catalog_metadata,
+)
 from teledrive.storage.manifest import metadata as _meta, objects
 object_tags = Table(
     "storage_object_tags", _meta,
@@ -118,6 +120,9 @@ class ObjectTagStore:
                 select(objects.c.id)
                 .select_from(published_versions.join(
                     objects, published_versions.c.object_id == objects.c.id
+                ).outerjoin(
+                    removed_versions,
+                    removed_versions.c.object_id == published_versions.c.object_id,
                 )).where(
                     published_versions.c.object_id == identifier,
                     published_versions.c.bucket == bucket,
@@ -125,6 +130,7 @@ class ObjectTagStore:
                     objects.c.bucket == bucket,
                     objects.c.object_key == key,
                     objects.c.status == "ready",
+                    removed_versions.c.object_id.is_(None),
                 )
             ).scalar_one_or_none()
             if row is None:
@@ -136,6 +142,23 @@ class ObjectTagStore:
             )
             if locked.rowcount != 1:
                 raise TaggingError("NoSuchVersion", "Object version not readable", 404)
+            # The object-row lock protects the tag mutation on PostgreSQL and
+            # MySQL. Recheck revocation AFTER locking it, so a concurrently
+            # deleted S3 VersionId never gains new tags after revocation.
+            visible = self.db.connection.execute(
+                select(published_versions.c.object_id)
+                .select_from(published_versions.outerjoin(
+                    removed_versions,
+                    removed_versions.c.object_id == published_versions.c.object_id,
+                )).where(
+                    published_versions.c.object_id == identifier,
+                    published_versions.c.bucket == bucket,
+                    published_versions.c.key_hash == self.catalog._keyhash(key),
+                    removed_versions.c.object_id.is_(None),
+                )
+            ).scalar_one_or_none()
+            if visible is None:
+                raise TaggingError("NoSuchVersion", "Object version revoked", 404)
             self.db.connection.execute(
                 delete(object_tags).where(object_tags.c.object_id == identifier)
             )

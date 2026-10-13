@@ -116,13 +116,18 @@ class BucketCatalog:
         """Require exact published key proof AND absence of a removal record."""
         row = self.db.connection.execute(
             select(published_versions.c.object_id)
-            .select_from(published_versions.outerjoin(
+            .select_from(published_versions.join(
+                objects, objects.c.id == published_versions.c.object_id,
+            ).outerjoin(
                 removed_versions,
                 removed_versions.c.object_id == published_versions.c.object_id,
             )).where(
                 published_versions.c.object_id == version_id,
                 published_versions.c.bucket == bucket,
                 published_versions.c.key_hash == self._keyhash(key),
+                objects.c.bucket == bucket,
+                objects.c.object_key == key,
+                objects.c.status.in_(("ready", "delete-marker")),
                 removed_versions.c.object_id.is_(None),
             )
         ).scalar_one_or_none()

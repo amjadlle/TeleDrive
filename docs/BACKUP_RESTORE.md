@@ -105,3 +105,12 @@ The dump files and synthetic receipt stay in the disposable GitHub runner's
 temporary directory. No restore targets an existing production database and
 no physical Telegram cleanup is enabled. Repeat separately using actual
 production backup roles and staging secrets before production P1 sign-off.
+
+## Logical VersionId delete recovery checks
+
+The SQLite verifier now requires the additive `storage_removed_versions` table,
+rejects a revoked current HEAD and rejects orphan removal entries not backed by
+published history. This prevents a structurally sound but semantically corrupt
+backup from silently resurrecting an S3-deleted version on restore. The file's
+independent SHA-256 receipt still must match. Restore only to a disposable
+staging database; do not overwrite a running TeleDrive instance.
