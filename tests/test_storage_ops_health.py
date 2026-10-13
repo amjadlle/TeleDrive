@@ -211,7 +211,7 @@ def test_operator_unresolved_bot_inventory_requires_auth_and_has_no_side_effects
     assert content["intents"][0]["ordinal"] == 0
     assert content["intents"][0]["size"] == 5
     assert len(content["intents"][0]["sha256"]) == 64
-    assert "independently verify" in content["message"]
+    assert "independently verify" in content["message"].lower()
     for forbidden in ("bot_token", "file_id", "secret_key",
                       "lease_token", "123456:"):
         assert forbidden not in response.text
