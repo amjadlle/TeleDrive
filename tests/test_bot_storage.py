@@ -931,3 +931,62 @@ def test_unresolved_intent_cannot_be_cleared_by_wrong_source_metadata(tmp_path):
         assert idx.unresolved_count() == 0
     finally:
         db.close()
+
+@pytest.mark.parametrize("mutate", ["checksum", "size"])
+def test_recovery_receipt_cannot_replace_durable_send_intent(tmp_path, mutate):
+    """Forged operator proof must not erase original unknown-outcome fence."""
+    db = connect_database(str(tmp_path / ("intent-receipt-" + mutate + ".db")))
+    try:
+        idx = BotFileIndex(db)
+        body = bytes(range(256)) * 13
+        checksum = hashlib.sha256(body).hexdigest()
+        idx.start_send("bot", -100938, "ambiguous-object", 3, checksum, len(body))
+        altered = "a" * 64 if mutate == "checksum" else checksum
+        changed_size = len(body) + 1 if mutate == "size" else len(body)
+        with pytest.raises(BotApiError, match="conflicts with original send intent"):
+            idx.put_receipt(
+                "bot", -100938, 1001, "never-store-this-file-id",
+                object_id="ambiguous-object", ordinal=3,
+                checksum=altered, size=changed_size,
+            )
+        assert idx.unresolved_count() == 1
+        assert idx.unresolved_details(limit=1)[0]["sha256"] == checksum
+        with pytest.raises(FileNotFoundError):
+            idx.get("bot", -100938, 1001)
+        with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+            idx.find_receipt(
+                "ambiguous-object", 3, account="bot", chat_id=-100938,
+                checksum=checksum, size=len(body),
+            )
+        # Independent proof may be recorded only if it corresponds to
+        # the ORIGINAL intended checksum, size and known channel tuple.
+        idx.put_receipt(
+            "bot", -100938, 1002, "proven-file-id",
+            object_id="ambiguous-object", ordinal=3,
+            checksum=checksum, size=len(body),
+        )
+        assert idx.unresolved_count() == 0
+        recovered = idx.find_receipt(
+            "ambiguous-object", 3, account="bot", chat_id=-100938,
+            checksum=checksum, size=len(body),
+        )
+        assert recovered and recovered.message_id == 1002
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("bad_id", [0, -1, 1.1, "10"])
+def test_bot_receipt_rejects_invalid_message_ids_without_persisting(tmp_path, bad_id):
+    db = connect_database(str(tmp_path / "bad-bot-message.db"))
+    try:
+        idx = BotFileIndex(db)
+        checksum = hashlib.sha256(b"safe").hexdigest()
+        idx.start_send("bot", -10034, "safe-object", 0, checksum, 4)
+        with pytest.raises(ValueError, match="message identity"):
+            idx.put_receipt(
+                "bot", -10034, bad_id, "file-id",
+                object_id="safe-object", ordinal=0, checksum=checksum, size=4,
+            )
+        assert idx.unresolved_count() == 1
+    finally:
+        db.close()
