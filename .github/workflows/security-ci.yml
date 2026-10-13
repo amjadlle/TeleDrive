@@ -43,7 +43,7 @@ jobs:
           python -c "import teledrive.db, teledrive.uploader; print('package-import-ok')"
 
       - name: Unit tests
-        run: python -m pytest -q tests/test_security.py tests/test_desktop_support.py tests/test_openapi.py tests/test_storage_engine.py tests/test_storage_recovery.py tests/test_bot_storage.py tests/test_telegram_target_resolution.py tests/test_ci_workflows.py tests/test_storage_catalog.py tests/test_api_keys.py tests/test_rest_api.py tests/test_rest_transfer.py
+        run: python -m pytest -q tests/test_security.py tests/test_desktop_support.py tests/test_openapi.py tests/test_storage_engine.py tests/test_storage_recovery.py tests/test_bot_storage.py tests/test_telegram_target_resolution.py tests/test_ci_workflows.py tests/test_storage_catalog.py tests/test_api_keys.py tests/test_rest_api.py tests/test_rest_transfer.py tests/test_s3_sigv4_defense.py
       - name: Dependency consistency
         run: python -m pip check
       - name: Bandit

@@ -97,5 +97,6 @@ jobs:
             tests/test_s3_conditional_writes.py \
             tests/test_s3_cors.py \
             tests/test_s3_object_attributes.py \
+            tests/test_s3_sigv4_defense.py \
             tests/test_storage_gc_audit.py \
             tests/test_storage_gc_admin.py

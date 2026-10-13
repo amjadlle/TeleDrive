@@ -29,8 +29,29 @@ def _hmac(key: bytes, data: str) -> bytes:
     return hmac.new(key, data.encode("utf-8"), hashlib.sha256).digest()
 
 
+MAX_QUERY_BYTES = 16 * 1024
+MAX_QUERY_FIELDS = 100
+
+
+def _query_pairs(raw: bytes) -> list[tuple[str, str]]:
+    """Reject malformed or oversized wire queries before canonicalizing them.
+
+    urllib.parse defaults to replacement characters on invalid UTF-8; a
+    signature verifier must not authenticate normalized substitute bytes.
+    """
+    if len(raw) > MAX_QUERY_BYTES:
+        raise SigV4Error("InvalidArgument", "S3 query string exceeds 16 KiB")
+    try:
+        return parse_qsl(
+            raw.decode("ascii"), keep_blank_values=True,
+            encoding="utf-8", errors="strict", max_num_fields=MAX_QUERY_FIELDS,
+        )
+    except (UnicodeError, ValueError) as exc:
+        raise SigV4Error("InvalidArgument", "Invalid S3 query string") from exc
+
+
 def _canonical_query(raw: bytes) -> str:
-    pairs = parse_qsl(raw.decode("ascii"), keep_blank_values=True)
+    pairs = _query_pairs(raw)
     return "&".join(
         f"{quote(key, safe='-_.~')}={quote(value, safe='-_.~')}"
         for key, value in sorted(pairs, key=lambda x: (quote(x[0], safe='-_.~'), quote(x[1], safe='-_.~')))
@@ -57,11 +78,7 @@ def _presigned_signature(request: Request, lookup_secret, permission: str,
         raise SigV4Error("NotImplemented", "Presigned multipart POST is unsupported")
     if request.headers.get("authorization"):
         raise SigV4Error("AccessDenied", "Ambiguous Authorization and query signature")
-    try:
-        raw_query = request.scope.get("query_string", b"").decode("ascii")
-        pairs = parse_qsl(raw_query, keep_blank_values=True, max_num_fields=100)
-    except (UnicodeError, ValueError) as exc:
-        raise SigV4Error("InvalidArgument", "Invalid presigned query") from exc
+    pairs = _query_pairs(request.scope.get("query_string", b""))
     required = {
         "X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Date",
         "X-Amz-Expires", "X-Amz-SignedHeaders", "X-Amz-Signature",
