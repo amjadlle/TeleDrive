@@ -103,11 +103,17 @@ class StorageUploadJobs:
             raise FileNotFoundError("Bucket does not exist")
         self.catalog._keyhash(key)
         path, info = _source_identity(Path(source), allowed_root)
-        try:
-            current = self.catalog.get(bucket, key)
-            generation, observed = current.generation, current.item.id
-        except FileNotFoundError:
-            generation, observed = 0, None
+        # A delete marker hides the payload but still owns a versioned HEAD.
+        # Snapshot that generation/ID for CAS instead of assuming an absent
+        # head and rejecting every cutover job after a logical DELETE.
+        from .catalog import heads
+        head = self.db.connection.execute(select(
+            heads.c.generation, heads.c.object_id,
+        ).where(
+            heads.c.bucket == bucket,
+            heads.c.key_hash == self.catalog._keyhash(key),
+        )).one_or_none()
+        generation, observed = (int(head[0]), head[1]) if head else (0, None)
         ident = (
             self.scan_id(bucket, key, path, info)
             if deduplicate else str(uuid4())

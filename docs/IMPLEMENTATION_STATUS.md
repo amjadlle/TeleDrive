@@ -522,3 +522,24 @@ verification and explicit retention approvals are implemented.
   scoped credentials, tampered signed selectors, batch-delete response and
   SQLite snapshot retention. All tests exercise metadata-only deletion;
   physical Telegram removal remains disabled.
+
+
+## P1.2 fenced automatic legacy-folder cutover (explicit opt-in)
+
+- Operator sets `TELEDRIVE_JOB_AUTO_RUN=1`, a pre-existing destination
+  `TELEDRIVE_JOB_LEGACY_AUTO_BUCKET`, and optionally
+  `TELEDRIVE_JOB_LEGACY_AUTO_PREFIX` and `TELEDRIVE_JOB_LEGACY_AUTO_LIMIT`.
+  Legacy `app.auto_run` must be disabled. No cutover is implicit.
+- Each scheduler cycle acquires the *same* distributed SQL uploader lease
+  used by the legacy Telethon uploader, scans allowed legacy files into
+  idempotent UUIDv5 jobs, then runs one durable Bot-API upload while an
+  independent connection renews that lease. A competing legacy uploader
+  holds or needs the same lease; lease loss cancels the durable task and
+  persists partial upload metadata for recovery. Manual WebUI legacy sends
+  are refused while this mode is configured.
+- Legacy file rows are never rewritten and no Telegram message is removed.
+  Jobs targeting an S3 delete marker now snapshot its actual head generation
+  and marker ID, preserving compare-and-set on publication.
+- This is still an explicit operational migration: source root and bot target
+  must be configured, worker runs remain opt-in and separate services using
+  different databases are out of scope.

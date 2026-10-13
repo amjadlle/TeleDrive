@@ -6,6 +6,8 @@ before enabling the independent durable object worker.
 """
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -81,3 +83,76 @@ def enqueue_legacy_folder(
         if queued >= max_files:
             break
     return LegacyQueueReport(queued, previous, excluded, tuple(identifiers))
+
+
+async def run_legacy_cutover_cycle(
+    cfg, queue: StorageUploadJobs, transport, *, lease_db,
+    bucket: str, allowed_root: Path, scratch_directory: Path,
+    lease_name: str, lease_ttl: int, chunk_size: int,
+    prefix: str = "", max_files: int = 100,
+):
+    """One fenced legacy scan + one durable job, without a legacy send path.
+
+    The independently connected lease_db owns the legacy uploader's lease
+    for the *entire* Telegram operation. A renewer cancels the active send
+    if the lease can no longer be held. The durable job retains its journal
+    for a later fenced recovery; no remotely accepted bytes are deleted.
+    """
+    if lease_ttl < 15:
+        raise ValueError("Cutover uploader lease TTL must be at least 15 seconds")
+    source_root = Path(cfg.source_dir).resolve(strict=True)
+    permitted = allowed_root.resolve(strict=True)
+    if not source_root.is_dir() or not source_root.is_relative_to(permitted):
+        raise UploadJobError("Legacy source must be inside the approved job root")
+    if queue.db.url != lease_db.url:
+        raise UploadJobError("Legacy importer and job queue must share the same database")
+
+    from uuid import uuid4
+    holder = "legacy-cutover-" + uuid4().hex
+    if not lease_db.acquire_lease(lease_name, holder, int(time.time()), lease_ttl):
+        raise UploadJobError("Legacy uploader currently holds the upload lease")
+    worker = None
+    monitor = None
+    try:
+        def heartbeat():
+            if not lease_db.renew_lease(
+                lease_name, holder, int(time.time()), lease_ttl,
+            ):
+                raise UploadJobError("Legacy upload lease lost during cutover")
+
+        report = enqueue_legacy_folder(
+            cfg, queue, bucket=bucket, prefix=prefix,
+            max_files=max_files, lease_heartbeat=heartbeat,
+        )
+        heartbeat()
+
+        async def keep_lease():
+            while True:
+                await asyncio.sleep(max(2, lease_ttl // 4))
+                try:
+                    heartbeat()
+                except BaseException:
+                    if worker is not None and not worker.done():
+                        worker.cancel()
+                    raise
+
+        monitor = asyncio.create_task(keep_lease())
+        worker = asyncio.create_task(queue.run_next(
+            transport, allowed_root=permitted,
+            scratch_directory=scratch_directory, chunk_size=chunk_size,
+        ))
+        try:
+            result = await worker
+            # Detect an expired/fenced lease before returning success.
+            heartbeat()
+            if monitor.done():
+                monitor.result()
+            return report, result
+        finally:
+            monitor.cancel()
+            try:
+                await monitor
+            except asyncio.CancelledError:
+                pass
+    finally:
+        lease_db.release_lease(lease_name, holder)

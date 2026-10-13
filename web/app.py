@@ -355,6 +355,8 @@ async def start_uploader(mode: str) -> dict[str, Any]:
     async with process_lock:
         if current_process is not None and current_process.returncode is None:
             raise HTTPException(409, "Uploader is already running")
+        if mode != "scan-only" and os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "").strip():
+            raise HTTPException(409, "Legacy uploader sends disabled during durable cutover")
         args = [sys.executable, "-m", "teledrive.uploader", "--config", str(CONFIG_PATH), "--auth-dir", str(AUTH_DIR)]
         if mode == "scan-only":
             args.append("--scan-only")
@@ -403,6 +405,8 @@ async def scheduler_loop() -> None:
             interval = max(1, int(app_cfg.get("run_interval_minutes", 60))) * 60
             now = time.time()
             running = current_process is not None and current_process.returncode is None
+            if (enabled and os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "").strip()):
+                raise RuntimeError("Disable legacy auto_run before durable cutover")
             if enabled and not running and now - last_launch >= interval:
                 await start_uploader("run-once")
                 last_launch = now
@@ -412,6 +416,25 @@ async def scheduler_loop() -> None:
         except Exception as exc:
             LOG_BUFFER.append(_scrub_text(f"[web] scheduler error: {exc}"))
             await asyncio.sleep(10)
+
+
+def _legacy_cutover_configuration() -> tuple[str, str, int] | None:
+    """No implicit legacy upload mode migration; explicit environment opt-in."""
+    bucket = os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "").strip()
+    if not bucket:
+        return None
+    if os.environ.get("TELEDRIVE_JOB_AUTO_RUN") != "1":
+        raise RuntimeError("Legacy cutover requires TELEDRIVE_JOB_AUTO_RUN=1")
+    if bool(read_raw_config().get("app", {}).get("auto_run", False)):
+        raise RuntimeError("Disable legacy app.auto_run before durable cutover")
+    prefix = os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_PREFIX", "").strip()
+    try:
+        limit = int(os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_LIMIT", "100"))
+    except ValueError as exc:
+        raise RuntimeError("Invalid legacy cutover scan limit") from exc
+    if not 1 <= limit <= 1000:
+        raise RuntimeError("Legacy cutover scan limit must be 1..1000")
+    return bucket, prefix, limit
 
 
 async def upload_job_scheduler_loop() -> None:
@@ -426,16 +449,34 @@ async def upload_job_scheduler_loop() -> None:
             if os.environ.get("TELEDRIVE_JOB_AUTO_RUN") != "1":
                 await asyncio.sleep(10)
                 continue
+            cutover = _legacy_cutover_configuration()
             root = _storage_job_root()
             conn = db_connect()
             queue = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
-            transport = storage_bot_transport(conn)
             scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
             _secure_mkdir(scratch)
-            result = await queue.run_next(
-                transport, allowed_root=root, scratch_directory=scratch,
-                chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
-            )
+            if cutover is not None:
+                from teledrive.storage.legacy_bridge import run_legacy_cutover_cycle
+                cfg = effective_config()
+                lease = db_connect()
+                try:
+                    # The cycle manages an independently renewable lease while
+                    # Telegram chunks are being sent by the durable queue.
+                    _, result = await run_legacy_cutover_cycle(
+                        cfg, queue, storage_bot_transport(conn), lease_db=lease,
+                        bucket=cutover[0], prefix=cutover[1], max_files=cutover[2],
+                        allowed_root=root, scratch_directory=scratch,
+                        lease_name=uploader.LEASE_NAME,
+                        lease_ttl=uploader.LEASE_TTL_SECONDS,
+                        chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                    )
+                finally:
+                    lease.close()
+            else:
+                result = await queue.run_next(
+                    storage_bot_transport(conn), allowed_root=root,
+                    scratch_directory=scratch, chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                )
             await asyncio.sleep(2 if result else 10)
         except asyncio.CancelledError:
             raise
