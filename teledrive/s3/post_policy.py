@@ -168,13 +168,17 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
                 raise SigV4Error("AccessDenied", "Invalid signed size range")
             has_range = True
             continue
-        # AWS permits bounded starts-with on the object key and its
-        # actual Content-Type form field. All credentials, checksum, bucket
-        # and success response fields stay exact signed conditions.
+        # Prefix policies may authorize the key, MIME type or a
+        # specifically named user-metadata field. This never permits
+        # prefix wildcards over checksum, signer scope, bucket, date,
+        # redirect or HTTP cache/retention semantics.
         if (isinstance(entry, list) and len(entry) == 3
                 and entry[0] == "starts-with"
-                and entry[1] in ("$key", "$Content-Type")):
+                and isinstance(entry[1], str) and entry[1].startswith("$")):
             name = entry[1][1:]
+            if (name not in ("key", "Content-Type")
+                    and not _METADATA_FIELD.fullmatch(name)):
+                raise SigV4Error("AccessDenied", "Unsupported POST wildcard field")
             if (name in seen or name not in bound
                     or not isinstance(entry[2], str)
                     or not bound[name].startswith(entry[2])):
