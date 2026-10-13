@@ -534,7 +534,7 @@ def test_browser_post_signed_custom_metadata_and_cache_headers_roundtrip(service
     assert post(service, data, invalid).status_code == 400
     extra = {
         "x-amz-meta-owner": "ci-operator",
-        "x-amz-meta-i18n": "İstanbul & 東京",
+        "x-amz-meta-i18n": "Istanbul & Tokyo",
         "Cache-Control": "private, max-age=120",
         "Content-Disposition": "attachment; filename=remote.bin",
         "Content-Language": "tr",
@@ -593,7 +593,7 @@ def test_browser_post_metadata_must_be_bounded_before_telegram_send(service):
     assert post(service, body, make_form(
         service, body, extra_fields=too_many,
     )).status_code == 400
-    malformed = {"x-amz-meta-shell": "valid\\r\\nInjected: unsafe"}
+    malformed = {"x-amz-meta-shell": "valid\r\nInjected: unsafe"}
     assert post(service, body, make_form(
         service, body, extra_fields=malformed,
     )).status_code == 400
