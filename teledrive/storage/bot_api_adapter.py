@@ -53,6 +53,21 @@ _bot_receipts = Table(
 Index("ix_storage_bot_upload_receipts_object",
       _bot_receipts.c.object_id, _bot_receipts.c.ordinal)
 
+# Persist the transfer intent BEFORE any Telegram send. A lost network ACK
+# or a process crash after the remote accepts a document otherwise leaves
+# zero evidence in SQL and would cause an unsafe duplicate retransmission.
+# The intent is cleared atomically with the durable receipt, or after a
+# *definite* rejection (Telegram 429). Unknown outcomes require an operator.
+_bot_send_intents = Table(
+    "storage_bot_send_intents", _bot_metadata,
+    Column("account", String(255), primary_key=True),
+    Column("chat_id", BigInteger, primary_key=True),
+    Column("object_id", String(36), primary_key=True),
+    Column("ordinal", Integer, primary_key=True),
+    Column("sha256", String(64), nullable=False),
+    Column("size", BigInteger, nullable=False),
+)
+
 
 class BotApiError(RuntimeError):
     """Safe error: never includes Bot API token, URL or Telegram response text."""
@@ -85,6 +100,53 @@ class BotFileIndex:
         ))
         self.db.commit()
 
+    @staticmethod
+    def _intent_predicate(account: str, chat_id: int, object_id: str, ordinal: int):
+        return (
+            _bot_send_intents.c.account == account,
+            _bot_send_intents.c.chat_id == chat_id,
+            _bot_send_intents.c.object_id == object_id,
+            _bot_send_intents.c.ordinal == ordinal,
+        )
+
+    def start_send(self, account: str, chat_id: int, object_id: str,
+                   ordinal: int, checksum: str, size: int) -> None:
+        """Durably mark a send as potentially accepted before Telegram I/O.
+
+        This is a per-object write fence, not an optional telemetry event.
+        A stale intent must NEVER be silently ignored or automatically
+        retransmitted, even when the previous worker crashed before sending.
+        """
+        if (not account or not chat_id or not object_id or len(object_id) > 36
+                or ordinal < 0 or not 0 < size <= BOT_DOWNLOAD_LIMIT
+                or not re.fullmatch(r"[0-9a-f]{64}", checksum)):
+            raise ValueError("Invalid Bot API send intent")
+        try:
+            self.db.connection.execute(insert(_bot_send_intents).values(
+                account=account, chat_id=chat_id, object_id=object_id,
+                ordinal=ordinal, sha256=checksum, size=size,
+            ))
+            self.db.commit()
+        except BaseException:
+            self.db.connection.rollback()
+            raise BotApiError("Unresolved Bot API send intent; manual reconciliation required") from None
+
+    def clear_rejected_send(self, account: str, chat_id: int, object_id: str,
+                            ordinal: int, checksum: str, size: int) -> None:
+        """Discard only the matching intent after explicit non-acceptance."""
+        predicates = self._intent_predicate(account, chat_id, object_id, ordinal)
+        self.db.connection.execute(delete(_bot_send_intents).where(
+            *predicates,
+            _bot_send_intents.c.sha256 == checksum,
+            _bot_send_intents.c.size == size,
+        ))
+        self.db.commit()
+
+    def unresolved_count(self) -> int:
+        return int(self.db.connection.execute(
+            select(func.count()).select_from(_bot_send_intents)
+        ).scalar_one())
+
     def put_receipt(self, account: str, chat_id: int, message_id: int,
                     file_id: str, *, object_id: str, ordinal: int,
                     checksum: str, size: int) -> None:
@@ -103,6 +165,11 @@ class BotFileIndex:
                     account=account, chat_id=chat_id, message_id=message_id,
                     object_id=object_id, ordinal=ordinal,
                     sha256=checksum, size=size,
+                ))
+                self.db.connection.execute(delete(_bot_send_intents).where(
+                    *self._intent_predicate(account, chat_id, object_id, ordinal),
+                    _bot_send_intents.c.sha256 == checksum,
+                    _bot_send_intents.c.size == size,
                 ))
             self.db.commit()
         except BaseException:
@@ -124,6 +191,16 @@ class BotFileIndex:
             ).limit(2)
         ).mappings().all()
         if not rows:
+            # A crash before the ACK receipt transaction or a lost network
+            # response may have left a real channel post. Never guess or
+            # resend solely because the receipt cannot be found.
+            ambiguous = self.db.connection.execute(
+                select(_bot_send_intents.c.sha256).where(
+                    *self._intent_predicate(account, chat_id, object_id, ordinal),
+                ).limit(1)
+            ).scalar_one_or_none()
+            if ambiguous is not None:
+                raise BotApiError("Unresolved Bot API send intent; manual reconciliation required")
             return None
         if len(rows) != 1:
             raise BotApiError("Ambiguous Bot API upload receipts; manual reconciliation required")
@@ -355,6 +432,10 @@ class BotApiChunkTransport:
                      checksum: str) -> tuple[str, int, int]:
         if path.stat().st_size > BOT_DOWNLOAD_LIMIT:
             raise ValueError("Bot API chunk exceeds cloud download limit (20 MiB)")
+        size = path.stat().st_size
+        self.index.start_send(
+            self.account, self.chat_id, object_id, ordinal, checksum, size,
+        )
         # Telegram advises roughly one message per second per chat for bots.
         # Serializing uploads on this transport avoids self-inflicted 429s.
         async with self._upload_lock:
@@ -376,6 +457,13 @@ class BotApiChunkTransport:
                         self._min_upload_interval, exc.retry_after,
                     )
                     if attempt or exc.retry_after > 60:
+                        # Explicit HTTP 429 means Telegram rejected this
+                        # request. Clearing the intent is safe; lost ACKs are
+                        # NOT equivalent to a definite rejection.
+                        self.index.clear_rejected_send(
+                            self.account, self.chat_id, object_id,
+                            ordinal, checksum, size,
+                        )
                         raise
                 finally:
                     self._next_upload = max(
@@ -393,7 +481,7 @@ class BotApiChunkTransport:
         self.index.put_receipt(
             self.account, chat, mid, fid,
             object_id=object_id, ordinal=ordinal, checksum=checksum,
-            size=path.stat().st_size,
+            size=size,
         )
         return self.account, chat, mid
 
