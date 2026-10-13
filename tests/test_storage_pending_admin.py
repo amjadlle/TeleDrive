@@ -119,6 +119,7 @@ def test_stale_pending_inventory_persists_across_connections(tmp_path):
         left, right = ManifestStore(first), ManifestStore(second)
         now = int(time.time())
         assert [r["id"] for r in left.stale_pending(now=now)] == [identifier]
+        first.commit()
         assert right.abandon_stale_pending(now=now, object_id=identifier) == [identifier]
         assert left.stale_pending(now=now) == []
         assert not left.heartbeat_writer(identifier, old, now)

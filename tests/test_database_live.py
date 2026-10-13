@@ -612,3 +612,50 @@ def test_conditional_s3_head_cas_blocks_cross_connection_aba(env_name):
     finally:
         a.close()
         b.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_operator_stale_pending_preview_and_per_object_fence_live_sql(env_name):
+    """P1 dry-run and per-object execute remain fail-closed across DB workers."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from uuid import uuid4
+    from teledrive.storage.manifest import ManifestStore
+
+    a, b = connect_database(url), connect_database(url)
+    try:
+        first, second = ManifestStore(a), ManifestStore(b)
+        now = int(time.time())
+        old = now - 7200
+        stale = first.begin("ci", f"stale/{uuid4().hex}", 0, old)
+        first.start_writer(stale, "old-worker", old, ttl=120)
+        live = first.begin("ci", f"live/{uuid4().hex}", 0, now)
+        first.start_writer(live, "live-worker", now, ttl=120)
+        no_token = first.begin("ci", f"unfenced/{uuid4().hex}", 0, old)
+
+        preview = second.stale_pending(now=now, min_age_seconds=3600)
+        assert [record for record in preview if record["id"] == stale]
+        assert not [record for record in preview if record["id"] in (live, no_token)]
+        assert not any("token" in row for row in preview)
+        # Flush the preview's read transaction before the separate worker
+        # writes, required on PostgreSQL and MySQL to avoid stale snapshots.
+        b.commit()
+        assert second.abandon_stale_pending(
+            now=now, min_age_seconds=3600, object_id=live,
+        ) == []
+        assert second.abandon_stale_pending(
+            now=now, min_age_seconds=3600, object_id=no_token,
+        ) == []
+        assert second.abandon_stale_pending(
+            now=now, min_age_seconds=3600, object_id=stale,
+        ) == [stale]
+        assert not first.heartbeat_writer(stale, "old-worker", now + 1)
+        assert first.heartbeat_writer(live, "live-worker", now + 1)
+        statuses = dict(first.interrupted())
+        assert statuses[stale] == "failed"
+        assert statuses[live] == "pending"
+        assert statuses[no_token] == "pending"
+    finally:
+        a.close()
+        b.close()
