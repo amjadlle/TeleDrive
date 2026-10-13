@@ -33,6 +33,7 @@ class CopiedObject:
 def copy_object(
     catalog: BucketCatalog, source_bucket: str, source_key: str,
     destination_bucket: str, destination_key: str, *, now: int | None = None,
+    expected_source_id: str | None = None,
 ) -> CopiedObject:
     """Publish a snapshot copy with one SQL transaction.
 
@@ -44,6 +45,8 @@ def copy_object(
     manifests = catalog.manifests
     now = int(time.time()) if now is None else now
     source = catalog.get(source_bucket, source_key).item
+    if expected_source_id is not None and source.id != expected_source_id:
+        raise CopyConflict("Copy source object changed during request")
     base_id = manifests.resolve_content_id(source.id)
     base = manifests.get(base_id)
     if base.size != source.size or base.sha256 != source.sha256:
