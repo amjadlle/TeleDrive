@@ -76,7 +76,7 @@ def _presigned_signature(request: Request, lookup_secret, permission: str,
     if "X-Amz-Security-Token" in values:
         raise SigV4Error("InvalidToken", "Temporary AWS session tokens are unsupported")
     credential = re.fullmatch(
-        r"([^/\\s]{1,64})/(\\d{8})/([a-z0-9-]{1,32})/s3/aws4_request",
+        r"([^/\s]{1,64})/(\d{8})/([a-z0-9-]{1,32})/s3/aws4_request",
         values["X-Amz-Credential"],
     )
     if credential is None:
@@ -113,7 +113,7 @@ def _presigned_signature(request: Request, lookup_secret, permission: str,
             if len(checksum) != 32:
                 raise SigV4Error("XAmzContentSHA256Mismatch", "Invalid signed upload checksum")
     stamp = values["X-Amz-Date"]
-    if not re.fullmatch(r"\\d{8}T\\d{6}Z", stamp) or stamp[:8] != date:
+    if not re.fullmatch(r"\d{8}T\d{6}Z", stamp) or stamp[:8] != date:
         raise SigV4Error("AccessDenied", "Invalid presigned date")
     try:
         instant = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
@@ -137,13 +137,13 @@ def _presigned_signature(request: Request, lookup_secret, permission: str,
                            (quote(p[0], safe='-_.~'), quote(p[1], safe='-_.~')))
     )
     canonical = (
-        f"{request.method}\\n{_canonical_path(request)}\\n{canonical_query}\\n"
-        + "".join(f"{name}:{headers[name]}\\n" for name in signed)
-        + f"\\n{signed_string}\\nUNSIGNED-PAYLOAD"
+        f"{request.method}\n{_canonical_path(request)}\n{canonical_query}\n"
+        + "".join(f"{name}:{headers[name]}\n" for name in signed)
+        + f"\n{signed_string}\nUNSIGNED-PAYLOAD"
     )
     scope = f"{date}/{region}/s3/aws4_request"
     string_to_sign = (
-        f"AWS4-HMAC-SHA256\\n{stamp}\\n{scope}\\n{_sha(canonical.encode())}"
+        f"AWS4-HMAC-SHA256\n{stamp}\n{scope}\n{_sha(canonical.encode())}"
     )
     secret = lookup_secret(access_key, permission)
     if secret is None:
