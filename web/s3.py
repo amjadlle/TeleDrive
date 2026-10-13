@@ -26,6 +26,7 @@ from fastapi.responses import Response, StreamingResponse
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
+from teledrive.s3.tagging import ObjectTagStore, TaggingError, validate_tags
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
@@ -78,6 +79,41 @@ def _verify_upload_sha256(request: Request, digest: bytes) -> None:
     ):
         return
     raise SigV4Error("XAmzContentSHA256Mismatch", "Signed SHA-256 body checksum mismatch")
+
+
+def _tag_xml(tags: list[tuple[str, str]]) -> bytes:
+    root = ET.Element("Tagging", xmlns=NAMESPACE)
+    tagset = ET.SubElement(root, "TagSet")
+    for key, value in tags:
+        tag = ET.SubElement(tagset, "Tag")
+        ET.SubElement(tag, "Key").text = key
+        ET.SubElement(tag, "Value").text = value
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _parse_tag_xml(body: bytes) -> list[tuple[str, str]]:
+    if len(body) > 16 * 1024:
+        raise TaggingError("MalformedXML", "Tagging XML exceeds maximum size")
+    try:
+        root = SafeET.fromstring(body)
+    except ET.ParseError as exc:
+        raise TaggingError("MalformedXML", "Tagging XML is malformed") from exc
+    def tag_name(node):
+        return node.tag.rsplit("}", 1)[-1]
+    if (tag_name(root) != "Tagging" or root.attrib
+            or len(root) != 1 or tag_name(root[0]) != "TagSet"
+            or root[0].attrib):
+        raise TaggingError("MalformedXML", "Unexpected tagging XML structure")
+    entries = []
+    for tag in root[0]:
+        if tag_name(tag) != "Tag" or tag.attrib or len(tag) != 2:
+            raise TaggingError("MalformedXML", "Invalid Tag element")
+        children = {tag_name(child): child for child in tag}
+        if (set(children) != {"Key", "Value"} or
+                any(child.attrib or len(child) for child in tag)):
+            raise TaggingError("MalformedXML", "Invalid Tag key/value fields")
+        entries.append((children["Key"].text or "", children["Value"].text or ""))
+    return validate_tags(entries)
 
 
 def _range(value: str | None, size: int) -> tuple[int, int, bool]:
@@ -231,7 +267,16 @@ async def _handle(request: Request):
         mpu_complete = bool(mpu_id and request.method == "POST")
         mpu_abort = bool(mpu_id and request.method == "DELETE")
         mpu_list = bool(mpu_id and request.method == "GET")
-        if mpu_start or mpu_part or mpu_complete:
+        is_object_tagging = bool(separator and "tagging" in request.query_params)
+        if is_object_tagging and any(k in request.query_params for k in ("uploads", "uploadId", "versionId")):
+            return _error("NotImplemented", "Tagging with multipart/version selectors unsupported", 501)
+        if is_object_tagging:
+            action = {
+                "GET": "s3:GetObjectTagging",
+                "PUT": "s3:PutObjectTagging",
+                "DELETE": "s3:DeleteObjectTagging",
+            }.get(request.method)
+        elif mpu_start or mpu_part or mpu_complete:
             action = "s3:PutObject"
         elif mpu_bucket_list:
             action = "s3:ListBucket"
@@ -246,10 +291,10 @@ async def _handle(request: Request):
         # Unknown control-plane query operations must not be misinterpreted as
         # ordinary object reads/writes (e.g. ?tagging, ?versioning, ?acl).
         unsupported = {
-            "acl", "versioning", "versions", "tagging", "lifecycle", "policy",
+            "acl", "versioning", "versions", "lifecycle", "policy",
             "notification", "cors", "replication",
             "retention", "legal-hold", "logging", "location",
-            "encryption", "object-lock", "publicAccessBlock",
+            "encryption", "object-lock", "publicAccessBlock", "versionId",
         }
         if any(parameter in request.query_params for parameter in unsupported):
             return _error("NotImplemented", "This S3 extension is not implemented", 501)
@@ -346,6 +391,43 @@ async def _handle(request: Request):
             return _error("NoSuchBucket", "The specified bucket does not exist", 404)
         if not key:
             return _error("InvalidObjectName", "Object key is empty", 400)
+
+        if is_object_tagging:
+            try:
+                target = catalog.get(bucket, key)
+            except FileNotFoundError:
+                return _error("NoSuchKey", "Object does not exist", 404)
+            tags = ObjectTagStore(catalog)
+            if request.method == "GET":
+                return Response(_tag_xml(tags.get(target.item.id)),
+                                media_type="application/xml", status_code=200)
+            if request.method == "PUT":
+                body = bytearray()
+                async for block in request.stream():
+                    body.extend(block)
+                    if len(body) > 16 * 1024:
+                        raise TaggingError("MalformedXML", "Tagging XML exceeds maximum size")
+                _verify_upload_sha256(request, hashlib.sha256(body).digest())
+                md5_header = request.headers.get("content-md5")
+                if md5_header and not hmac.compare_digest(
+                    md5_header,
+                    base64.b64encode(hashlib.md5(body, usedforsecurity=False).digest()).decode("ascii")
+                ):
+                    raise TaggingError("BadDigest", "Content-MD5 checksum mismatch")
+                tags.replace_current(bucket, key, _parse_tag_xml(bytes(body)))
+                return Response(status_code=200)
+            if request.method == "DELETE":
+                async for block in request.stream():
+                    if block:
+                        raise TaggingError("InvalidRequest", "DeleteObjectTagging must have no body")
+                tags.replace_current(bucket, key, [])
+                return Response(status_code=204)
+            return _error("NotImplemented", "Unsupported object tagging method", 501)
+
+        if request.method == "PUT" and request.headers.get("x-amz-tagging") is not None:
+            # Do not silently ignore initial/copy tagging headers. Atomic tagging
+            # on initial PutObject will be enabled with a dedicated contract.
+            return _error("NotImplemented", "PutObject with x-amz-tagging unsupported", 501)
 
         if mpu_start or mpu_part or mpu_complete or mpu_abort or mpu_list:
             mpu = MultipartStore(catalog)
@@ -500,6 +582,12 @@ async def _handle(request: Request):
                 return _error("NotImplemented", "CopyObject option is unsupported", 501)
             if request.headers.get("x-amz-metadata-directive", "COPY") != "COPY":
                 return _error("NotImplemented", "Metadata replacement is unsupported", 501)
+            tag_directive = request.headers.get("x-amz-tagging-directive", "COPY")
+            if tag_directive != "COPY":
+                return _error("NotImplemented", "CopyObject tag replacement unsupported", 501)
+            if (request.headers.get("x-amz-tagging-directive") is not None
+                    and "x-amz-tagging-directive" not in signed_headers):
+                raise SigV4Error("AccessDenied", "Copy tagging directive must be signed")
             if (request.headers.get("x-amz-metadata-directive") is not None
                     and "x-amz-metadata-directive" not in signed_headers):
                 raise SigV4Error("AccessDenied", "Metadata directive must be signed")
@@ -617,6 +705,8 @@ async def _handle(request: Request):
         if partial:
             headers["Content-Range"] = f"bytes {start}-{end-1}/{item.size}"
         return StreamingResponse(stream(), status_code=206 if partial else 200, headers=headers)
+    except TaggingError as exc:
+        return _error(exc.code, str(exc), exc.status)
     except MultipartError as exc:
         return _error(exc.code, str(exc), exc.status)
     except SigV4Error as exc:
