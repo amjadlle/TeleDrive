@@ -13,9 +13,12 @@ from pathlib import Path
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
+import pytest
+
 from teledrive.db import connect_database
 from teledrive.storage import ManifestStore, TelegramObjectStorage
 from teledrive.storage.telethon_adapter import TelethonChunkTransport
+from teledrive.storage.target_resolver import resolve_telegram_target
 
 
 def test_real_telegram_upload_download_and_range():
@@ -23,10 +26,7 @@ def test_real_telegram_upload_download_and_range():
     api_hash = os.getenv("TELEDRIVE_E2E_API_HASH", "")
     session = os.getenv("TELEDRIVE_E2E_SESSION", "")
     if not all((api_id, api_hash, session)):
-        raise RuntimeError(
-            "Manual E2E requires TELEDRIVE_E2E_API_ID, "
-            "TELEDRIVE_E2E_API_HASH and TELEDRIVE_E2E_SESSION GitHub secrets"
-        )
+        pytest.skip("Manual E2E requires dedicated Telegram test credentials")
 
     async def scenario():
         with tempfile.TemporaryDirectory(prefix="teledrive-e2e-") as folder:
@@ -43,7 +43,7 @@ def test_real_telegram_upload_download_and_range():
             try:
                 if not await client.is_user_authorized():
                     raise RuntimeError("E2E StringSession is expired or not authorized")
-                target = await client.get_entity(os.getenv("TELEDRIVE_E2E_TARGET") or "me")
+                target = await resolve_telegram_target(client, os.getenv("TELEDRIVE_E2E_TARGET"))
                 backend = TelegramObjectStorage(
                     store, TelethonChunkTransport({"ci": (client, target)}),
                     chunk_size=2048,
