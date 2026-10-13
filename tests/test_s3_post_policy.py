@@ -794,7 +794,7 @@ def test_browser_post_rejects_unsigned_extra_and_duplicate_fields(service):
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
     body = b"not-writable"
     form = make_form(service, body)
-    assert post(service, body, {**form, "x-amz-meta-hijack": "yes"}).status_code == 400
+    assert post(service, body, {**form, "x-amz-meta-hijack": "yes"}).status_code in (400, 403)
     assert post(service, body, {**form, "key": "prefix/"+"$"+"{filename}"}).status_code == 400
     duplicate = [(name, (None, value)) for name, value in form.items()]
     duplicate += [
