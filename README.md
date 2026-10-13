@@ -340,12 +340,58 @@ DeleteObject (logical unlink), DeleteBucket (only physically empty),
 and single byte-range GET. Object writes are acknowledged only after Telegram
 upload and manifest commit.
 
-**Not yet supported:** multipart UploadPart/Complete/Abort, presigned URLs,
-virtual-host-style buckets, AWS chunked/unsigned PUT bodies, ACL/policy APIs,
-version listing, lifecycle, object lock, notifications,
-replication, and full SDK interoperability. Unsupported operations
-return explicit S3 XML `NotImplemented`, not simulated success. S3 compatibility
-tests include botocore-signed HTTP requests and boto3 loopback integration.
+**S3 multipart now implemented (core):** CreateMultipartUpload, UploadPart,
+ListParts (paginated), ListMultipartUploads (owner-scoped, paginated),
+CompleteMultipartUpload and AbortMultipartUpload. Parts are written directly
+to Telegram using bounded-size chunks and are **not** published as live S3
+objects until Complete. Before publication, Complete re-reads and validates
+all Telegram chunks, enforces S3's 5 MiB minimum for every part except the
+last, computes multipart MD5-derived ETag, and moves existing Telegram chunk
+references to one committed object through a single SQL transaction. This
+avoids re-uploading payload bytes to Telegram during completion. Retrying
+the same completed part selection returns the committed result; a different
+selection is rejected. Completed objects support full/Range GET, HEAD, and
+ListObjectsV2 with the multipart ETag.
+
+**Current multipart boundaries:** 10,000 parts per upload; uploaded parts are
+limited by `TELEDRIVE_REST_MAX_UPLOAD_BYTES` (default 2 GiB per request).
+Telegram Bot API download chunks remain capped to below 20 MiB (16 MiB
+recommended). The current gateway requires SigV4 header-signed SHA-256
+bodies. Part sizes and multipart ETags follow S3 conventions, but this is not
+a complete AWS S3 implementation.
+
+**Not yet supported:** presigned URLs, virtual-host-style buckets, AWS
+chunked/unsigned PUT bodies, ACL/policy APIs, version listing, lifecycle,
+object lock, notifications, replication, advanced multipart checksum modes,
+and full SDK interoperability. Unsupported operations return explicit S3 XML
+`NotImplemented` rather than simulated success. Tests cover botocore-signed
+HTTP, a real boto3 client, multipart/no-reupload, ACL/owner isolation,
+wrong checksums, abandoned uploads, and live PostgreSQL/MySQL chunk moves.
+
+### Kalan riskler ve yapılması gerekenler (S3 denetimi)
+
+- **Stale multipart completions:** A process killed during validation can
+  leave an upload in `completing`. Parts remain durably stored in Telegram,
+  but operator-controlled recovery with writer fencing is needed before
+  re-enabling or aborting that upload. Do not automatically delete its chunks.
+- **Orphan/obsolete Telegram parts:** Abort, part replacement, unselected
+  parts, and object overwrite can leave unreferenced Telegram messages.
+  Verified mark-and-sweep GC with retention, a dry-run preview and explicit
+  deletion authorization is required. Immediate deletion is intentionally off.
+- **Physical lifecycle/versioning:** DeleteObject currently unlinks the
+  current pointer; historical data remains and is not yet exposed through
+  complete S3 ListObjectVersions / restore APIs.
+- **Protocol coverage:** Presigned URLs, S3 multipart checksum variants,
+  SSE/metadata/tags, CopyObject, virtual-host requests, bucket policies and
+  lifecycle are separate acceptance-tested phases.
+- **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
+  Cyberduck), restart during upload/complete, rate limits, account revocation,
+  multiple simultaneous workers, and real-Telegram multipart E2E still need
+  dedicated CI coverage. Regular storage E2E green does not prove multipart
+  against a real Telegram account.
+
+No primary payload storage or fallback is added outside Telegram. SQL
+holds metadata and temporary upload state only; scratch files are ephemeral.
 
 ## Telegram-only object storage: Phase 1 foundation
 
