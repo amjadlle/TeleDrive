@@ -798,3 +798,18 @@ verification and explicit retention approvals are implemented.
 - Advanced `x-amz-meta-*` browser fields, arbitrary AWS policy operators
   and unsupported storage semantics are still rejected rather than
   acknowledged without persistence. Same-SHA CI signoff remains required.
+
+## P1 end-to-end acceptance trigger (2026-10-14)
+
+- This revision schedules one explicit real Telegram acceptance run for
+  the expanded Bot mixed-size workload and the Telethon 5/16 MiB matrix.
+  The upload/data tests run ONLY against configured dedicated E2E channels,
+  record every received message ID and perform test-owned message cleanup.
+- An all-green seven-workflow result at the **current exact commit SHA** is
+  required before this acceptance can be checked off. Do not treat a
+  cancelled, skipped opt-in stress case or an earlier commit as evidence.
+- Outstanding non-automatable work remains: full operator-authorized
+  reconciliation of a Bot message whose entire ACK was lost, prolonged
+  cross-host distributed Telegram flood/revocation soak, production secrets
+  restore, controlled live legacy cutover and unsupported advanced S3
+  policy/lifecycle semantics. These must not be marked complete from CI.
