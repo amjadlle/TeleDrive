@@ -15,7 +15,7 @@ from teledrive.s3.credentials import S3CredentialStore
 
 def make_form(service, data, *, key="browser/upload.bin", seconds=300,
               missing=None, clauses=None, issued=None, key_prefix=None,
-              status=None, redirect=None):
+              status=None, redirect=None, content_type=None, content_type_prefix=None):
     credential = issued or service[1]
     current = datetime.now(timezone.utc).replace(microsecond=0)
     day = current.strftime("%Y%m%d")
@@ -30,9 +30,13 @@ def make_form(service, data, *, key="browser/upload.bin", seconds=300,
         form["success_action_status"] = status
     if redirect is not None:
         form["success_action_redirect"] = redirect
+    if content_type is not None:
+        form["Content-Type"] = content_type
     conditions = [{"bucket": "backup-bucket"}]
     conditions.extend(
         ["starts-with", "$key", key_prefix] if k == "key" and key_prefix is not None
+        else ["starts-with", "$Content-Type", content_type_prefix]
+        if k == "Content-Type" and content_type_prefix is not None
         else {k: v}
         for k, v in form.items()
     )
@@ -407,6 +411,110 @@ def test_real_boto3_presigned_post_https_callback_and_payload_integrity(service)
     assert result.status_code == 303, result.text
     assert parse_qs(urlsplit(result.headers["location"]).query)["key"] == ["sdk/callback.bin"]
     assert signed(service, "GET", "/backup-bucket/sdk/callback.bin").content == payload
+    assert service[2].uploads == 1
+
+
+
+
+@pytest.mark.parametrize("mime", [
+    "application/pdf", "image/png", "text/plain; charset=utf-8",
+    "application/octet-stream",
+])
+def test_browser_post_content_type_is_signed_persisted_and_retrievable(service, mime):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = hashlib.shake_256(mime.encode()).digest(65537)
+    key = "browser/metadata/" + hashlib.sha256(mime.encode()).hexdigest()[:12]
+    result = post(service, payload, make_form(
+        service, payload, key=key, content_type=mime,
+    ))
+    assert result.status_code == 204, result.text
+    read = signed(service, "GET", "/backup-bucket/" + key)
+    assert read.status_code == 200 and read.content == payload
+    assert read.headers["content-type"] == mime
+    head = signed(service, "HEAD", "/backup-bucket/" + key)
+    assert head.status_code == 200 and head.headers["content-type"] == mime
+    assert service[2].uploads == 1
+
+
+def test_browser_post_content_type_signed_prefix_accepts_only_authorized_mimes(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = b"verified-image" * 327
+    policy = make_form(
+        service, payload, key="browser/image-policy.bin",
+        content_type="image/png", content_type_prefix="image/",
+    )
+    form = {**policy, "Content-Type": "image/webp"}
+    assert post(service, payload, form).status_code == 204
+    got = signed(service, "HEAD", "/backup-bucket/browser/image-policy.bin")
+    assert got.headers["content-type"] == "image/webp"
+    assert post(service, payload, {**policy, "Content-Type": "text/html"}).status_code == 403
+    assert service[2].uploads == 1
+
+
+@pytest.mark.parametrize("override", [
+    "text/html", "application/javascript", "application/pdf ",
+    "image/png\\nSet-Cookie: evil=1",
+])
+def test_browser_post_exact_mime_cannot_be_changed_or_injected(service, override):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"mime-policy-enforced"
+    form = make_form(service, body, content_type="application/pdf")
+    response = post(service, body, {**form, "Content-Type": override})
+    assert response.status_code in (400, 403)
+    assert service[2].uploads == 0
+
+
+def test_browser_post_unsigned_mime_and_malformed_mime_denied_before_send(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"metadata-must-be-bound"
+    unsigned = make_form(service, body)
+    assert post(service, body, {**unsigned, "Content-Type": "text/plain"}).status_code == 403
+    form = make_form(service, body, content_type="text/plain")
+    conditions = json.loads(base64.b64decode(form["policy"]))["conditions"]
+    constraints = [
+        entry for entry in conditions if entry != {"Content-Type": "text/plain"}
+    ]
+    assert post(service, body, make_form(
+        service, body, content_type="text/plain", clauses=constraints,
+    )).status_code == 403
+    malformed = make_form(service, body, content_type="text/\\u0001")
+    assert post(service, body, malformed).status_code == 400
+    assert service[2].uploads == 0
+
+
+def test_real_boto3_presigned_browser_post_content_type_is_persisted(service):
+    import boto3
+    from botocore.config import Config
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = hashlib.shake_256(b"sdk-mime").digest(131089)
+    checksum = base64.b64encode(hashlib.sha256(payload).digest()).decode()
+    creds = service[1]
+    client = boto3.client(
+        "s3", endpoint_url="http://localhost:9000",
+        aws_access_key_id=creds.access_key,
+        aws_secret_access_key=creds.secret_key,
+        region_name="us-east-1", config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+        ),
+    )
+    signed_form = client.generate_presigned_post(
+        Bucket="backup-bucket", Key="sdk/mime.pdf",
+        Fields={
+            "Content-Type": "application/pdf",
+            "x-amz-checksum-sha256": checksum,
+        },
+        Conditions=[
+            {"Content-Type": "application/pdf"},
+            {"x-amz-checksum-sha256": checksum},
+            ["content-length-range", 0, 8 * 1024 * 1024],
+        ],
+        ExpiresIn=120,
+    )
+    assert post(service, payload, signed_form["fields"]).status_code == 204
+    response = signed(service, "GET", "/backup-bucket/sdk/mime.pdf")
+    assert response.status_code == 200 and response.content == payload
+    assert response.headers["content-type"] == "application/pdf"
     assert service[2].uploads == 1
 
 
