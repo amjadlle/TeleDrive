@@ -261,7 +261,10 @@ class Database:
             row = self.connection.execute(
                 select(leases.c.holder, leases.c.lease_until).where(leases.c.name == name)
             ).first()
-            return bool(row and row[0] == holder and int(row[1]) >= now)
+            owned = bool(row and row[0] == holder and int(row[1]) >= now)
+            # Close read snapshot before another SQL connection writes jobs.
+            self.connection.commit()
+            return owned
         try:
             self.connection.execute(insert(leases).values(
                 name=name, holder=holder, lease_until=lease_until, last_update_ts=now,
@@ -285,7 +288,9 @@ class Database:
         row = self.connection.execute(
             select(leases.c.holder, leases.c.lease_until).where(leases.c.name == name)
         ).first()
-        return bool(row and row[0] == holder and int(row[1]) >= now)
+        owned = bool(row and row[0] == holder and int(row[1]) >= now)
+        self.connection.commit()
+        return owned
 
     def release_lease(self, name: str, holder: str) -> None:
         self.connection.execute(
