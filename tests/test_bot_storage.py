@@ -278,3 +278,29 @@ def test_bot_upload_interval_validation(storage):
         BotApiChunkTransport(
             api, BotFileIndex(database), chat_id=api.chat_id, min_upload_interval=-1,
         )
+
+
+def test_bot_download_does_not_delete_preexisting_destination(tmp_path, monkeypatch):
+    from teledrive.storage import bot_api_adapter
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size):
+            return b"new data"
+
+    class Opener:
+        def open(self, request, timeout):
+            return Response()
+
+    monkeypatch.setattr(bot_api_adapter, "_telegram_https_opener", lambda: Opener())
+    destination = tmp_path / "existing.bin"
+    destination.write_bytes(b"important original")
+    api = BotApiClient("123:fakeToken")
+    with pytest.raises(BotApiError, match="download failed"):
+        api._download_sync("documents/file.bin", destination)
+    assert destination.read_bytes() == b"important original"
