@@ -59,13 +59,16 @@ every workflow at the release SHA.
   imports, operator preview, fenced automatic cutover, durable Bot API
   upload and worker restart are implemented. Production cutover remains
   explicit and needs operator acceptance on its own data/credentials.
-- [ ] **P1.3 Advanced S3 parity:** published-only version listing/restore,
-  conditional and presigned checksum-bound Complete, version tagging,
-  historical CopySource and common checksums are implemented; S3 delete
-  markers are implemented; generic presigned browser POST remains outstanding.
-- [ ] **P1.4 Operations:** operator controls, metrics/alerts, SQLite
-  backup/verification and runbooks are implemented; repository protection,
-  cross-platform migrations and live-remote DR drills remain outstanding.
+- [ ] **P1.3 Advanced S3 parity:** version listing/restore, logical
+  DeleteMarker/VersionId DELETE, conditional writes, presigned multipart
+  operations, historical CopySource, common checksums and checksum-pinned
+  browser POST are implemented and tested. Full AWS browser-policy operators,
+  redirect/status variants and S3 lifecycle remain unsupported.
+- [ ] **P1.4 Operations:** operator metrics/alerts, SQLite online backup and
+  verified real Telegram payload restore, Windows/Linux and PostgreSQL/MySQL
+  CI, and multi-process queue tests are implemented. Native database DR,
+  sustained multi-host Telegram fault/429 soak, production cutover and final
+  repository/release protection still require operator acceptance.
 
 ## P2 — advanced functionality
 
@@ -231,11 +234,12 @@ verification and explicit retention approvals are implemented.
   candidate planner and explicit current-HEAD migration preview.
 
 ### Still open — do not claim these are implemented
-- **P1 remaining:** Bot API ACK-without-receipt loss (not discoverable via
-  Bot API), generic browser presigned POST, live multi-host Telegram rate-limit
-  soak, PostgreSQL/MySQL disaster restore and an operator-controlled legacy
-  production cutover. Receipt-persisted ACKs, automated folder import,
-  logical S3 delete markers and live SQLite/Bot API restore now work.
+- **P1 remaining:** Bot API ACK lost before receipt persistence (Bot API
+  cannot read arbitrary historical channel posts), additional browser POST
+  wildcard/redirect policy variants, long-running multi-host Telegram 429
+  and revocation soak, native PostgreSQL/MySQL disaster restores, and
+  operator-controlled production legacy cutover. Receipt-persisted ACKs,
+  folder import, logical S3 delete markers and real SQLite/Bot restore pass.
 - **P2 remaining:** audited retention-approved physical GC, S3 SSE/policy/
   lifecycle semantics, DNS/TLS and external virtual-host/Cyberduck acceptance,
   Telegram rebuild, live full DR/fault/rate-limit benchmarks and installers.
@@ -617,3 +621,27 @@ verification and explicit retention approvals are implemented.
   cleanup scope is exclusively the ACK IDs recorded by the test invocation.
 - The workflow defaults to skipping these high-bandwidth checks on routine
   pushes and supports an explicit workflow_dispatch run_stress flag.
+
+## P1 test signoff evidence — 2026-10-14
+
+- Feature SHA `a01b79bb851b6ceeacae4983a29af8827587854e`:
+  **7/7** GitHub Actions workflows successful.
+- Storage API **379 passed**, AWS CLI + rclone **3 passed**, PostgreSQL 17 /
+  MySQL 8.4 DB Integration successful; Security CI and Windows/Ubuntu Desktop
+  CI successful. Release workflow was **verification only**: no release tag,
+  binary publication or main branch merge.
+- Dedicated Bot API channel **12 live tests passed**, including real Bot ACK
+  stored without a chunk journal, subsequent SQL restart, exact readback and
+  verified adoption **without retransmitting the accepted chunk**.
+- Dedicated Telegram user account **10 live tests passed**, including
+  one-shot **5 MiB + 1 B** and **16 MiB + 17 B** payloads split into 4 MiB
+  Telegram messages, per-message hashes, reopened SQLite, full download and
+  cross-boundary byte ranges. The `[p1-live-size]` marker is opt-in and not
+  repeated on ordinary pushes.
+- boto3 native SigV4 browser POST, strict signed-policy SHA-256, permission
+  checks, tampering, lifetime, size and duplicate form-field rejection pass
+  against real HTTP multipart requests, backed by deterministic Telegram
+  bytes and real SQL manifests. Unsupported policy operators remain explicit.
+- **This signoff is for the tested feature-branch subset, not a blanket P1
+  production readiness certification.** A later document-only commit does
+  not change the underlying tested implementation but still gets its own CI.
