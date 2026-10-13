@@ -356,3 +356,49 @@ def test_s3_folder_larger_than_backend_page_is_not_repeated():
     keys3, common3, _, _, more3 = _page(catalog, "bucket", "", "/", after2, 1, skip2)
     assert [x.item.key for x in keys3] == ["root"]
     assert common3 == [] and not more3
+
+
+def test_signed_md5_allows_standard_unsigned_payload_without_sacrificing_integrity(service):
+    """The rclone/aws-sdk variant must sign Content-MD5 and verify actual bytes.
+
+    A mutated body or an omitted signed checksum is rejected *before* upload.
+    Presigned PUT still requires its SHA-256 checksum-binding policy.
+    """
+    import base64
+    from botocore.auth import S3SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"standard-unsigned-payload-with-content-md5" * 37
+    digest = base64.b64encode(hashlib.md5(body, usedforsecurity=False).digest()).decode()
+    url = "http://localhost:9000/backup-bucket/rclone-compatible.bin"
+    request = AWSRequest(
+        method="PUT", url=url, data=body, headers={"Content-MD5": digest},
+    )
+    request.context["payload_signing_enabled"] = False
+    S3SigV4Auth(Credentials(service[1].access_key, service[1].secret_key),
+                "s3", "us-east-1").add_auth(request)
+    headers = dict(request.headers)
+    assert headers.get("X-Amz-Content-SHA256") == "UNSIGNED-PAYLOAD"
+    assert "content-md5" in headers["Authorization"].lower()
+    before = service[2].uploads
+    denied = service[0].put("/backup-bucket/rclone-compatible.bin",
+                            content=b"replaced-body", headers=headers)
+    assert denied.status_code == 400
+    assert service[2].uploads == before
+    allowed = service[0].put("/backup-bucket/rclone-compatible.bin",
+                             content=body, headers=headers)
+    assert allowed.status_code == 200, allowed.text
+    assert service[2].uploads == before + 1
+    assert signed(service, "GET", "/backup-bucket/rclone-compatible.bin").content == body
+
+    unsigned = AWSRequest(method="PUT", url="http://localhost:9000/backup-bucket/no-checksum",
+                          data=body)
+    unsigned.context["payload_signing_enabled"] = False
+    S3SigV4Auth(Credentials(service[1].access_key, service[1].secret_key),
+                "s3", "us-east-1").add_auth(unsigned)
+    denied = service[0].put("/backup-bucket/no-checksum",
+                            content=body, headers=dict(unsigned.headers))
+    assert denied.status_code == 400
+    assert service[2].uploads == before + 1
