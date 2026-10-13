@@ -254,7 +254,10 @@ async def _handle(request: Request):
                 catalog.create_bucket(bucket, int(time.time()))
                 return Response(status_code=200)
             if request.method == "DELETE":
-                catalog.delete_bucket(bucket)
+                try:
+                    catalog.delete_bucket(bucket)
+                except ValueError as exc:
+                    raise MultipartError("BucketNotEmpty", str(exc), 409) from exc
                 return Response(status_code=204)
             if bucket not in catalog.list_buckets():
                 return _error("NoSuchBucket", "The specified bucket does not exist", 404)
