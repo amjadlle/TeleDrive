@@ -152,3 +152,33 @@ def test_bot_download_paths_cannot_escape_telegram_host(path):
 def test_bot_token_validation():
     with pytest.raises(ValueError, match="Invalid"):
         BotApiClient("not-a-token")
+
+
+@pytest.mark.parametrize("destination", [
+    "http://api.telegram.org/file",
+    "https://evil.example/steal",
+    "https://api.telegram.org.evil.example/file",
+    "file:///etc/passwd",
+    "https://api.telegram.org:444/file",
+    "https://user:password@api.telegram.org/file",
+])
+def test_token_bearing_requests_reject_redirects_outside_telegram_https(destination):
+    import urllib.request
+    from teledrive.storage.bot_api_adapter import _TelegramHTTPSRedirects
+
+    request = urllib.request.Request("https://api.telegram.org/bot123/test")
+    with pytest.raises(BotApiError, match="disallowed"):
+        _TelegramHTTPSRedirects().redirect_request(
+            request, None, 302, "Found", {}, destination
+        )
+
+
+def test_token_bearing_request_allows_only_telegram_https_redirect():
+    import urllib.request
+    from teledrive.storage.bot_api_adapter import _TelegramHTTPSRedirects
+
+    request = urllib.request.Request("https://api.telegram.org/bot123/test")
+    result = _TelegramHTTPSRedirects().redirect_request(
+        request, None, 302, "Found", {}, "https://api.telegram.org/file/bot123/data"
+    )
+    assert result.full_url.startswith("https://api.telegram.org/")
