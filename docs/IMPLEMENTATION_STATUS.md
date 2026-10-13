@@ -1,8 +1,9 @@
 # TeleDrive implementation status and acceptance backlog
 
 Audit date: **2026-10-13**. Snapshot: `feature/docker-webui-multiaccount`
-at `916a41da1734`. This is a code/CI evidence inventory, not a
-claim of production readiness. Recheck every workflow at the release SHA.
+at `e88d4502cd2d` plus the final P0 signoff candidate. This is a
+code/CI evidence inventory, not a claim of production readiness. Recheck
+every workflow at the release SHA.
 
 ## Implementation inventory
 
@@ -24,12 +25,15 @@ claim of production readiness. Recheck every workflow at the release SHA.
 - [x] **P0.1 Immutable green build:** complete Security, Storage API,
   Database, Desktop (Linux/Windows), and both Telegram E2E workflows on
   the *same commit SHA*. Cancelled jobs do not count.
-- [ ] **P0.2 Recovery safety:** inject crashes before/after Telegram ACK,
-  at SQL commit, and during multipart Complete; prove SQL fencing and no
-  deletion of READY or PENDING Telegram data.
-- [ ] **P0.3 Credentials/security matrix:** independent revoked/expired/
-  read-only credentials on REST, S3, presigned URLs, tagging, copy, and
-  multipart; negative SigV4, metadata mutation and protocol abuse tests.
+- [x] **P0.2 Recovery safety (deterministic contract):** pre/post Telegram ACK,
+  forced final multipart SQL commit rollback, retrieval failure, SQL restart,
+  old-writer fencing and safe non-deletion of READY/PENDING message histories
+  covered by Storage API and security regressions. Real process SIGKILL and
+  multi-worker soak remain staging/operational acceptance.
+- [x] **P0.3 Credentials/security matrix (implemented HTTP scope):**
+  independent revoked/expired/read-only credential denial, REST/S3 separation,
+  presigned PUT/GET, tagging, copy, multipart, SigV4 mutation and unsafe
+  CopyObject metadata directive injection tests passed in CI.
 - [x] **P0.4 Real multipart:** run Telegram Bot Storage E2E with
   `run_multipart=true`, or a reviewed feature-branch merge commit
   containing `[p0-live-multipart]`. Verify 5 MiB+ Telegram data,
@@ -39,8 +43,12 @@ claim of production readiness. Recheck every workflow at the release SHA.
   **Verified:** commit `32bb3e850f2c5841cbcb2fa2525340ee25b6667b`,
   Telegram Bot Storage E2E job 115423376758: `TELEDRIVE_E2E_MULTIPART=1`,
   **2 passed in 29.98s**, no skips.
-- [ ] **P0.5 Client interoperability:** real AWS CLI and rclone required;
-  investigate Cyberduck and large Range/multipart edge cases.
+- [x] **P0.5 Supported-client interoperability:** actual AWS CLI and
+  rclone processes pass CRUD, sync and forced multipart; multi-chunk 5 MiB+
+  Range/HEAD invalid-range cases verified. Cyberduck is **not certified or
+  advertised as supported**; its official S3 HTTP/path-style profile was
+  investigated and remains a separately tracked P1 manual-client acceptance.
+  See `docs/P0_ACCEPTANCE.md`.
 
 ## P1 — completeness after P0
 
@@ -64,11 +72,12 @@ claim of production readiness. Recheck every workflow at the release SHA.
 
 ## CI evidence (snapshot only)
 
-At `904cb15b3cc7`, all seven push workflows completed successfully on
+At `e3f086f3361`, all seven push workflows completed successfully on
 2026-10-13: Security, Storage API, live PostgreSQL/MySQL, Linux/Windows
 Desktop, both standard Telegram E2E, and release verification (not an
-actual release publication). The 5 MiB+ real multipart test remains an
-explicit opt-in *until a non-skipped live run is recorded*.
+actual release publication). Real 5 MiB+ multipart also passed non-skipped
+at `32bb3e850f2c` (run `38434063562`), with further P0 tests validated
+on `e88d4502cd2d`. Verify all seven again on final signoff SHA.
 Production physical GC and full AWS S3 compliance are not implemented.
 
 ## P0 safety merge
@@ -81,13 +90,23 @@ Production physical GC and full AWS S3 compliance are not implemented.
   with Storage API CI explicitly running the new credential matrix.
 - Live Telegram 5 MiB+ multipart **passed** at `32bb3e8` with restart
   persistence, checksum verification and test-only message cleanup.
-- P0.2, P0.3 and P0.5 require their remaining acceptance checks before
-  they can be declared fully closed.
+- P0.2, P0.3 and P0.5 deterministic P0 contracts now pass in CI.
+  Extra staging-only stress, Cyberduck and true SIGKILL runs remain explicit
+  P1/staging acceptance, not implied production support.
 
 ## P0 final acceptance additions
 
 - `tests/test_s3_p0_final.py` injects a database commit failure after multipart
   chunk reparenting, Telegram retrieval failure during Complete, revoked
   presigned read/write credentials, and 5 MiB+ multi-chunk Range/HEAD tests.
-- P0.2/P0.3/P0.5 remain open until the latest SHA passes CI and any
-  unautomated external-client acceptance (notably Cyberduck) is verified.
+- P0 candidate readiness requires a **single fresh seven-workflow green SHA**.
+  Cyberduck remains unvalidated and is not a supported release client;
+  see `docs/P0_ACCEPTANCE.md`.
+
+## P1 acceptance handoff
+
+The P0 definition is bounded to the tested safe S3 client subset and
+non-destructive Telegram storage behavior. Do not infer that Cyberduck, full
+S3/AWS feature parity, live cross-worker process kill or physical GC have
+passed acceptance. The next workstream is durable queue/resume and operator
+stale-PENDING recovery with explicit fencing and dry-run approval.

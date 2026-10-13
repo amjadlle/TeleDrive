@@ -156,3 +156,12 @@ def test_live_multipart_push_is_explicitly_opted_in():
     assert "[p0-live-multipart]" in expression
     assert "github.event_name == 'push'" in expression
     assert job["timeout-minutes"] == "15"
+
+
+def test_final_p0_contract_runs_on_database_and_desktop_workflow_changes():
+    # Cross-service regressions must re-run at the release SHA; passing an
+    # unrelated earlier desktop/database build is not immutable signoff.
+    for name in ("database-ci.yml", "desktop-ci.yml"):
+        rules = workflow(name)["on"]
+        assert "tests/test_s3_p0_final.py" in rules["push"]["paths"]
+        assert "tests/test_s3_p0_final.py" in rules["pull_request"]["paths"]
