@@ -593,3 +593,16 @@ verification and explicit retention approvals are implemented.
   **8/8** and Bot E2E `38470588698` passed **9/9** (3 heavy tests skipped).
   Later SHA-bound queue, backup and manual-large acceptance must be checked
   independently; prior successful runs do not certify new commits.
+
+## P1.3 checksum-bound SigV4 browser POST policy
+
+- Browser multipart POST to /bucket now supports a **bounded strict policy**
+  profile: exact key and bucket, exact SHA256 checksum, SigV4 credential and
+  signing time, an explicit content-length-range condition, and a 15-minute
+  maximum expiration. Signatures are verified with existing revocable S3
+  credentials and s3:PutObject scope. The file is independently rehashed
+  before any Telegram call; failed signatures never create SQL manifests.
+- Wildcard keys, starts-with policies, unsigned extra form fields, redirects,
+  ACL/encryption/retention and other unsupported browser POST extensions are
+  deliberately rejected. The entire MIME form is capped at 20 MiB or lower
+  configured REST upload limit. Physical Telegram deletion remains disabled.

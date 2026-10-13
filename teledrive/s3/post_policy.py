@@ -1,0 +1,143 @@
+"""Strict, checksum-pinned SigV4 browser POST policy verifier."""
+import base64
+import binascii
+import hashlib
+import hmac
+import json
+import re
+from datetime import datetime, timedelta, timezone
+from email import policy as mime_policy
+from email.parser import BytesParser
+
+from .sigv4 import SigV4Error, _hmac
+
+FORM_LIMIT = 20 * 1024 * 1024
+FIELDS = frozenset(("key", "policy", "x-amz-algorithm", "x-amz-credential",
+                    "x-amz-date", "x-amz-signature", "x-amz-checksum-sha256"))
+CONDITIONS = FIELDS - {"policy", "x-amz-signature"} | {"bucket"}
+
+
+def parse_form(content_type: str, data: bytes):
+    """Parse at most one file and exactly the expected seven policy fields."""
+    if len(data) > FORM_LIMIT:
+        raise SigV4Error("EntityTooLarge", "Browser form is too large")
+    if (len(content_type) > 256 or not content_type.lower().startswith("multipart/form-data;")
+            or "\r" in content_type or "\n" in content_type):
+        raise SigV4Error("InvalidRequest", "Expected multipart/form-data")
+    try:
+        mime = ("Content-Type: " + content_type +
+                "\r\nMIME-Version: 1.0\r\n\r\n").encode("ascii") + data
+        msg = BytesParser(policy=mime_policy.default).parsebytes(mime)
+    except (ValueError, UnicodeError) as exc:
+        raise SigV4Error("InvalidRequest", "Malformed upload form") from exc
+    if not msg.is_multipart() or msg.defects:
+        raise SigV4Error("InvalidRequest", "Malformed multipart upload")
+    items = list(msg.iter_parts())
+    if len(items) > 8:
+        raise SigV4Error("InvalidRequest", "Too many browser form parts")
+    fields = {}
+    file_bytes = None
+    for part in items:
+        name = part.get_param("name", header="content-disposition")
+        if (part.is_multipart() or part.defects or
+                part.get_content_disposition() != "form-data" or
+                name not in FIELDS | {"file"} or
+                part.get("Content-Transfer-Encoding", "binary").lower()
+                not in ("binary", "7bit", "8bit")):
+            raise SigV4Error("InvalidRequest", "Unsupported form field")
+        content = part.get_payload(decode=True)
+        if not isinstance(content, bytes):
+            raise SigV4Error("InvalidRequest", "Malformed browser form part")
+        if name == "file":
+            if file_bytes is not None:
+                raise SigV4Error("InvalidRequest", "Duplicate form file")
+            file_bytes = content
+        else:
+            if name in fields or len(content) > 12000:
+                raise SigV4Error("InvalidRequest", "Duplicate or oversized form field")
+            try:
+                fields[name] = content.decode("utf-8")
+            except UnicodeError as exc:
+                raise SigV4Error("InvalidRequest", "Invalid field encoding") from exc
+    if file_bytes is None or set(fields) != FIELDS:
+        raise SigV4Error("InvalidRequest", "Missing signed browser form fields")
+    return fields, file_bytes
+
+
+def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=None):
+    if len(body) > max_bytes:
+        raise SigV4Error("EntityTooLarge", "Browser payload too large")
+    scope = re.fullmatch(
+        r"([^/\s]{1,64})/(\d{8})/([a-z0-9-]{1,32})/s3/aws4_request",
+        fields["x-amz-credential"],
+    )
+    if scope is None or fields["x-amz-algorithm"] != "AWS4-HMAC-SHA256":
+        raise SigV4Error("AccessDenied", "Unsupported browser POST scope")
+    access, day, region = scope.groups()
+    stamp = fields["x-amz-date"]
+    if not re.fullmatch(r"\d{8}T\d{6}Z", stamp) or stamp[:8] != day:
+        raise SigV4Error("AccessDenied", "Invalid policy date")
+    try:
+        signed_at = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise SigV4Error("AccessDenied", "Invalid policy signing date") from exc
+    now = now or datetime.now(timezone.utc)
+    if not -300 <= (now - signed_at).total_seconds() <= 900:
+        raise SigV4Error("AccessDenied", "Policy signing date expired")
+    key = fields["key"]
+    if not key or len(key.encode()) > 1024 or "$" + "{" in key:
+        raise SigV4Error("InvalidArgument", "Exact non-template object key required")
+    try:
+        expected_sha = base64.b64decode(fields["x-amz-checksum-sha256"], validate=True)
+        raw = base64.b64decode(fields["policy"], validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise SigV4Error("InvalidArgument", "Invalid policy base64") from exc
+    if len(expected_sha) != 32 or len(raw) > 8192 or len(raw) == 0:
+        raise SigV4Error("InvalidArgument", "Invalid policy or checksum size")
+    if not hmac.compare_digest(expected_sha, hashlib.sha256(body).digest()):
+        raise SigV4Error("BadDigest", "Browser form checksum mismatch")
+    try:
+        doc = json.loads(raw)
+        expiration = datetime.strptime(doc["expiration"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        clauses = doc["conditions"]
+    except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+        raise SigV4Error("InvalidArgument", "Invalid POST policy JSON") from exc
+    if (not isinstance(doc, dict) or set(doc) != {"conditions", "expiration"}
+            or not isinstance(clauses, list) or len(clauses) != 7
+            or not now < expiration <= signed_at + timedelta(minutes=15)):
+        raise SigV4Error("AccessDenied", "Policy must expire within fifteen minutes")
+    bound = {name: fields[name] for name in CONDITIONS if name != "bucket"}
+    bound["bucket"] = bucket
+    seen = set()
+    has_range = False
+    for entry in clauses:
+        if (isinstance(entry, list) and len(entry) == 3 and
+                entry[0] == "content-length-range"):
+            if (has_range or any(type(value) is not int for value in entry[1:])
+                    or not 0 <= entry[1] <= len(body) <= entry[2] <= max_bytes):
+                raise SigV4Error("AccessDenied", "Invalid signed size range")
+            has_range = True
+            continue
+        if isinstance(entry, dict) and len(entry) == 1:
+            name, value = next(iter(entry.items()))
+        elif (isinstance(entry, list) and len(entry) == 3
+              and entry[0] == "eq" and isinstance(entry[1], str)
+              and entry[1].startswith("$")):
+            name, value = entry[1][1:], entry[2]
+        else:
+            raise SigV4Error("AccessDenied", "Unsupported POST policy condition")
+        if name not in CONDITIONS or name in seen or value != bound[name]:
+            raise SigV4Error("AccessDenied", "POST policy does not pin every form field")
+        seen.add(name)
+    if seen != CONDITIONS or not has_range:
+        raise SigV4Error("AccessDenied", "Incomplete POST upload constraints")
+    secret = lookup_secret(access, "s3:PutObject")
+    if secret is None:
+        raise SigV4Error("AccessDenied", "Revoked or unauthorized POST credential")
+    key_bytes = _hmac(b"AWS4" + secret.encode(), day)
+    for element in (region, "s3", "aws4_request"):
+        key_bytes = _hmac(key_bytes, element)
+    signature = hmac.new(key_bytes, fields["policy"].encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, fields["x-amz-signature"]):
+        raise SigV4Error("SignatureDoesNotMatch", "Browser form signature mismatch")
+    return key

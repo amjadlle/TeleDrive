@@ -29,6 +29,7 @@ from sqlalchemy import select
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.checksums import crc32c, crc64nvme
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
+from teledrive.s3.post_policy import parse_form, verify_post_policy, FORM_LIMIT
 from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
 from teledrive.s3.batch_delete import BatchDeleteError, MAX_XML_BYTES, parse_batch, verify_body
 from teledrive.s3.conditions import http_last_modified, read_precondition
@@ -467,6 +468,8 @@ async def _handle(request: Request):
                 "GET": "s3:GetObject", "HEAD": "s3:GetObject",
                 "PUT": "s3:PutObject", "DELETE": "s3:DeleteObject",
             }.get(request.method)
+        form_upload = bool(bucket and not separator and request.method == "POST"
+                           and not request.query_params)
         multi_delete = bool(bucket and not separator and request.method == "POST"
                             and "delete" in request.query_params)
         if "delete" in request.query_params and not multi_delete:
@@ -552,6 +555,8 @@ async def _handle(request: Request):
             ):
                 return _error("NotImplemented", "Unsupported GetObjectAttributes variant", 501)
             action = "s3:GetObjectAttributes"
+        elif form_upload:
+            action = "s3:PutObject"
         elif multi_delete:
             if any(p in request.query_params for p in ("tagging", "uploads", "uploadId", "versionId")):
                 return _error("NotImplemented", "Conflicting DeleteObjects controls", 501)
@@ -607,6 +612,49 @@ async def _handle(request: Request):
         master = load_master_key()
         db = db_connect()
         store = S3CredentialStore(db, master)
+        if form_upload:
+            if request.headers.get("authorization"):
+                raise SigV4Error("AccessDenied", "Ambiguous form and header authentication")
+            max_upload = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+            form_limit = min(FORM_LIMIT, max_upload)
+            if form_limit < 1:
+                return _error("EntityTooLarge", "Form upload size is disabled", 413)
+            form_bytes = bytearray()
+            async for block in request.stream():
+                form_bytes.extend(block)
+                if len(form_bytes) > form_limit:
+                    return _error("EntityTooLarge", "Browser upload form too large", 413)
+            post_fields, payload = parse_form(
+                request.headers.get("content-type", ""), bytes(form_bytes),
+            )
+            post_key = verify_post_policy(
+                post_fields, payload, bucket, store.resolve, max_bytes=form_limit,
+            )
+            post_catalog = BucketCatalog(ManifestStore(db))
+            if bucket not in post_catalog.list_buckets():
+                return _error("NoSuchBucket", "Upload bucket does not exist", 404)
+            directory = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+            _secure_mkdir(directory)
+            fd, temp_name = tempfile.mkstemp(prefix="s3-form-", dir=directory)
+            staged = Path(temp_name)
+            try:
+                with os.fdopen(fd, "wb") as dest:
+                    dest.write(payload)
+                    dest.flush()
+                    os.fsync(dest.fileno())
+                transport = storage_bot_transport(db)
+                await transport.verify_target()
+                obj = await TelegramObjectStorage(
+                    post_catalog.manifests, transport,
+                    chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                    scratch_directory=directory,
+                ).put_file(bucket, post_key, staged)
+                post_catalog.publish(obj.id, now=int(time.time()))
+                return Response(status_code=204, headers={
+                    "ETag": '"' + obj.sha256 + '"', "x-amz-version-id": obj.id,
+                })
+            finally:
+                staged.unlink(missing_ok=True)
         owner = verify_header_signature(request, store.resolve, action)
         if request.method in {"PUT", "POST"}:
             _reject_unimplemented_write_options(request)
@@ -1448,7 +1496,8 @@ async def _handle(request: Request):
     except SigV4Error as exc:
         return _error(exc.code, exc.message, {
             "RequestTimeTooSkewed": 403, "NotImplemented": 501,
-            "InvalidArgument": 400,
+            "InvalidArgument": 400, "InvalidRequest": 400,
+            "EntityTooLarge": 413,
             "XAmzContentSHA256Mismatch": 400, "BadDigest": 400,
             "InvalidRange": 416,
         }.get(exc.code, 403))
