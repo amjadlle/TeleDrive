@@ -402,3 +402,29 @@ def test_signed_md5_allows_standard_unsigned_payload_without_sacrificing_integri
                             content=body, headers=dict(unsigned.headers))
     assert denied.status_code == 400
     assert service[2].uploads == before + 1
+
+
+def test_private_acl_and_standard_class_hints_do_not_weaken_private_storage(service):
+    """Only the default private/standard hints map to actual gateway behavior."""
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    value = b"retained-in-telegram"
+    before = service[2].uploads
+    ok = signed(service, "PUT", "/backup-bucket/default-hints.txt", value,
+                extra_headers={"x-amz-acl": "private",
+                               "x-amz-storage-class": "STANDARD"})
+    assert ok.status_code == 200, ok.text
+    assert signed(service, "GET", "/backup-bucket/default-hints.txt").content == value
+    assert service[2].uploads == before + 1
+
+    for name, bad in [
+        ("x-amz-acl", "public-read"),
+        ("x-amz-acl", "authenticated-read"),
+        ("x-amz-storage-class", "GLACIER"),
+        ("x-amz-storage-class", "STANDARD_IA"),
+    ]:
+        refused = signed(service, "PUT", "/backup-bucket/refused",
+                         value, extra_headers={name: bad})
+        assert refused.status_code == 501
+        assert b"NotImplemented" in refused.content
+    assert service[2].uploads == before + 1
+    assert signed(service, "GET", "/backup-bucket/refused").status_code == 404
