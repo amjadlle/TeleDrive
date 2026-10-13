@@ -114,17 +114,29 @@ def _presigned_signature(request: Request, lookup_secret, permission: str,
             raise SigV4Error("SignatureDoesNotMatch", "Ambiguous or missing signed header")
         headers[name] = " ".join(matching[0].strip().split())
     if request.method == "POST":
-        # The only safe presigned POST is an explicitly selected multipart
-        # Complete with a signed exact XML body SHA-256. Refuse a generic
-        # POST presign, including CreateMultipartUpload and arbitrary forms.
-        allowed_query = required | {"uploadId"}
-        if (not values.get("uploadId") or len(values["uploadId"]) > 80
-                or any(name not in allowed_query for name in values)):
-            raise SigV4Error("NotImplemented", "Only presigned multipart Complete supported")
+        # Permit only checksum-bound Complete or empty-body Initiate.
+        # Both selectors are authenticated in the canonical query, and
+        # arbitrary POSTs (including browser form uploads) remain refused.
+        completing = (
+            bool(values.get("uploadId"))
+            and len(values["uploadId"]) <= 80
+            and all(name in required | {"uploadId"} for name in values)
+        )
+        initiating = (
+            "uploads" in values and values["uploads"] == ""
+            and all(name in required | {"uploads"} for name in values)
+        )
+        if not (completing or initiating):
+            raise SigV4Error("NotImplemented", "Only bound multipart POST supported")
         if ("x-amz-content-sha256" not in signed or not re.fullmatch(
             r"[0-9a-f]{64}", headers.get("x-amz-content-sha256", "")
         )):
-            raise SigV4Error("AccessDenied", "Multipart POST requires signed XML SHA-256")
+            raise SigV4Error("AccessDenied", "Multipart POST requires signed SHA-256")
+        if initiating and headers["x-amz-content-sha256"] != _sha(b""):
+            raise SigV4Error(
+                "XAmzContentSHA256Mismatch",
+                "Presigned multipart initiation must bind an empty request body",
+            )
     if request.method == "PUT":
         # Never expose an S3 write URL which permits arbitrary replacement
         # with a different payload by anyone who obtains the link.

@@ -301,9 +301,9 @@ verification and explicit retention approvals are implemented.
   operation and only with a SigV4-signed exact `x-amz-content-sha256`
   request body digest. XML is rehashed before changing SQL state;
   replay is idempotent and does not reupload Telegram bytes.
-- Generic presigned POST, including CreateMultipartUpload and unbound
-  payload signatures, remains rejected. A future supported-scope S3
-  presigned POST must meet the same integrity and owner requirements.
+- Presigned CreateMultipartUpload with a signed empty-body SHA-256 is also
+  supported. Generic presigned POST (HTML form uploads, arbitrary selectors,
+  and unsigned payloads) remains rejected and must not be inferred as supported.
 
 ## P1.4 actionable operator health alerts
 
@@ -392,3 +392,14 @@ verification and explicit retention approvals are implemented.
 - Tests cover the standard `123456789` checksum, split-block equivalence,
   signed PUT and UploadPart, rejected corruption, and zero remote uploads
   after rejection. AWS-chunked/trailer checksums remain unsupported.
+
+
+## P1.3 checksum-bound presigned multipart initiation
+
+- SigV4 query-authenticated `POST /bucket/key?uploads` now permits only
+  a signed `x-amz-content-sha256` equal to the SHA-256 of an empty body.
+  The POST selector is part of the verified canonical query. Any nonempty
+  body is rejected before a SQL multipart session is allocated.
+- Mixed control selectors, unsigned payload digests, revoked credentials,
+  and path tampering remain forbidden. This extends presigned multipart
+  support; generic browser form uploads are still unsupported.

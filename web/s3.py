@@ -892,6 +892,14 @@ async def _handle(request: Request):
         if mpu_start or mpu_part or mpu_complete or mpu_abort or mpu_list:
             mpu = MultipartStore(catalog)
             if mpu_start:
+                # Initiate is metadata-only. Reject any supplied body before
+                # allocating a durable multipart session, including if a
+                # leaked presigned URL is replayed with altered content.
+                async for block in request.stream():
+                    if block:
+                        raise MultipartError(
+                            "InvalidRequest", "CreateMultipartUpload requires an empty body"
+                        )
                 http_properties = parse_object_metadata(
                     request.headers, signed_header_names(request),
                 )

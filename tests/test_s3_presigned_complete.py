@@ -98,3 +98,85 @@ def test_revoked_presigned_complete_does_not_publish(service):
     assert denied.status_code == 403
     assert b"AccessDenied" in denied.content
     assert service[2].uploads == before
+
+
+def _presigned_initiate(service, *, checksum=True, extra=""):
+    issued = service[1]
+    headers = {}
+    if checksum:
+        headers["x-amz-content-sha256"] = hashlib.sha256(b"").hexdigest()
+    request = AWSRequest(
+        method="POST",
+        url="http://localhost:9000/backup-bucket/asset.bin?uploads" + extra,
+        data=b"", headers=headers,
+    )
+    request.context["payload_signing_enabled"] = False
+    S3SigV4QueryAuth(
+        Credentials(issued.access_key, issued.secret_key),
+        "s3", "us-east-1", expires=120,
+    ).add_auth(request)
+    parsed = urlsplit(request.url)
+    return parsed.path + "?" + parsed.query, headers
+
+
+def _multipart_session_count(service):
+    from sqlalchemy import func, select
+    from teledrive.s3.multipart import uploads
+    db = service[3]()
+    try:
+        return db.connection.execute(
+            select(func.count()).select_from(uploads)
+        ).scalar_one()
+    finally:
+        db.close()
+
+
+def test_presigned_initiate_accepts_exact_empty_body_and_existing_permissions(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    url, headers = _presigned_initiate(service)
+    before = _multipart_session_count(service)
+    created = service[0].post(url, content=b"", headers=headers)
+    assert created.status_code == 200, created.text
+    assert b"<UploadId>" in created.content
+    assert _multipart_session_count(service) == before + 1
+    assert service[2].uploads == 0
+
+
+def test_presigned_initiate_rejects_tampered_body_without_sql_session(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    url, headers = _presigned_initiate(service)
+    before = _multipart_session_count(service)
+    denied = service[0].post(url, content=b"unexpected-body", headers=headers)
+    assert denied.status_code == 400 and b"InvalidRequest" in denied.content
+    assert _multipart_session_count(service) == before
+    assert service[2].uploads == 0
+
+
+def test_presigned_initiate_requires_signed_checksum_and_exact_selector(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    before = _multipart_session_count(service)
+    unsigned_url, missing_headers = _presigned_initiate(service, checksum=False)
+    missing = service[0].post(unsigned_url, content=b"", headers=missing_headers)
+    assert missing.status_code == 403 and b"AccessDenied" in missing.content
+    mixed_url, bound_headers = _presigned_initiate(service, extra="&uploadId=other")
+    mixed = service[0].post(mixed_url, content=b"", headers=bound_headers)
+    assert mixed.status_code == 501 and b"NotImplemented" in mixed.content
+    url, headers = _presigned_initiate(service)
+    wrong_key = service[0].post(url.replace("asset.bin", "other.bin"),
+                                content=b"", headers=headers)
+    assert wrong_key.status_code == 403
+    assert _multipart_session_count(service) == before
+
+
+def test_revoked_presigned_initiate_never_allocates_session(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    url, headers = _presigned_initiate(service)
+    before = _multipart_session_count(service)
+    db = service[3]()
+    try:
+        assert S3CredentialStore(db, service[4]).revoke(service[1].id)
+    finally:
+        db.close()
+    response = service[0].post(url, content=b"", headers=headers)
+    assert response.status_code == 403 and b"AccessDenied" in response.content
+    assert _multipart_session_count(service) == before
