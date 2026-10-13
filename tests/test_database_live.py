@@ -659,3 +659,115 @@ def test_operator_stale_pending_preview_and_per_object_fence_live_sql(env_name):
     finally:
         a.close()
         b.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_concurrent_durable_job_claim_single_winner_on_live_sql(env_name, tmp_path):
+    """Four independent SQL sessions race for one job; only one may own it."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from uuid import uuid4
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.jobs import StorageUploadJobs
+    from teledrive.storage.manifest import ManifestStore
+
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    filename = tmp_path / "only-once.bin"
+    filename.write_bytes(b"never-twice")
+    connection = connect_database(url)
+    now = int(time.time())
+    try:
+        bucket = "ci-" + uuid4().hex[:20]
+        queue = StorageUploadJobs(BucketCatalog(ManifestStore(connection)))
+        queue.catalog.create_bucket(bucket, now)
+        job_id = queue.enqueue(bucket, "only-once.bin", filename,
+                               allowed_root=tmp_path, now=now)
+        gate = Barrier(4)
+
+        def race():
+            db = connect_database(url)
+            try:
+                local = StorageUploadJobs(BucketCatalog(ManifestStore(db)))
+                db.commit()
+                gate.wait(timeout=20)
+                return local.claim_next(now=now, ttl=120)
+            finally:
+                db.close()
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            claimed = list(pool.map(lambda _: race(), range(4)))
+        winners = [job for job in claimed if job is not None]
+        assert len(winners) == 1, claimed
+        winner = winners[0]
+        assert winner["id"] == job_id
+        assert winner["state"] == "running" and winner["attempts"] == 1
+        # Only the actual claimant may renew or stage the durable job.
+        wrong = connect_database(url)
+        try:
+            competitor = StorageUploadJobs(BucketCatalog(ManifestStore(wrong)))
+            assert not competitor.renew(job_id, "forged-token", now=now)
+            assert competitor.claim_next(now=now + 1, ttl=120) is None
+        finally:
+            wrong.close()
+        assert queue.renew(job_id, winner["lease_token"], now=now)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_legacy_scan_id_is_idempotent_under_live_sql_races(env_name, tmp_path):
+    """Two importers concurrently enqueue the identical file revision once."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from uuid import uuid4
+    from sqlalchemy import select, func
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.jobs import StorageUploadJobs, jobs
+    from teledrive.storage.manifest import ManifestStore
+
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    path = tmp_path / "same-revision.txt"
+    path.write_bytes(b"import-this-once")
+    bucket = "ci-" + uuid4().hex[:20]
+    initial = connect_database(url)
+    try:
+        StorageUploadJobs(BucketCatalog(ManifestStore(initial))).catalog.create_bucket(
+            bucket, int(time.time())
+        )
+    finally:
+        initial.close()
+    gate = Barrier(2)
+
+    def insert_once():
+        db = connect_database(url)
+        try:
+            manager = StorageUploadJobs(BucketCatalog(ManifestStore(db)))
+            db.commit()
+            gate.wait(timeout=20)
+            return manager.enqueue(bucket, "same-revision.txt", path,
+                                   allowed_root=tmp_path, deduplicate=True)
+        finally:
+            db.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        identifiers = list(pool.map(lambda _: insert_once(), range(2)))
+    assert identifiers[0] == identifiers[1]
+    check = connect_database(url)
+    try:
+        matches = check.connection.execute(
+            select(func.count()).select_from(jobs).where(jobs.c.id == identifiers[0])
+        ).scalar_one()
+        assert matches == 1
+        record = StorageUploadJobs(BucketCatalog(ManifestStore(check))).list_jobs(
+            limit=1000
+        )
+        selected = [row for row in record if row["id"] == identifiers[0]]
+        assert len(selected) == 1
+        assert selected[0]["attempts"] == 0
+        assert selected[0]["state"] == "queued"
+    finally:
+        check.close()
