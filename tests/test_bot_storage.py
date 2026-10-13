@@ -453,3 +453,49 @@ def test_bot_ack_receipt_and_file_id_commit_atomically(tmp_path):
         ) is None
     finally:
         database.close()
+
+
+@pytest.mark.parametrize("size,expected_chunks", [
+    pytest.param(0, 0, id="zero-bytes-no-Telegram-send"),
+    pytest.param(1, 1, id="one-byte"),
+    pytest.param(16 * 1024 * 1024 - 1, 1, id="16MiB-minus-one"),
+    pytest.param(16 * 1024 * 1024, 1, id="exact-16MiB"),
+    pytest.param(16 * 1024 * 1024 + 1, 2, id="16MiB-plus-one"),
+])
+def test_bot_offline_16mib_boundary_chunking_and_full_integrity(
+    tmp_path, size, expected_chunks,
+):
+    """Synthetic binary data exercises large Bot API chunks without network.
+
+    Real dedicated-channel stress uses the separate credentialed E2E suite.
+    """
+    db = connect_database(str(tmp_path / "large-boundary.db"))
+    fake = FakeBotApi()
+    transport = BotApiChunkTransport(
+        fake, BotFileIndex(db), chat_id=fake.chat_id,
+        min_upload_interval=0,
+    )
+    engine = TelegramObjectStorage(
+        ManifestStore(db), transport, chunk_size=16 * 1024 * 1024,
+        scratch_directory=tmp_path,
+    )
+    source = tmp_path / "source.bin"
+    source.write_bytes(os.urandom(size))
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    try:
+        obj = run(engine.put_file("large-ci", f"limits/{size}.bin", source))
+        assert obj.size == size and obj.sha256 == digest
+        refs = engine.manifests.parts(obj.id)
+        assert len(refs) == expected_chunks
+        assert fake.counter == expected_chunks
+        assert sum(p.size for p in refs) == size
+        source.unlink()
+        restored = tmp_path / "download.bin"
+        run(engine.download_to_path(obj.id, restored))
+        assert restored.stat().st_size == size
+        assert hashlib.sha256(restored.read_bytes()).hexdigest() == digest
+        for reference in refs:
+            run(transport.delete(reference))
+        assert len(fake.deleted) == expected_chunks
+    finally:
+        db.close()
