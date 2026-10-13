@@ -220,3 +220,64 @@ def test_symlink_source_rejected_and_never_queued(store, tmp_path):
     with pytest.raises(OSError):
         execute(engine.put_file("b", "k", link))
     assert store.interrupted() == []
+
+
+def test_active_writer_lease_cannot_be_abandoned(store):
+    ident = store.begin("backup", "active", 0, 100)
+    store.start_writer(ident, "worker-a", 100, ttl=500)
+    assert store.abandon_stale_pending(now=200, min_age_seconds=60) == []
+    assert store.heartbeat_writer(ident, "worker-a", 200, ttl=500)
+    assert store.abandon_stale_pending(now=500, min_age_seconds=60) == []
+    ready = store.finish(ident, hashlib.sha256(b"").hexdigest(), 600, writer_token="worker-a")
+    assert ready.id == ident
+    assert store.abandon_stale_pending(now=900, min_age_seconds=60) == []
+
+
+def test_expired_writer_fenced_before_pending_abandonment(store):
+    ident = store.begin("backup", "interrupted", 0, 100)
+    store.start_writer(ident, "crashed-worker", 100, ttl=120)
+    assert store.abandon_stale_pending(now=161, min_age_seconds=60) == []
+    assert store.abandon_stale_pending(now=221, min_age_seconds=60) == [ident]
+    assert store.interrupted() == [(ident, "failed")]
+    assert not store.heartbeat_writer(ident, "crashed-worker", 222, ttl=120)
+    with pytest.raises(ManifestError, match="not pending"):
+        store.finish(ident, hashlib.sha256(b"").hexdigest(), 222, writer_token="crashed-worker")
+    with pytest.raises(ManifestError, match="lease lost"):
+        store.fail(ident, "late worker", 222, writer_token="crashed-worker")
+
+
+def test_stale_legacy_pending_without_writer_fence_is_not_deleted(store):
+    ident = store.begin("legacy", "old", 0, 100)
+    assert store.abandon_stale_pending(now=999_999, min_age_seconds=60) == []
+    assert store.interrupted() == [(ident, "pending")]
+
+
+def test_writer_tokens_cannot_be_impersonated(store):
+    ident = store.begin("backup", "owned", 0, 100)
+    store.start_writer(ident, "secret-a", 100, ttl=200)
+    assert not store.heartbeat_writer(ident, "secret-b", 110)
+    with pytest.raises(ManifestError, match="lease lost"):
+        store.finish(ident, hashlib.sha256(b"").hexdigest(), 110, writer_token="secret-b")
+    with pytest.raises(ManifestError, match="lease lost"):
+        store.finish(ident, hashlib.sha256(b"").hexdigest(), 110)
+    assert store.heartbeat_writer(ident, "secret-a", 150)
+    assert store.finish(ident, hashlib.sha256(b"").hexdigest(), 151, writer_token="secret-a").id == ident
+
+
+def test_process_killed_after_telegram_send_cannot_publish_later(store, tmp_path):
+    backend = MemoryTelegram()
+    source = tmp_path / "source"
+    source.write_bytes(b"file-payload")
+    def forced_crash_fence():
+        # Simulates an unavailable worker long enough for another process to
+        # fence its lease, after Telegram accepted the message.
+        store.abandon_stale_pending(now=int(__import__("time").time()) + 10000,
+                                    min_age_seconds=60)
+    backend.on_upload = forced_crash_fence
+    engine = TelegramObjectStorage(store, backend, chunk_size=4)
+    with pytest.raises(ManifestError, match="ownership lost"):
+        execute(engine.put_file("bucket", "item", source))
+    assert len(backend.data) == 1
+    assert store.interrupted()[0][1] == "failed"
+    with pytest.raises(FileNotFoundError):
+        store.get(store.interrupted()[0][0])
