@@ -244,3 +244,13 @@ verification and explicit retention approvals are implemented.
   jobs cannot be cancelled, protecting in-flight Telegram ownership and
   staged immutable manifests. Cancellation is metadata-only and persists
   through SQL restart. Operator-facing cancellation API is still pending.
+
+## P1.3 S3 ListObjectVersions (published-only subset)
+
+- Signed `GET /bucket?versions` with independent `s3:ListBucketVersions`
+  permission lists only HEAD-proven published immutable versions, not
+  staged READY manifests. Supports bounded `prefix`, `max-keys`,
+  `key-marker` and `version-id-marker`, returning correct multipart ETags.
+- This is a **limited subset**: delete markers, S3 versioning controls,
+  version deletion, delimiter and alternate encoding remain unsupported.
+  Unlinked published objects remain safely discoverable and physically intact.

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import (
     BigInteger, Column, ForeignKey, MetaData, String, Table, Index,
-    and_, delete, insert, select, update, inspect, text,
+    and_, or_, delete, insert, select, update, inspect, text,
 )
 from sqlalchemy.exc import IntegrityError
 
@@ -196,6 +196,97 @@ class BucketCatalog:
             }
             for row in rows
         ]
+
+    def list_bucket_versions(
+        self, bucket: str, *, prefix: str = "", key_marker: str = "",
+        version_marker: str = "", limit: int = 1000,
+    ) -> tuple[list[dict], bool]:
+        """Bounded, deterministic S3 listing of proven published history.
+
+        Never include READY manifests that did not win HEAD publication.
+        The pagination marker must correspond to a published version of
+        exactly the supplied bucket/key; dangling or forged markers fail.
+        No physical delete markers are fabricated.
+        """
+        if not 1 <= limit <= 1000 or len(prefix.encode("utf-8")) > 1024:
+            raise ValueError("Invalid version-list pagination")
+        if version_marker and not key_marker:
+            raise ValueError("Version-id marker requires key marker")
+        where = [
+            published_versions.c.bucket == bucket,
+            objects.c.bucket == bucket,
+            objects.c.status == "ready",
+        ]
+        if prefix:
+            where.append(objects.c.object_key.startswith(prefix, autoescape=True))
+        if key_marker:
+            self._keyhash(key_marker)
+            if version_marker:
+                selected = self.db.connection.execute(
+                    select(published_versions.c.committed_ns)
+                    .select_from(published_versions.join(
+                        objects, published_versions.c.object_id == objects.c.id
+                    )).where(
+                        published_versions.c.bucket == bucket,
+                        objects.c.object_key == key_marker,
+                        published_versions.c.object_id == version_marker,
+                        objects.c.status == "ready",
+                    )
+                ).scalar_one_or_none()
+                if selected is None:
+                    raise ValueError("Unknown version-id marker")
+                where.append(or_(
+                    objects.c.object_key > key_marker,
+                    and_(
+                        objects.c.object_key == key_marker,
+                        or_(
+                            published_versions.c.committed_ns < selected,
+                            and_(
+                                published_versions.c.committed_ns == selected,
+                                published_versions.c.object_id < version_marker,
+                            ),
+                        ),
+                    ),
+                ))
+            else:
+                where.append(objects.c.object_key > key_marker)
+        rows = self.db.connection.execute(
+            select(
+                published_versions.c.object_id,
+                published_versions.c.committed_ns,
+                objects.c.object_key, objects.c.size, objects.c.sha256,
+                heads.c.object_id.label("current_id"),
+            )
+            .select_from(
+                published_versions.join(
+                    objects, published_versions.c.object_id == objects.c.id
+                ).outerjoin(
+                    heads,
+                    and_(
+                        heads.c.bucket == published_versions.c.bucket,
+                        heads.c.key_hash == published_versions.c.key_hash,
+                        heads.c.object_id == published_versions.c.object_id,
+                    ),
+                )
+            )
+            .where(*where)
+            .order_by(
+                objects.c.object_key,
+                published_versions.c.committed_ns.desc(),
+                published_versions.c.object_id.desc(),
+            ).limit(limit + 1)
+        ).mappings().all()
+        return [
+            {
+                "key": row["object_key"],
+                "version_id": row["object_id"],
+                "committed_ns": int(row["committed_ns"]),
+                "size": int(row["size"]),
+                "sha256": row["sha256"],
+                "is_current": row["current_id"] is not None,
+            }
+            for row in rows[:limit]
+        ], len(rows) > limit
 
     def publish(self, identifier: str, *, now: int,
                 expected_generation: int | None = None,

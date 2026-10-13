@@ -87,6 +87,7 @@ jobs:
             tests/test_storage_ops_health.py \
             tests/test_storage_gc_retention.py \
             tests/test_s3_version_reads.py \
+            tests/test_s3_version_listing.py \
             tests/test_storage_catalog.py \
             tests/test_bot_storage.py \
             tests/test_s3_gateway.py \

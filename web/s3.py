@@ -431,6 +431,16 @@ async def _handle(request: Request):
         )
         if is_version_read and len(request.query_params.getlist("versionId")) != 1:
             return _error("InvalidArgument", "Ambiguous version ID", 400)
+        is_version_listing = bool(
+            bucket and not separator and request.method == "GET"
+            and "versions" in request.query_params
+        )
+        if is_version_listing and any(
+            item not in {"versions", "prefix", "max-keys", "key-marker",
+                         "version-id-marker"} and not item.startswith("X-Amz-")
+            for item in request.query_params
+        ):
+            return _error("NotImplemented", "Unsupported ListObjectVersions parameter", 501)
         mpu_bucket_list = bool(bucket and not separator and "uploads" in request.query_params
                                and request.method == "GET")
         mpu_start = bool(separator and "uploads" in request.query_params and request.method == "POST")
@@ -479,6 +489,8 @@ async def _handle(request: Request):
             action = "s3:GetBucketLocation" if request.method == "GET" else None
         elif mpu_start or mpu_part or mpu_complete:
             action = "s3:PutObject"
+        elif is_version_listing:
+            action = "s3:ListBucketVersions"
         elif mpu_bucket_list:
             action = "s3:ListBucket"
         elif mpu_abort:
@@ -498,7 +510,8 @@ async def _handle(request: Request):
             "encryption", "object-lock", "publicAccessBlock", "versionId",
         }
         if any(parameter in request.query_params and (
-            parameter != "versionId" or not is_version_read
+            (parameter != "versionId" or not is_version_read)
+            and (parameter != "versions" or not is_version_listing)
         ) for parameter in unsupported):
             return _error("NotImplemented", "This S3 extension is not implemented", 501)
 
@@ -624,6 +637,55 @@ async def _handle(request: Request):
                     return _error("NoSuchBucket", "The specified bucket does not exist", 404)
                 # AWS represents us-east-1 as an empty LocationConstraint.
                 root = ET.Element("LocationConstraint", xmlns=NAMESPACE)
+                return Response(
+                    ET.tostring(root, encoding="utf-8", xml_declaration=True),
+                    media_type="application/xml",
+                )
+            if is_version_listing:
+                if len(request.query_params.getlist("versions")) != 1 or (
+                    request.query_params.get("versions") not in ("",)
+                ):
+                    return _error("InvalidArgument", "Invalid versions selector", 400)
+                for marker in ("prefix", "max-keys", "key-marker", "version-id-marker"):
+                    if len(request.query_params.getlist(marker)) > 1:
+                        return _error("InvalidArgument", "Ambiguous version listing parameter", 400)
+                try:
+                    maximum = int(request.query_params.get("max-keys", "1000"))
+                    key_marker = request.query_params.get("key-marker", "")
+                    version_marker = request.query_params.get("version-id-marker", "")
+                    prefix = request.query_params.get("prefix", "")
+                    entries, has_more = catalog.list_bucket_versions(
+                        bucket, prefix=prefix, key_marker=key_marker,
+                        version_marker=version_marker, limit=maximum,
+                    )
+                except ValueError:
+                    return _error("InvalidArgument", "Invalid version list cursor or limit", 400)
+                root = ET.Element("ListVersionsResult", xmlns=NAMESPACE)
+                for label, value in (
+                    ("Name", bucket), ("Prefix", prefix),
+                    ("KeyMarker", key_marker), ("VersionIdMarker", version_marker),
+                    ("MaxKeys", maximum), ("IsTruncated", str(has_more).lower()),
+                ):
+                    ET.SubElement(root, label).text = str(value)
+                if has_more and entries:
+                    ET.SubElement(root, "NextKeyMarker").text = entries[-1]["key"]
+                    ET.SubElement(root, "NextVersionIdMarker").text = entries[-1]["version_id"]
+                mpu = MultipartStore(catalog)
+                for entry in entries:
+                    element = ET.SubElement(root, "Version")
+                    for label, value in (
+                        ("Key", entry["key"]), ("VersionId", entry["version_id"]),
+                        ("IsLatest", str(entry["is_current"]).lower()),
+                        ("LastModified", time.strftime(
+                            "%Y-%m-%dT%H:%M:%S.000Z",
+                            time.gmtime(entry["committed_ns"] // 1_000_000_000),
+                        )),
+                        ("ETag", '"' + mpu.object_etag(
+                            entry["version_id"], entry["sha256"]
+                        ) + '"'),
+                        ("Size", entry["size"]), ("StorageClass", "STANDARD"),
+                    ):
+                        ET.SubElement(element, label).text = str(value)
                 return Response(
                     ET.tostring(root, encoding="utf-8", xml_declaration=True),
                     media_type="application/xml",
