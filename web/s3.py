@@ -24,6 +24,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
+from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.manifest import ManifestStore
@@ -47,9 +48,9 @@ def _error(code: str, message: str, status: int) -> Response:
                     media_type="application/xml", status_code=status)
 
 
-def _headers(item) -> dict[str, str]:
+def _headers(item, etag: str | None = None) -> dict[str, str]:
     return {
-        "ETag": '"' + item.sha256 + '"',
+        "ETag": '"' + (etag or item.sha256) + '"',
         "Content-Length": str(item.size),
         "Accept-Ranges": "bytes",
         "Content-Type": "application/octet-stream",
@@ -151,7 +152,7 @@ def _page(catalog: BucketCatalog, bucket: str, prefix: str,
 
 def _list_xml(bucket: str, keys: list, common: list[str], prefix: str,
               limit: int, after: str, delimiter: str,
-              more: bool, next_token: str | None) -> bytes:
+              more: bool, next_token: str | None, etag_for=None) -> bytes:
     root = ET.Element("ListBucketResult", xmlns=NAMESPACE)
     for field, val in (
         ("Name", bucket), ("Prefix", prefix), ("KeyCount", len(keys) + len(common)),
@@ -167,7 +168,7 @@ def _list_xml(bucket: str, keys: list, common: list[str], prefix: str,
         for field, value in (
             ("Key", item.item.key),
             ("LastModified", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(item.item.created_at))),
-            ("ETag", '"' + item.item.sha256 + '"'),
+            ("ETag", '"' + (etag_for(item.item) if etag_for else item.item.sha256) + '"'),
             ("Size", item.item.size),
             ("StorageClass", "STANDARD"),
         ):
@@ -200,14 +201,28 @@ async def _handle(request: Request):
                 "GET": "s3:GetObject", "HEAD": "s3:GetObject",
                 "PUT": "s3:PutObject", "DELETE": "s3:DeleteObject",
             }.get(request.method)
-        if action is None or "uploads" in request.query_params or "uploadId" in request.query_params:
+        mpu_start = bool(separator and "uploads" in request.query_params and request.method == "POST")
+        mpu_id = request.query_params.get("uploadId") if separator else None
+        mpu_part = bool(mpu_id and request.method == "PUT" and "partNumber" in request.query_params)
+        mpu_complete = bool(mpu_id and request.method == "POST")
+        mpu_abort = bool(mpu_id and request.method == "DELETE")
+        mpu_list = bool(mpu_id and request.method == "GET")
+        if mpu_start or mpu_part or mpu_complete:
+            action = "s3:PutObject"
+        elif mpu_abort:
+            action = "s3:DeleteObject"
+        elif mpu_list:
+            action = "s3:GetObject"
+        elif "uploads" in request.query_params or "uploadId" in request.query_params:
+            return _error("NotImplemented", "This multipart operation is unsupported", 501)
+        if action is None:
             return _error("NotImplemented", "This S3 operation is not supported yet", 501)
         # Unknown control-plane query operations must not be misinterpreted as
         # ordinary object reads/writes (e.g. ?tagging, ?versioning, ?acl).
         unsupported = {
             "acl", "versioning", "versions", "tagging", "lifecycle", "policy",
-            "notification", "cors", "replication", "uploads", "uploadId",
-            "partNumber", "retention", "legal-hold", "logging", "location",
+            "notification", "cors", "replication",
+            "retention", "legal-hold", "logging", "location",
             "encryption", "object-lock", "publicAccessBlock",
         }
         if any(parameter in request.query_params for parameter in unsupported):
@@ -216,7 +231,7 @@ async def _handle(request: Request):
         master = load_master_key()
         db = db_connect()
         store = S3CredentialStore(db, master)
-        verify_header_signature(request, store.resolve, action)
+        owner = verify_header_signature(request, store.resolve, action)
         catalog = BucketCatalog(ManifestStore(db))
 
         if not bucket:
@@ -262,14 +277,143 @@ async def _handle(request: Request):
                 catalog, bucket, prefix, delimiter, after, limit, skip_prefix
             )
             next_token = _cursor_encode(master, bucket, prefix, delimiter, last, skipped) if more else None
+            tags = MultipartStore(catalog)
             return Response(_list_xml(bucket, keys, common, prefix, limit,
-                                      after if not token else "", delimiter, more, next_token),
+                                      after if not token else "", delimiter, more,
+                                      next_token, lambda obj: tags.object_etag(obj.id, obj.sha256)),
                             media_type="application/xml")
 
         if bucket not in catalog.list_buckets():
             return _error("NoSuchBucket", "The specified bucket does not exist", 404)
         if not key:
             return _error("InvalidObjectName", "Object key is empty", 400)
+
+        if mpu_start or mpu_part or mpu_complete or mpu_abort or mpu_list:
+            mpu = MultipartStore(catalog)
+            if mpu_start:
+                upload_id = mpu.initiate(bucket, key, owner)
+                return Response(_xml("InitiateMultipartUploadResult", [
+                    ("Bucket", bucket), ("Key", key), ("UploadId", upload_id),
+                ]), media_type="application/xml", status_code=200)
+            upload_id = mpu_id
+            if not upload_id:
+                raise MultipartError("NoSuchUpload", "Missing UploadId", 404)
+            if mpu_abort:
+                mpu.abort(upload_id, bucket, key, owner)
+                return Response(status_code=204)
+            if mpu_list:
+                rows = mpu.list_parts(upload_id, bucket, key, owner)
+                try:
+                    marker = int(request.query_params.get("part-number-marker", "0"))
+                    limit = int(request.query_params.get("max-parts", "1000"))
+                except ValueError:
+                    raise MultipartError("InvalidArgument", "Invalid ListParts pagination")
+                if marker < 0 or not (1 <= limit <= 1000):
+                    raise MultipartError("InvalidArgument", "Invalid ListParts pagination")
+                visible = [row for row in rows if row.number > marker]
+                selected_parts = visible[:limit]
+                result = ET.Element("ListPartsResult", xmlns=NAMESPACE)
+                for title, val in (
+                    ("Bucket", bucket), ("Key", key), ("UploadId", upload_id),
+                    ("PartNumberMarker", marker), ("MaxParts", limit),
+                    ("IsTruncated", str(len(visible) > len(selected_parts)).lower()),
+                ):
+                    ET.SubElement(result, title).text = str(val)
+                if len(visible) > len(selected_parts):
+                    ET.SubElement(result, "NextPartNumberMarker").text = str(selected_parts[-1].number)
+                for part in selected_parts:
+                    row = ET.SubElement(result, "Part")
+                    ET.SubElement(row, "PartNumber").text = str(part.number)
+                    ET.SubElement(row, "ETag").text = '"' + part.etag + '"'
+                    ET.SubElement(row, "Size").text = str(part.size)
+                return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
+                                media_type="application/xml")
+            if mpu_complete:
+                mpu.require(upload_id, bucket, key, owner)
+                content = bytearray()
+                async for block in request.stream():
+                    content.extend(block)
+                    if len(content) > 1024 * 1024:
+                        raise MultipartError("MalformedXML", "Complete XML exceeds 1 MiB")
+                if hashlib.sha256(content).hexdigest() != request.headers.get("x-amz-content-sha256"):
+                    raise MultipartError("XAmzContentSHA256Mismatch", "Completion XML checksum mismatch")
+                if b"<!DOCTYPE" in content.upper() or b"<!ENTITY" in content.upper():
+                    raise MultipartError("MalformedXML", "XML entities are not accepted")
+                try:
+                    document = ET.fromstring(content)
+                    if document.tag.rsplit("}", 1)[-1] != "CompleteMultipartUpload":
+                        raise ValueError("Wrong XML root")
+                    selected = []
+                    for element in document:
+                        if element.tag.rsplit("}", 1)[-1] != "Part":
+                            raise ValueError("Unexpected XML element")
+                        number = element.findtext("{*}PartNumber")
+                        etag = element.findtext("{*}ETag")
+                        if not number or not number.isdigit() or not etag:
+                            raise ValueError("Missing part number or ETag")
+                        selected.append((int(number), etag.strip('"').lower()))
+                except (ValueError, ET.ParseError) as exc:
+                    raise MultipartError("MalformedXML", "Invalid CompleteMultipartUpload XML") from exc
+                transport = storage_bot_transport(db)
+                scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+                _secure_mkdir(scratch)
+                engine = TelegramObjectStorage(
+                    catalog.manifests, transport,
+                    chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
+                )
+                finished = await mpu.complete(upload_id, bucket, key, owner, selected, engine)
+                return Response(_xml("CompleteMultipartUploadResult", [
+                    ("Bucket", bucket), ("Key", key), ("ETag", '"' + finished.etag + '"'),
+                ]), status_code=200, media_type="application/xml")
+            # UploadPart: checksum is verified before any Telegram send.
+            mpu.require(upload_id, bucket, key, owner)
+            try:
+                number = int(request.query_params.get("partNumber", ""))
+            except ValueError:
+                raise MultipartError("InvalidArgument", "Invalid part number")
+            if not 1 <= number <= MAX_PARTS:
+                raise MultipartError("InvalidArgument", "Invalid part number")
+            scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+            _secure_mkdir(scratch)
+            max_bytes = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+            fd, name = tempfile.mkstemp(prefix="s3-part-", dir=scratch)
+            stage = Path(name)
+            try:
+                sha = hashlib.sha256()
+                md5 = hashlib.md5(usedforsecurity=False)
+                crc = 0
+                size = 0
+                with os.fdopen(fd, "wb") as output:
+                    async for block in request.stream():
+                        size += len(block)
+                        if max_bytes < 1 or size > max_bytes:
+                            raise MultipartError("EntityTooLarge", "Part exceeds configured upload maximum", 413)
+                        sha.update(block)
+                        md5.update(block)
+                        crc = zlib.crc32(block, crc)
+                        output.write(block)
+                    output.flush()
+                    os.fsync(output.fileno())
+                if request.headers.get("x-amz-content-sha256") != sha.hexdigest():
+                    raise MultipartError("XAmzContentSHA256Mismatch", "Part SHA-256 mismatch")
+                checksum_crc = request.headers.get("x-amz-checksum-crc32")
+                if checksum_crc and checksum_crc != base64.b64encode(
+                    (crc & 0xffffffff).to_bytes(4, "big")
+                ).decode():
+                    raise MultipartError("BadDigest", "CRC32 checksum mismatch")
+                transport = storage_bot_transport(db)
+                await transport.verify_target()
+                engine = TelegramObjectStorage(
+                    catalog.manifests, transport,
+                    chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
+                )
+                staged = await engine.put_file(bucket, key, stage)
+                tag = md5.hexdigest()
+                mpu.record_part(upload_id, bucket, key, owner,
+                                number=number, object_id=staged.id, etag=tag)
+                return Response(status_code=200, headers={"ETag": '"' + tag + '"'})
+            finally:
+                stage.unlink(missing_ok=True)
 
         if request.method == "DELETE":
             catalog.remove_current(bucket, key)
@@ -317,8 +461,9 @@ async def _handle(request: Request):
             item = catalog.get(bucket, key).item
         except FileNotFoundError:
             return _error("NoSuchKey", "The specified key does not exist", 404)
+        item_etag = MultipartStore(catalog).object_etag(item.id, item.sha256)
         if request.method == "HEAD":
-            return Response(status_code=200, headers=_headers(item))
+            return Response(status_code=200, headers=_headers(item, item_etag))
         start, end, partial = _range(request.headers.get("range"), item.size)
         transport = storage_bot_transport(db)
         scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
@@ -336,11 +481,13 @@ async def _handle(request: Request):
                 db.close()
 
         retain = True
-        headers = _headers(item)
+        headers = _headers(item, item_etag)
         headers["Content-Length"] = str(end - start)
         if partial:
             headers["Content-Range"] = f"bytes {start}-{end-1}/{item.size}"
         return StreamingResponse(stream(), status_code=206 if partial else 200, headers=headers)
+    except MultipartError as exc:
+        return _error(exc.code, str(exc), exc.status)
     except SigV4Error as exc:
         return _error(exc.code, exc.message, {
             "RequestTimeTooSkewed": 403, "NotImplemented": 501,
