@@ -16,7 +16,8 @@ FORM_LIMIT = 20 * 1024 * 1024
 REQUIRED_FIELDS = frozenset(("key", "policy", "x-amz-algorithm",
                              "x-amz-credential", "x-amz-date",
                              "x-amz-signature", "x-amz-checksum-sha256"))
-OPTIONAL_FIELDS = frozenset(("success_action_status", "success_action_redirect"))
+OPTIONAL_FIELDS = frozenset(("success_action_status", "success_action_redirect",
+                             "Content-Type"))
 FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 CONDITIONS = (REQUIRED_FIELDS - {"policy", "x-amz-signature"}) | {"bucket"}
 
@@ -91,6 +92,7 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
         raise SigV4Error("AccessDenied", "Policy signing date expired")
     status = fields.get("success_action_status")
     redirect = fields.get("success_action_redirect")
+    content_type = fields.get("Content-Type")
     if status is not None and status not in ("200", "201", "204"):
         raise SigV4Error("InvalidArgument", "Unsupported POST success response status")
     # Redirects are only browser instructions (the server never fetches
@@ -132,6 +134,7 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
             or not isinstance(clauses, list)
             or len(clauses) != len(CONDITIONS) + 1
             + (status is not None) + (redirect is not None)
+            + (content_type is not None)
             or not now < expiration <= signed_at + timedelta(minutes=15)):
         raise SigV4Error("AccessDenied", "Policy must expire within fifteen minutes")
     bound = {name: fields[name] for name in CONDITIONS if name != "bucket"}
@@ -140,6 +143,8 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
         bound["success_action_status"] = status
     if redirect is not None:
         bound["success_action_redirect"] = redirect
+    if content_type is not None:
+        bound["Content-Type"] = content_type
     expected_conditions = set(bound)
     seen = set()
     has_range = False
@@ -151,14 +156,18 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
                 raise SigV4Error("AccessDenied", "Invalid signed size range")
             has_range = True
             continue
-        # A signed prefix may constrain the browser's destination key.
-        # All other fields remain exact matches.
+        # AWS permits bounded starts-with on the object key and its
+        # actual Content-Type form field. All credentials, checksum, bucket
+        # and success response fields stay exact signed conditions.
         if (isinstance(entry, list) and len(entry) == 3
-                and entry[0] == "starts-with" and entry[1] == "$key"):
-            if ("key" in seen or not isinstance(entry[2], str)
-                    or not key.startswith(entry[2])):
-                raise SigV4Error("AccessDenied", "POST key is outside signed prefix")
-            seen.add("key")
+                and entry[0] == "starts-with"
+                and entry[1] in ("$key", "$Content-Type")):
+            name = entry[1][1:]
+            if (name in seen or name not in bound
+                    or not isinstance(entry[2], str)
+                    or not bound[name].startswith(entry[2])):
+                raise SigV4Error("AccessDenied", "POST field is outside signed prefix")
+            seen.add(name)
             continue
         if isinstance(entry, dict) and len(entry) == 1:
             name, value = next(iter(entry.items()))
