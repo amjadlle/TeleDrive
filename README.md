@@ -340,6 +340,30 @@ DeleteObject (logical unlink), DeleteBucket (only physically empty),
 and single byte-range GET. Object writes are acknowledged only after Telegram
 upload and manifest commit.
 
+**S3 DeleteObjects supported:** Signed `POST /bucket?delete` now accepts
+up to 1,000 keys per request, standard `Quiet` mode and a verified
+Content-MD5/CRC32/SHA-256 checksum along with the SigV4 payload hash.
+The XML parser rejects DTDs, malformed records and unsupported `VersionId`
+selectors before any key is unlinked. Existing or missing keys are reported
+according to S3's batch-delete semantics. Like single-object DeleteObject,
+batch deletion removes only the current SQL catalog pointer; Telegram
+messages and historical manifests remain intact for verified GC.
+
+~~~python
+s3.delete_objects(
+    Bucket="backup-bucket",
+    Delete={"Objects": [{"Key": "old/file1.bin"}, {"Key": "old/file2.bin"}]},
+)
+~~~
+
+**Conditional object reads:** S3 GET and HEAD now support ETag and
+Last-Modified preconditions (`If-Match`, `If-None-Match`,
+`If-Modified-Since` and `If-Unmodified-Since`). Matching cache
+validators return `304 Not Modified` without downloading any Telegram
+bytes; failed conditions return `412 PreconditionFailed`. Conditional
+object **writes and deletes** are deliberately rejected until an atomic
+compare-and-swap writer is available. They are not silently accepted.
+
 **S3 multipart now implemented (core):** CreateMultipartUpload, UploadPart,
 ListParts (paginated), ListMultipartUploads (owner-scoped, paginated),
 CompleteMultipartUpload and AbortMultipartUpload. Parts are written directly
@@ -536,10 +560,11 @@ operation. Use HTTPS or a trusted VPN for any remote admin traffic.
   current pointer; historical data remains and is not yet exposed through
   complete S3 ListObjectVersions / restore APIs.
 - **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT,
-  CopyObject, and object/bucket tagging now work. Still pending: presigned
-  multipart POST, version-ID tagging, advanced S3 checksum variants,
-  SSE and user metadata, virtual-host-style requests,
-  bucket policies and lifecycle.
+  CopyObject, scoped DeleteObjects, conditional GET/HEAD and object/bucket
+  tagging now work. Still pending: atomic conditional writes/deletes,
+  presigned multipart POST, version-ID tagging, advanced S3 checksum variants,
+  SSE and user metadata, virtual-host-style requests, bucket policies
+  and lifecycle.
 - **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
   Cyberduck), restart during upload/complete, rate limits, account revocation,
   multiple simultaneous workers, and opt-in live Telegram multipart
