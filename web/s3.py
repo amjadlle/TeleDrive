@@ -27,7 +27,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
-from teledrive.s3.checksums import crc32c
+from teledrive.s3.checksums import crc32c, crc64nvme
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
 from teledrive.s3.batch_delete import BatchDeleteError, MAX_XML_BYTES, parse_batch, verify_body
@@ -147,9 +147,6 @@ def _verify_upload_sha256(
     A valid SHA-256 content digest must never permit a contradictory
     Content-MD5, SHA-1 or x-amz-checksum-sha256 to go unreported.
     """
-    for unsupported in ("x-amz-checksum-crc64nvme",):
-        if request.headers.get(unsupported) is not None:
-            raise SigV4Error("NotImplemented", "Unsupported checksum algorithm")
     actual = base64.b64encode(digest).decode("ascii")
     sha256_header = request.headers.get("x-amz-checksum-sha256")
     if sha256_header is not None and not hmac.compare_digest(sha256_header, actual):
@@ -170,7 +167,8 @@ def _verify_upload_sha256(
     if declared is not None:
         allowed = {"SHA1": "x-amz-checksum-sha1", "SHA256": "x-amz-checksum-sha256",
                    "CRC32": "x-amz-checksum-crc32",
-                   "CRC32C": "x-amz-checksum-crc32c"}
+                   "CRC32C": "x-amz-checksum-crc32c",
+                   "CRC64NVME": "x-amz-checksum-crc64nvme"}
         if declared not in allowed:
             raise SigV4Error("NotImplemented", "Unsupported SDK checksum algorithm")
         if request.headers.get(allowed[declared]) is None:
@@ -1005,6 +1003,7 @@ async def _handle(request: Request):
                 sha1 = hashlib.sha1(usedforsecurity=False)
                 crc = 0
                 crc32c_value = 0
+                crc64_value = 0
                 size = 0
                 with os.fdopen(fd, "wb") as output:
                     async for block in request.stream():
@@ -1016,6 +1015,7 @@ async def _handle(request: Request):
                         sha1.update(block)
                         crc = zlib.crc32(block, crc)
                         crc32c_value = crc32c(block, crc32c_value)
+                        crc64_value = crc64nvme(block, crc64_value)
                         output.write(block)
                     output.flush()
                     os.fsync(output.fileno())
@@ -1032,6 +1032,12 @@ async def _handle(request: Request):
                     base64.b64encode(crc32c_value.to_bytes(4, "big")).decode("ascii"),
                 ):
                     raise MultipartError("BadDigest", "CRC32C checksum mismatch")
+                declared_crc64 = request.headers.get("x-amz-checksum-crc64nvme")
+                if declared_crc64 is not None and not hmac.compare_digest(
+                    declared_crc64,
+                    base64.b64encode(crc64_value.to_bytes(8, "big")).decode("ascii"),
+                ):
+                    raise MultipartError("BadDigest", "CRC64NVME checksum mismatch")
                 transport = storage_bot_transport(db)
                 await transport.verify_target()
                 engine = TelegramObjectStorage(
@@ -1226,6 +1232,7 @@ async def _handle(request: Request):
             sha1 = hashlib.sha1(usedforsecurity=False)
             crc = 0
             crc32c_value = 0
+            crc64_value = 0
             length = 0
             try:
                 with os.fdopen(fd, "wb") as dest:
@@ -1238,6 +1245,7 @@ async def _handle(request: Request):
                         sha1.update(block)
                         crc = zlib.crc32(block, crc)
                         crc32c_value = crc32c(block, crc32c_value)
+                        crc64_value = crc64nvme(block, crc64_value)
                         dest.write(block)
                     dest.flush()
                     os.fsync(dest.fileno())
@@ -1252,6 +1260,12 @@ async def _handle(request: Request):
                     base64.b64encode(crc32c_value.to_bytes(4, "big")).decode("ascii"),
                 ):
                     return _error("BadDigest", "CRC32C checksum mismatch", 400)
+                declared_crc64 = request.headers.get("x-amz-checksum-crc64nvme")
+                if declared_crc64 is not None and not hmac.compare_digest(
+                    declared_crc64,
+                    base64.b64encode(crc64_value.to_bytes(8, "big")).decode("ascii"),
+                ):
+                    return _error("BadDigest", "CRC64NVME checksum mismatch", 400)
                 engine = TelegramObjectStorage(
                     catalog.manifests, transport,
                     chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=root,

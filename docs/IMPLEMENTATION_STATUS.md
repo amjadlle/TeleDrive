@@ -61,7 +61,7 @@ every workflow at the release SHA.
 - [ ] **P1.3 Advanced S3 parity:** published-only version listing/restore,
   conditional and presigned checksum-bound Complete, version tagging,
   historical CopySource and common checksums are implemented; S3 delete
-  markers, CRC64NVME and generic presigned POST remain outstanding.
+  markers and generic presigned POST remain outstanding.
 - [ ] **P1.4 Operations:** operator controls, metrics/alerts, SQLite
   backup/verification and runbooks are implemented; repository protection,
   cross-platform migrations and live-remote DR drills remain outstanding.
@@ -232,7 +232,7 @@ verification and explicit retention approvals are implemented.
 ### Still open — do not claim these are implemented
 - **P1 remaining:** Telegram ACK-without-journal reconciliation for Bot
   API, legacy folder uploader merge, multi-worker soak, S3 delete markers,
-  CRC64NVME, generic presigned multipart forms, migration and
+  generic presigned multipart forms, migration and
   real Telegram restoration exercises.
 - **P2 remaining:** audited retention-approved physical GC, S3 SSE/policy/
   lifecycle semantics, DNS/TLS and external virtual-host/Cyberduck acceptance,
@@ -292,8 +292,8 @@ verification and explicit retention approvals are implemented.
   SHA-256 or Content-MD5 headers even if the primary signed payload digest
   matches, before reaching Telegram. SHA-1 is used only for interoperability
   integrity checks, never for authentication or access-key derivation.
-- CRC32 and CRC32C are both validated for signed PUT/UploadPart; CRC64NVME
-  remains explicitly unsupported instead of returning false success.
+- CRC32, CRC32C and CRC64NVME are validated for signed PUT/UploadPart
+  against the independently calculated streaming digests.
 
 ## P1.3 checksum-bound presigned multipart Complete
 
@@ -378,3 +378,17 @@ verification and explicit retention approvals are implemented.
   streaming implementation is tested with RFC-style known vectors and
   wrong-checksum negative HTTP cases. This is an integrity check, not
   a replacement for SHA-256-bound SigV4 authentication.
+
+
+## P1.3 CRC64NVME upload integrity
+
+- S3 object PUT and multipart UploadPart now accept signed
+  `x-amz-checksum-crc64nvme` (and the matching declared
+  `x-amz-sdk-checksum-algorithm: CRC64NVME`). The reflected CRC-64/NVME
+  value is accumulated across streamed blocks and compared as an 8-byte
+  big-endian Base64 digest **before** a Telegram document send or any
+  immutable manifest is created. Invalid/missing declared digests return
+  BadDigest; SigV4 SHA-256 binding remains mandatory.
+- Tests cover the standard `123456789` checksum, split-block equivalence,
+  signed PUT and UploadPart, rejected corruption, and zero remote uploads
+  after rejection. AWS-chunked/trailer checksums remain unsupported.

@@ -8,7 +8,7 @@ import zlib
 import pytest
 
 from test_s3_gateway import service, signed
-from teledrive.s3.checksums import crc32c
+from teledrive.s3.checksums import crc32c, crc64nvme
 from test_s3_multipart import begin
 
 
@@ -48,12 +48,11 @@ def test_bad_extra_checksums_fail_even_when_signed_body_sha256_is_correct(
     assert service[2].uploads == before
 
 
-@pytest.mark.parametrize("header", ["x-amz-checksum-crc64nvme"])
-def test_unsupported_checksum_variants_do_not_silently_succeed(service, header):
+def test_unknown_sdk_checksum_algorithm_does_not_silently_succeed(service):
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
     before = service[2].uploads
     result = signed(service, "PUT", "/backup-bucket/no-false-ack", b"content",
-                    extra_headers={header: _b64(b"some-digest")})
+                    extra_headers={"x-amz-sdk-checksum-algorithm": "CRC64NOTREAL"})
     assert result.status_code == 501, result.text
     assert b"NotImplemented" in result.content
     assert service[2].uploads == before
@@ -123,4 +122,60 @@ def test_crc32c_multipart_part_roundtrip_and_negative(service):
     assert service[2].uploads == before
     valid = signed(service, "PUT", path, content, extra_headers=checksum)
     assert valid.status_code == 200, valid.text
+    assert service[2].uploads == before + 1
+
+
+def test_crc64nvme_known_vector_and_incremental_streaming():
+    assert crc64nvme(b"123456789") == 0xAE8B14860A799888
+    assert crc64nvme(b"") == 0
+    assert crc64nvme(b"456789", crc64nvme(b"123")) == 0xAE8B14860A799888
+    assert crc64nvme(b"second", crc64nvme(b"first")) == crc64nvme(b"firstsecond")
+    for invalid in (-1, 1 << 64):
+        with pytest.raises(ValueError):
+            crc64nvme(b"x", prior=invalid)
+
+
+def test_crc64nvme_signed_put_verifies_and_preserves_bytes(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = bytes(range(256)) * 13 + b"nvme-check"
+    declared = _b64(crc64nvme(data).to_bytes(8, "big"))
+    uploaded = signed(service, "PUT", "/backup-bucket/crc64.bin", data,
+                      extra_headers={"x-amz-checksum-crc64nvme": declared,
+                                     "x-amz-sdk-checksum-algorithm": "CRC64NVME"})
+    assert uploaded.status_code == 200, uploaded.text
+    assert signed(service, "GET", "/backup-bucket/crc64.bin").content == data
+
+
+@pytest.mark.parametrize("headers", [
+    {"x-amz-checksum-crc64nvme": _b64(b"0" * 8)},
+    {"x-amz-checksum-crc64nvme": "not-base64"},
+    {"x-amz-sdk-checksum-algorithm": "CRC64NVME"},
+    {"x-amz-checksum-crc64nvme": _b64(b"0" * 8),
+     "x-amz-checksum-crc32c": _b64(b"0" * 4)},
+])
+def test_crc64nvme_bad_or_missing_digest_never_uploads(service, headers):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    before = service[2].uploads
+    denied = signed(service, "PUT", "/backup-bucket/bad-crc64.bin", b"payload",
+                    extra_headers=headers)
+    assert denied.status_code == 400 and b"BadDigest" in denied.content
+    assert service[2].uploads == before
+    assert signed(service, "HEAD", "/backup-bucket/bad-crc64.bin").status_code == 404
+
+
+def test_crc64nvme_multipart_part_accepts_correct_digest_only(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    upload_id = begin(service)
+    part = b"crc64-multipart" * 177
+    path = f"/backup-bucket/asset.bin?uploadId={upload_id}&partNumber=1"
+    before = service[2].uploads
+    bad = signed(service, "PUT", path, part,
+                 extra_headers={"x-amz-checksum-crc64nvme": _b64(b"X" * 8)})
+    assert bad.status_code == 400 and b"BadDigest" in bad.content
+    assert service[2].uploads == before
+    good = signed(service, "PUT", path, part,
+                  extra_headers={"x-amz-checksum-crc64nvme":
+                                 _b64(crc64nvme(part).to_bytes(8, "big")),
+                                 "x-amz-sdk-checksum-algorithm": "CRC64NVME"})
+    assert good.status_code == 200, good.text
     assert service[2].uploads == before + 1
