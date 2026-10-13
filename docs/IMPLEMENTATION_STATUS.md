@@ -139,3 +139,7 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
 - This initial queue **retries unsaved uploads from the beginning** and
   retains orphans for verified GC. It does not yet resume unjournaled
   Telegram data byte-by-byte; an always-on worker scheduler is future work.
+
+- WebUI now supports inspecting, creating, manually running and explicitly
+  retrying source-root-confined durable upload jobs. No new Telegram
+  primary-payload backend is introduced.

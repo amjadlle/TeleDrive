@@ -5,7 +5,7 @@ function toast(msg,bad=false){const e=$('#toast');e.textContent=msg;e.className=
 function fmtTs(v){return v?new Date(v*1000).toLocaleString():'-'}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 
-$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.page).classList.add('active');if(b.dataset.page==='queue')loadFiles('queue');if(b.dataset.page==='history')loadFiles('history');if(b.dataset.page==='settings')loadSettings();if(b.dataset.page==='api-management'){loadKeys();loadS3Keys();loadPendingRecovery();}if(b.dataset.page==='logs')loadLogs()});
+$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.page).classList.add('active');if(b.dataset.page==='queue')loadFiles('queue');if(b.dataset.page==='history')loadFiles('history');if(b.dataset.page==='settings')loadSettings();if(b.dataset.page==='api-management'){loadKeys();loadS3Keys();loadPendingRecovery();loadStorageJobs();}if(b.dataset.page==='logs')loadLogs()});
 
 async function refreshDashboard(){
 try{
@@ -164,6 +164,53 @@ async function loadPendingRecovery(){
   }catch(e){target.textContent='Cannot inspect PENDING uploads: '+e.message}
 }
 $('#refreshPendingRecovery').onclick=loadPendingRecovery;
+
+async function loadStorageJobs(){
+  const target=$('#storageJobsRows');
+  try{
+    const result=await api('/api/v1/admin/storage/jobs?limit=100');
+    const items=result.jobs||[];
+    target.innerHTML=items.length?items.map(j=>
+      '<tr><td>'+esc(j.bucket)+' / '+esc(j.object_key)+'</td>'
+      +'<td><code>'+esc(j.source_path)+'</code></td>'
+      +'<td>'+esc(j.state)+'</td><td>'+Number(j.attempts||0)+'</td>'
+      +'<td>'+fmtTs(j.updated_at)+'</td>'
+      +'<td>'+(j.state==='failed'?'<button class="btn compact storage-job-retry" data-id="'+esc(j.id)+'">Retry</button>':(j.last_error?esc(j.last_error):'-'))+'</td></tr>'
+    ).join(''):'<tr><td colspan="6">No upload jobs</td></tr>';
+    $('.storage-job-retry').forEach(button=>button.onclick=async()=>{
+      if(!confirm('Requeue this failed job? The original source must still be unchanged. Existing Telegram media will not be deleted.'))return;
+      try{
+        await api('/api/v1/admin/storage/jobs/'+encodeURIComponent(button.dataset.id)+'/retry',{method:'POST'});
+        toast('Job queued for retry');await loadStorageJobs();
+      }catch(e){toast(e.message,true)}
+    });
+  }catch(e){target.textContent='Cannot list upload jobs: '+e.message}
+}
+$('#refreshStorageJobs').onclick=loadStorageJobs;
+$('#queueStorageJob').onclick=async()=>{
+  const bucket=$('#storageJobBucket').value.trim();
+  const key=$('#storageJobKey').value;
+  const source_path=$('#storageJobSource').value.trim();
+  if(!bucket||!key||!source_path){toast('Bucket, key and source path are required',true);return}
+  try{
+    const result=await api('/api/v1/admin/storage/jobs',{
+      method:'POST',body:JSON.stringify({bucket,key,source_path}),
+    });
+    toast('Local file queued: '+result.id);
+    await loadStorageJobs();
+  }catch(e){toast(e.message,true)}
+};
+$('#runStorageJob').onclick=async()=>{
+  if(!confirm('Process the next upload job and publish its Telegram object if the generation precondition still matches?'))return;
+  const button=$('#runStorageJob');
+  button.disabled=true;
+  try{
+    const result=await api('/api/v1/admin/storage/jobs/run-next',{method:'POST'});
+    toast(result.job?'Upload job '+result.job.state:'No queued upload jobs');
+    await loadStorageJobs();
+  }catch(e){toast(e.message,true);await loadStorageJobs()}
+  finally{button.disabled=false}
+};
 
 $('#runGCAudit').onclick=async()=>{
   const target=$('#gcAuditSummary');

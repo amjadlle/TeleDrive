@@ -161,6 +161,21 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 <div class="scroll section"><table><thead><tr><th>Bucket</th><th>Object key</th><th>Upload ID</th><th>Lease expired</th><th>Action</th></tr></thead><tbody id="s3RecoveryRows"></tbody></table></div>
 </div>
 <div class="card section">
+<h3>Durable Telegram upload jobs</h3>
+<p class="muted">Queue an existing local file under the operator-configured <code>TELEDRIVE_JOB_SOURCE_ROOT</code>. The source remains on disk until uploaded to Telegram. Jobs survive SQL restart, use expiring worker leases and never overwrite a concurrently changed object head. Retrying a failed upload can create new Telegram chunks; historical media remains protected.</p>
+<div class="form-grid section">
+<div><label>Bucket</label><input id="storageJobBucket" class="input" placeholder="backup-bucket"></div>
+<div><label>Object key</label><input id="storageJobKey" class="input" placeholder="archives/archive.bin"></div>
+<div><label>Existing absolute source path (inside approved root)</label><input id="storageJobSource" class="input" placeholder="/data/uploads/archive.bin"></div>
+</div>
+<div class="row section">
+<button class="btn primary compact" id="queueStorageJob">Queue file</button>
+<button class="btn compact" id="runStorageJob">Run next job</button>
+<button class="btn compact" id="refreshStorageJobs">Refresh jobs</button>
+</div>
+<div class="scroll section"><table><thead><tr><th>Bucket / key</th><th>Source</th><th>Status</th><th>Attempts</th><th>Updated</th><th>Action</th></tr></thead><tbody id="storageJobsRows"></tbody></table></div>
+</div>
+<div class="card section">
 <h3>Abandoned PENDING upload reconciliation</h3>
 <p class="muted">Inspect uploads whose SQL writer lease expired. Only an explicitly selected expired writer can be marked failed; Telegram messages and chunk journals are retained. A live lease, a READY object or a legacy upload without writer token cannot be touched.</p>
 <div class="row"><button class="btn compact" id="refreshPendingRecovery">Scan stale PENDING uploads</button></div>
