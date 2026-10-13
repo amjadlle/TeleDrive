@@ -402,10 +402,37 @@ replaced. Copying multipart objects preserves their original multipart
 ETag. CopySource supports `bucket/key` (boto3) and `/bucket/key`, and
 cross-bucket copies work within the same Telegram storage.
 
-**CopyObject limits:** Metadata REPLACE, versionId, byte-range copy and
-advanced copy headers are not yet supported and are rejected explicitly.
+**CopyObject limits:** MetadataDirective=REPLACE is implemented for
+the supported signed HTTP headers and `x-amz-meta-*` user fields.
+Unsupported source VersionId, byte-range Copy and advanced copy headers
+still return explicit errors.
 Physical garbage collection MUST follow shared alias references; deleting
 source Telegram media while an alias exists would corrupt copied objects.
+
+**S3 HTTP object metadata implemented:** Normal PutObject, CreateMultipartUpload
+(followed by CompleteMultipartUpload), and CopyObject now preserve signed
+`Content-Type`, `Content-Encoding`, `Content-Language`,
+`Content-Disposition`, `Cache-Control`, `Expires`, and
+`x-amz-meta-*` user fields. GetObject, HeadObject and byte-Range GET return
+these fields from immutable SQL metadata without fetching metadata from
+Telegram. CopyObject supports `MetadataDirective=COPY` (snapshot source
+metadata) and `MetadataDirective=REPLACE` (new signed fields). An overwrite
+never alters previous object manifests or historical metadata. Upload
+publication and initial metadata writes share the same SQL transaction.
+
+User metadata names must contain ASCII letters/digits/underscore/hyphen;
+metadata values are limited to 1 KiB each and all metadata fields together
+to 2 KiB. Unsupported S3 encryption, storage class, ACL, Object Lock,
+website redirects and `aws-chunked` upload semantics are rejected before
+Telegram transfer. These safeguards prevent an S3 client from receiving
+false success for a durability/security feature the gateway does not provide.
+Metadata is not a replacement for object contents: only payload bytes live
+in Telegram.
+
+**Bucket location discovery implemented:** Signed `GetBucketLocation` returns
+the S3-compatible `us-east-1` XML location constraint. It requires its own
+`s3:GetBucketLocation` credential permission and works through boto3.
+Multi-region S3 routing is not supported.
 
 **S3 Object/ Bucket Tagging implemented:** `GetObjectTagging`,
 `PutObjectTagging`, `DeleteObjectTagging`, `GetBucketTagging`,
