@@ -9,6 +9,7 @@ an independently verified garbage collector supports them.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import time
@@ -55,6 +56,13 @@ completion_parts = Table(
     Column("position", Integer, primary_key=True),
     Column("number", Integer, nullable=False),
     Column("etag", String(64), nullable=False),
+)
+completion_leases = Table(
+    "storage_multipart_completion_leases", _meta,
+    Column("upload_id", String(36), ForeignKey("storage_multipart_uploads.id"), primary_key=True),
+    Column("token", String(80), nullable=False),
+    Column("lease_until", BigInteger, nullable=False),
+    Column("heartbeat_at", BigInteger, nullable=False),
 )
 multipart_etags = Table(
     "storage_multipart_etags", _meta,
@@ -192,6 +200,154 @@ class MultipartStore:
         if changed.rowcount != 1:
             raise MultipartError("OperationAborted", "Concurrent multipart mutation", 409)
 
+    def _claim_completion(self, identifier: str, now: int, ttl: int) -> str:
+        """The state change and ownership token commit together."""
+        token = uuid4().hex
+        try:
+            changed = self.db.connection.execute(update(uploads).where(
+                uploads.c.id == identifier, uploads.c.state == "active"
+            ).values(state="completing"))
+            if changed.rowcount != 1:
+                self.db.connection.rollback()
+                raise MultipartError("OperationAborted", "Upload is already completing", 409)
+            self.db.connection.execute(insert(completion_leases).values(
+                upload_id=identifier, token=token,
+                lease_until=now + ttl, heartbeat_at=now,
+            ))
+            self.db.commit()
+        except BaseException:
+            self.db.connection.rollback()
+            raise
+        return token
+
+    def _renew_completion(self, identifier: str, token: str, now: int, ttl: int,
+                          *, commit: bool = True) -> bool:
+        changed = self.db.connection.execute(update(completion_leases).where(
+            completion_leases.c.upload_id == identifier,
+            completion_leases.c.token == token,
+            completion_leases.c.lease_until >= now,
+        ).values(lease_until=now + ttl, heartbeat_at=now))
+        if commit:
+            self.db.commit()
+        return changed.rowcount == 1
+
+    async def _heartbeat_completion(self, identifier: str, token: str, ttl: int,
+                                    stop: asyncio.Event, lost: asyncio.Event) -> None:
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=max(1, ttl // 3))
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                if not self._renew_completion(identifier, token, int(time.time()), ttl):
+                    lost.set()
+                    return
+            except Exception:
+                self.db.connection.rollback()
+                lost.set()
+                return
+
+    def _reset_owned_completion(self, identifier: str, token: str) -> bool:
+        """Never reset a lease that another worker has recovered or taken."""
+        now = int(time.time())
+        try:
+            owned = self.db.connection.execute(select(
+                completion_leases.c.upload_id
+            ).where(
+                completion_leases.c.upload_id == identifier,
+                completion_leases.c.token == token,
+                completion_leases.c.lease_until >= now,
+            )).first()
+            if owned is None:
+                self.db.connection.rollback()
+                return False
+            changed = self.db.connection.execute(update(uploads).where(
+                uploads.c.id == identifier, uploads.c.state == "completing"
+            ).values(state="active"))
+            if changed.rowcount != 1:
+                self.db.connection.rollback()
+                return False
+            self.db.connection.execute(delete(completion_leases).where(
+                completion_leases.c.upload_id == identifier,
+                completion_leases.c.token == token,
+            ))
+            self.db.commit()
+            return True
+        except BaseException:
+            self.db.connection.rollback()
+            raise
+
+    def stale_completions(self, *, now: int | None = None,
+                          min_age_seconds: int = 3600, limit: int = 100) -> list[dict]:
+        """Read-only operator inventory; never infer ownership of legacy unfenced rows."""
+        if min_age_seconds < 60 or not 1 <= limit <= 1000:
+            raise ValueError("Unsafe stale completion limits")
+        now = int(time.time()) if now is None else now
+        records = self.db.connection.execute(
+            select(uploads.c.id, uploads.c.bucket, uploads.c.object_key,
+                   completion_leases.c.lease_until)
+            .join(completion_leases, uploads.c.id == completion_leases.c.upload_id)
+            .where(uploads.c.state == "completing",
+                   completion_leases.c.lease_until < now - min_age_seconds)
+            .order_by(completion_leases.c.lease_until, uploads.c.id)
+            .limit(limit)
+        ).mappings().all()
+        return [dict(row) for row in records]
+
+    def recover_stale_completion(self, identifier: str, *, dry_run: bool = True,
+                                 now: int | None = None,
+                                 min_age_seconds: int = 3600) -> bool:
+        """Fence an expired writer and put uncommitted multipart data back in ACTIVE.
+
+        An upload with no recorded lease (older pre-fencing installations)
+        is deliberately not recovered by this method. No Telegram message
+        is removed. Completed writes never become active again.
+        """
+        if min_age_seconds < 60:
+            raise ValueError("Stale completion minimum age must be >= 60 seconds")
+        now = int(time.time()) if now is None else now
+        try:
+            found = self.db.connection.execute(select(
+                uploads.c.state, completion_leases.c.token,
+                completion_leases.c.lease_until,
+            ).select_from(
+                uploads.join(completion_leases,
+                             uploads.c.id == completion_leases.c.upload_id)
+            ).where(uploads.c.id == identifier)).first()
+            if (not found or found[0] != "completing"
+                    or int(found[2]) >= now - min_age_seconds):
+                self.db.connection.rollback()
+                return False
+            if dry_run:
+                self.db.connection.rollback()
+                return True
+            # Take ownership by atomically invalidating the prior writer.
+            # The final SQL publication renews this same row in its transaction.
+            fenced = self.db.connection.execute(update(completion_leases).where(
+                completion_leases.c.upload_id == identifier,
+                completion_leases.c.token == found[1],
+                completion_leases.c.lease_until < now - min_age_seconds,
+            ).values(token="recovered:" + uuid4().hex,
+                     lease_until=now, heartbeat_at=now))
+            if fenced.rowcount != 1:
+                self.db.connection.rollback()
+                return False
+            result = self.db.connection.execute(update(uploads).where(
+                uploads.c.id == identifier, uploads.c.state == "completing"
+            ).values(state="active"))
+            if result.rowcount != 1:
+                self.db.connection.rollback()
+                return False
+            self.db.connection.execute(delete(completion_leases).where(
+                completion_leases.c.upload_id == identifier,
+            ))
+            self.db.commit()
+            return True
+        except BaseException:
+            self.db.connection.rollback()
+            raise
+
     @staticmethod
     def _validate_selection(selected: list[tuple[int, str]]) -> None:
         if not selected or len(selected) > MAX_PARTS:
@@ -206,7 +362,8 @@ class MultipartStore:
 
     async def complete(self, identifier: str, bucket: str, key: str, owner: str,
                        selected: list[tuple[int, str]],
-                       engine: TelegramObjectStorage) -> CompletedUpload:
+                       engine: TelegramObjectStorage, *,
+                       lease_seconds: int = 120) -> CompletedUpload:
         self._validate_selection(selected)
         row = self.require(identifier, bucket, key, owner, allow_completed=True)
         if row["state"] == "completed":
@@ -220,14 +377,14 @@ class MultipartStore:
                 raise MultipartError("InvalidPart", "Completion part list differs from committed object")
             final = self.manifests.get(row["completed_object_id"])
             return CompletedUpload(final.id, row["completed_etag"], final.size)
-        # A DB conditional update fences concurrent completion, abort and part writes.
-        changed = self.db.connection.execute(update(uploads).where(
-            uploads.c.id == identifier, uploads.c.state == "active"
-        ).values(state="completing"))
-        self.db.commit()
-        if changed.rowcount != 1:
-            raise MultipartError("OperationAborted", "Multipart upload is being completed", 409)
-
+        if lease_seconds < 5:
+            raise ValueError("Completion lease must last at least 5 seconds")
+        token = self._claim_completion(identifier, int(time.time()), lease_seconds)
+        stop = asyncio.Event()
+        lost = asyncio.Event()
+        renewal = asyncio.create_task(
+            self._heartbeat_completion(identifier, token, lease_seconds, stop, lost)
+        )
         try:
             available = {int(p.number): p for p in self.db.connection.execute(
                 select(parts).where(parts.c.upload_id == identifier)
@@ -252,6 +409,11 @@ class MultipartStore:
                 total_size += part.size
                 etag_md5.update(bytes.fromhex(etag))
                 chosen.append(part)
+            # Stop background DB writes before the publication transaction.
+            stop.set()
+            await renewal
+            if lost.is_set():
+                raise MultipartError("OperationAborted", "Completion writer lease lost", 409)
             final_etag = f"{etag_md5.hexdigest()}-{len(selected)}"
             object_id = str(uuid4())
             digest = full_sha.hexdigest()
@@ -260,6 +422,12 @@ class MultipartStore:
             # One SQL transaction: existing Telegram chunk messages move from
             # immutable temporary part manifests to the final object.
             try:
+                # SQL fencing point: recovery cannot invalidate this token
+                # while the committed object/chunk/head transaction is running.
+                if not self._renew_completion(
+                    identifier, token, int(time.time()), lease_seconds, commit=False
+                ):
+                    raise MultipartError("OperationAborted", "Completion lease was lost", 409)
                 self.db.connection.execute(insert(objects).values(
                     id=object_id, bucket=bucket, object_key=key,
                     status="pending", size=total_size,
@@ -332,20 +500,24 @@ class MultipartStore:
                          completed_etag=final_etag))
                 if completed.rowcount != 1:
                     raise MultipartError("OperationAborted", "Multipart upload lost ownership", 409)
+                self.db.connection.execute(delete(completion_leases).where(
+                    completion_leases.c.upload_id == identifier,
+                    completion_leases.c.token == token,
+                ))
                 self.db.commit()
             except BaseException:
                 self.db.connection.rollback()
                 raise
             return CompletedUpload(object_id, final_etag, total_size)
         except BaseException:
-            # Reset a failed completion for a safe explicit retry. All object
-            # re-parenting above is rolled back if any DB write fails.
+            # An old worker must never reopen an upload once its lease expired,
+            # was fenced by recovery, or was committed by another worker.
             self.db.connection.rollback()
-            self.db.connection.execute(update(uploads).where(
-                uploads.c.id == identifier, uploads.c.state == "completing"
-            ).values(state="active"))
-            self.db.commit()
+            self._reset_owned_completion(identifier, token)
             raise
+        finally:
+            stop.set()
+            await renewal
 
     def object_etag(self, object_id: str, default_sha256: str) -> str:
         etag = self.db.connection.execute(select(multipart_etags.c.etag).where(
