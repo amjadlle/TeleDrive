@@ -402,9 +402,11 @@ def test_signed_md5_allows_standard_unsigned_payload_without_sacrificing_integri
 
     unsigned = AWSRequest(method="PUT", url="http://localhost:9000/backup-bucket/no-checksum",
                           data=body)
-    unsigned.context["payload_signing_enabled"] = False
-    S3SigV4Auth(Credentials(service[1].access_key, service[1].secret_key),
-                "s3", "us-east-1").add_auth(unsigned)
+    RcloneStyleUnsignedSigner(
+        Credentials(service[1].access_key, service[1].secret_key),
+        "s3", "us-east-1",
+    ).add_auth(unsigned)
+    assert dict(unsigned.headers)["X-Amz-Content-SHA256"] == "UNSIGNED-PAYLOAD"
     denied = service[0].put("/backup-bucket/no-checksum",
                             content=body, headers=dict(unsigned.headers))
     assert denied.status_code == 400
