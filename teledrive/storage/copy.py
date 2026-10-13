@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from teledrive.storage.catalog import BucketCatalog, heads
 from teledrive.storage.manifest import object_aliases, objects
 from teledrive.s3.multipart import MultipartStore, multipart_etags
+from teledrive.s3.tagging import ObjectTagStore
 
 
 class CopyConflict(ValueError):
@@ -56,6 +57,7 @@ def copy_object(
         raise FileNotFoundError("Destination bucket not found")
 
     multipart = MultipartStore(catalog)
+    tagging = ObjectTagStore(catalog)
     original_tag = multipart.object_etag(source.id, source.sha256)
     identifier = str(uuid4())
     key_hash = catalog._keyhash(destination_key)
@@ -69,6 +71,9 @@ def copy_object(
         db.connection.execute(insert(object_aliases).values(
             object_id=identifier, source_object_id=base_id,
         ))
+        # S3 COPY tagging directive: tag set is snapshotted at copy time.
+        # Aliased content remains immutable, tags belong to the new version.
+        tagging.copy_tags(source.id, identifier)
         if original_tag != source.sha256:
             db.connection.execute(insert(multipart_etags).values(
                 object_id=identifier, etag=original_tag,
