@@ -330,7 +330,7 @@ async def _handle(request: Request):
                 return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml")
             if mpu_complete:
-                mpu.require(upload_id, bucket, key, owner)
+                mpu.require(upload_id, bucket, key, owner, allow_completed=True)
                 content = bytearray()
                 async for block in request.stream():
                     content.extend(block)
