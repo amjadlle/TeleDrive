@@ -172,8 +172,8 @@ def test_limits_duplicate_keys_and_unsupported_version_are_rejected(service):
     assert signed(service, "GET", "/backup-bucket/file.bin?tagging&versionId=old").status_code == 501
     assert signed(service, "GET", "/backup-bucket/file.bin?versionId=old").status_code == 501
     assert signed(service, "PUT", "/backup-bucket/file.bin", b"new",
-                  extra_headers={"x-amz-tagging": "k=v"}).status_code == 501
-    assert extract_tags(signed(service, "GET", path)) == []
+                  extra_headers={"x-amz-tagging": "k=v"}).status_code == 200
+    assert extract_tags(signed(service, "GET", path)) == [("k", "v")]
 
 
 def test_boto3_tagging_over_actual_http_server(service):
@@ -289,3 +289,61 @@ def test_bucket_tagging_is_isolated_from_object_tags(service):
     assert extract_tags(signed(service, "GET", "/backup-bucket?tagging")) == [("bucket", "only")]
     assert signed(service, "DELETE", "/backup-bucket?tagging").status_code == 204
     assert extract_tags(signed(service, "GET", path)) == [("object", "only")]
+
+
+def test_signed_inline_tags_are_published_with_new_telegram_object(service):
+    create(service, data=b"old-blob")
+    remote = service[2]
+    response = signed(service, "PUT", "/backup-bucket/file.bin", b"new-blob",
+                      extra_headers={"x-amz-tagging": "role=storage&city=%C4%B0stanbul"})
+    assert response.status_code == 200, response.text
+    assert extract_tags(signed(service, "GET", "/backup-bucket/file.bin?tagging")) == [
+        ("city", "İstanbul"), ("role", "storage")
+    ]
+    assert signed(service, "GET", "/backup-bucket/file.bin").content == b"new-blob"
+    assert remote.uploads == 2
+
+
+def test_invalid_inline_tag_or_missing_tagging_permission_never_uploads(service):
+    create(service)
+    remote = service[2]
+    before = remote.uploads
+    denied = signed(service, "PUT", "/backup-bucket/file.bin", b"new-blob",
+                    extra_headers={"x-amz-tagging": "k=first&k=duplicate"})
+    assert denied.status_code == 400
+    assert remote.uploads == before
+    db = service[3]()
+    try:
+        limited = S3CredentialStore(db, service[4]).create(
+            "put-no-tag-rights", ["s3:PutObject"]
+        )
+    finally:
+        db.close()
+    forbidden = signed(service, "PUT", "/backup-bucket/file.bin", b"new-blob",
+                       extra_headers={"x-amz-tagging": "status=private"},
+                       access=limited.access_key, secret=limited.secret_key)
+    assert forbidden.status_code == 403
+    assert remote.uploads == before
+    assert signed(service, "GET", "/backup-bucket/file.bin").content == b"Telegram-backed-body"
+
+
+def test_copy_tag_directive_replace_snapshots_new_tags_without_telegram_upload(service):
+    create(service, data=b"source-body")
+    assert signed(service, "PUT", "/backup-bucket/file.bin?tagging",
+                  tag_xml([("original", "source")])).status_code == 200
+    before = service[2].uploads
+    replace = copy(service, "/backup-bucket/file.bin", "/backup-bucket/replaced",
+                   **{"x-amz-tagging-directive": "REPLACE",
+                      "x-amz-tagging": "destination=copy"})
+    assert replace.status_code == 200, replace.text
+    assert service[2].uploads == before
+    assert extract_tags(signed(service, "GET", "/backup-bucket/replaced?tagging")) == [
+        ("destination", "copy")
+    ]
+    assert extract_tags(signed(service, "GET", "/backup-bucket/file.bin?tagging")) == [
+        ("original", "source")
+    ]
+    bad = copy(service, "/backup-bucket/file.bin", "/backup-bucket/should-not-exist",
+               **{"x-amz-tagging": "not-replace=forbidden"})
+    assert bad.status_code == 400
+    assert signed(service, "HEAD", "/backup-bucket/should-not-exist").status_code == 404
