@@ -11,8 +11,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: telegram-bot-e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # In-progress Telegram writes must finish their cleanup.
+  cancel-in-progress: false
 
 jobs:
   telegram-bot-roundtrip:
@@ -31,8 +32,8 @@ jobs:
         id: configured
         run: |
           if [[ -z "$TELEDRIVE_E2E_BOT_TOKEN" || -z "$TELEDRIVE_E2E_BOT_CHAT_ID" ]]; then
-            echo "::notice::Bot E2E not configured; add TELEDRIVE_E2E_BOT_TOKEN secret and TELEDRIVE_E2E_BOT_CHAT_ID variable."
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Bot E2E not configured; add TELEDRIVE_E2E_BOT_TOKEN secret and TELEDRIVE_E2E_BOT_CHAT_ID variable."
+            exit 1
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
