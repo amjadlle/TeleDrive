@@ -9,21 +9,25 @@ on:
     paths:
       - "teledrive/api_keys.py"
       - "teledrive/storage/**"
+      - "teledrive/s3/**"
       - "web/**"
       - "tests/test_api_keys.py"
       - "tests/test_rest_*.py"
       - "tests/test_storage_*.py"
       - "tests/test_bot_storage.py"
+      - "tests/test_s3_*.py"
       - ".github/workflows/storage-api-ci.yml"
   pull_request:
     paths:
       - "teledrive/api_keys.py"
       - "teledrive/storage/**"
+      - "teledrive/s3/**"
       - "web/**"
       - "tests/test_api_keys.py"
       - "tests/test_rest_*.py"
       - "tests/test_storage_*.py"
       - "tests/test_bot_storage.py"
+      - "tests/test_s3_*.py"
       - ".github/workflows/storage-api-ci.yml"
 
 permissions:
@@ -50,7 +54,7 @@ jobs:
       - name: Install API and test runtime
         run: |
           python -m pip install -r requirements-web.txt
-          python -m pip install pytest httpx
+          python -m pip install pytest httpx boto3
           python -m pip check
       - name: Compile API and storage
         run: python -m compileall -q teledrive web tests
@@ -63,4 +67,6 @@ jobs:
             tests/test_storage_engine.py \
             tests/test_storage_recovery.py \
             tests/test_storage_catalog.py \
-            tests/test_bot_storage.py
+            tests/test_bot_storage.py \
+            tests/test_s3_gateway.py \
+            tests/test_s3_credentials.py
