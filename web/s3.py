@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import tempfile
 import time
@@ -74,11 +75,85 @@ def _range(value: str | None, size: int) -> tuple[int, int, bool]:
     return start, end, True
 
 
-def _list_xml(bucket: str, keys: list, prefix: str, limit: int, after: str,
-              more: bool, *, delimiter: str = "") -> bytes:
+def _cursor_encode(master: bytes, bucket: str, prefix: str, delimiter: str,
+                   after: str, skip_prefix: str) -> str:
+    payload = json.dumps(
+        {"bucket": bucket, "prefix": prefix, "delimiter": delimiter,
+         "after": after, "skip_prefix": skip_prefix},
+        separators=(",", ":"), sort_keys=True,
+    ).encode()
+    encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    signature = hmac.new(master, encoded.encode(), hashlib.sha256).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _cursor_decode(token: str, master: bytes, bucket: str,
+                   prefix: str, delimiter: str) -> tuple[str, str]:
+    try:
+        encoded, signature = token.split(".", 1)
+        if len(token) > 4096 or not hmac.compare_digest(
+            signature, hmac.new(master, encoded.encode(), hashlib.sha256).hexdigest()
+        ):
+            raise ValueError("Signature mismatch")
+        parsed = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        if (not isinstance(parsed, dict) or parsed.get("bucket") != bucket
+                or parsed.get("prefix") != prefix or parsed.get("delimiter") != delimiter
+                or not isinstance(parsed.get("after"), str)
+                or not isinstance(parsed.get("skip_prefix"), str)):
+            raise ValueError("Cursor does not match request")
+        return parsed["after"], parsed["skip_prefix"]
+    except (ValueError, UnicodeError, TypeError, KeyError) as exc:
+        raise SigV4Error("InvalidArgument", "Invalid continuation token") from exc
+
+
+def _page(catalog: BucketCatalog, bucket: str, prefix: str,
+          delimiter: str, after: str, limit: int,
+          skip_prefix: str) -> tuple[list, list[str], str, str, bool]:
+    """Page over raw keys without splitting a common-prefix across pages.
+
+    The last emitted prefix is carried in the signed continuation cursor
+    so a folder containing >1000 objects is not shown repeatedly.
+    """
+    keys = []
+    common = []
+    seen = {skip_prefix} if skip_prefix else set()
+    position = after
+    last_consumed = after
+    while True:
+        batch = catalog.list_objects(bucket, prefix=prefix, after=position, limit=1000)
+        if not batch:
+            return keys, common, last_consumed, skip_prefix, False
+        for item in batch:
+            key = item.item.key
+            tail = key[len(prefix):]
+            common_name = ""
+            if delimiter and delimiter in tail:
+                common_name = prefix + tail.split(delimiter, 1)[0] + delimiter
+            if common_name and common_name in seen:
+                position = key
+                last_consumed = key
+                continue
+            if len(keys) + len(common) >= limit:
+                return keys, common, last_consumed, skip_prefix, True
+            if common_name:
+                common.append(common_name)
+                seen.add(common_name)
+                skip_prefix = common_name
+            else:
+                keys.append(item)
+                skip_prefix = ""
+            position = key
+            last_consumed = key
+        if len(batch) < 1000:
+            return keys, common, last_consumed, skip_prefix, False
+
+
+def _list_xml(bucket: str, keys: list, common: list[str], prefix: str,
+              limit: int, after: str, delimiter: str,
+              more: bool, next_token: str | None) -> bytes:
     root = ET.Element("ListBucketResult", xmlns=NAMESPACE)
     for field, val in (
-        ("Name", bucket), ("Prefix", prefix), ("KeyCount", len(keys)),
+        ("Name", bucket), ("Prefix", prefix), ("KeyCount", len(keys) + len(common)),
         ("MaxKeys", limit), ("IsTruncated", "true" if more else "false"),
     ):
         ET.SubElement(root, field).text = str(val)
@@ -96,11 +171,10 @@ def _list_xml(bucket: str, keys: list, prefix: str, limit: int, after: str,
             ("StorageClass", "STANDARD"),
         ):
             ET.SubElement(c, field).text = str(value)
-    if more and keys:
-        # An opaque continuation key will be supported in the multipart/listing phase.
-        # Until then reject paginated clients rather than claim completion.
-        ET.SubElement(root, "NextContinuationToken").text = base64.urlsafe_b64encode(
-            keys[-1].item.key.encode("utf-8")).decode().rstrip("=")
+    for name in common:
+        ET.SubElement(ET.SubElement(root, "CommonPrefixes"), "Prefix").text = name
+    if next_token:
+        ET.SubElement(root, "NextContinuationToken").text = next_token
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
