@@ -8,12 +8,14 @@ on:
       - feature/docker-webui-multiaccount
     paths:
       - "teledrive/db.py"
+      - "teledrive/storage/**"
       - "teledrive/uploader.py"
       - "tests/test_database_live.py"
       - ".github/workflows/database-ci.yml"
   pull_request:
     paths:
       - "teledrive/db.py"
+      - "teledrive/storage/**"
       - "teledrive/uploader.py"
       - "tests/test_database_live.py"
       - ".github/workflows/database-ci.yml"
