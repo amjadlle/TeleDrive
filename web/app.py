@@ -1150,6 +1150,33 @@ def storage_operations_health(_: None = Depends(require_auth)):
         conn.close()
 
 
+@app.get("/api/v1/admin/storage/bot-unresolved", tags=["Storage jobs"],
+         summary="Inspect unresolved Bot send intents without modifying Telegram")
+def list_unresolved_bot_sends(
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: None = Depends(require_auth),
+):
+    # Operator-only diagnostic: return immutable source identity for
+    # independent channel proof. Never accept unverified receipt IDs or
+    # perform a retry/deletion as a side effect of inspecting this list.
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+
+    conn = db_connect()
+    try:
+        index = BotFileIndex(conn)
+        return {
+            "total": index.unresolved_count(),
+            "intents": index.unresolved_details(limit=limit),
+            "message": (
+                "Possible remotely accepted Bot sends. Independently verify "
+                "original channel message ID, Bot file ID and full Telegram "
+                "bytes before recording any recovery receipt. No automatic retry."
+            ),
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/api/v1/admin/storage/jobs", tags=["Storage jobs"],
          summary="Inspect durable local-source upload jobs (no worker tokens)")
 def list_storage_upload_jobs(
