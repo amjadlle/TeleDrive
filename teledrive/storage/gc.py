@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import defaultdict
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, func, or_
 
 from teledrive.storage.catalog import BucketCatalog, heads
 from teledrive.storage.manifest import ManifestStore, object_aliases, objects, chunks
@@ -43,6 +43,56 @@ class StorageGCInventory:
     def __init__(self, manifests: ManifestStore):
         self.manifests = manifests
         self.db = manifests.db
+
+    def preview_failed_retention(self, *, now: int,
+                                 min_age_seconds: int = 7 * 86400,
+                                 limit: int = 100) -> list[dict]:
+        """Inspect aged FAILED journals without authorizing Telegram deletion."""
+        if min_age_seconds < 86400 or not 1 <= limit <= 1000:
+            raise ValueError("Unsafe GC retention parameters")
+        from teledrive.storage.catalog import published_versions
+        from teledrive.s3.multipart import parts
+        db = self.db.connection
+        found = db.execute(
+            select(objects.c.id, objects.c.bucket, objects.c.object_key,
+                   objects.c.updated_at)
+            .where(objects.c.status == "failed",
+                   objects.c.updated_at <= now - min_age_seconds)
+            .order_by(objects.c.updated_at, objects.c.id).limit(limit)
+        ).all()
+        has_parts = inspect(self.db.engine).has_table("storage_multipart_parts")
+        result = []
+        for ident, bucket, key, updated_at in found:
+            count = db.execute(select(func.count()).select_from(chunks).where(
+                chunks.c.object_id == ident
+            )).scalar_one()
+            head_refs = db.execute(select(func.count()).select_from(heads).where(
+                heads.c.object_id == ident
+            )).scalar_one()
+            alias_refs = db.execute(
+                select(func.count()).select_from(object_aliases).where(
+                    or_(object_aliases.c.object_id == ident,
+                        object_aliases.c.source_object_id == ident)
+                )
+            ).scalar_one()
+            history_refs = db.execute(
+                select(func.count()).select_from(published_versions).where(
+                    published_versions.c.object_id == ident
+                )
+            ).scalar_one()
+            part_refs = db.execute(
+                select(func.count()).select_from(parts).where(parts.c.object_id == ident)
+            ).scalar_one() if has_parts else 0
+            result.append({
+                "object_id": ident, "bucket": bucket, "key": key,
+                "updated_at": int(updated_at), "journaled_chunks": int(count),
+                "reference_blocked": bool(
+                    head_refs or alias_refs or history_refs or part_refs
+                ),
+                "remote_history_scan_required": True,
+                "approved_for_deletion": False, "dry_run": True,
+            })
+        return result
 
     def inspect(self) -> GCInventory:
         connection = self.db.connection

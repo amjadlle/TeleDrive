@@ -189,3 +189,11 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
 - Automatic retries of failed jobs are deliberately **not** enabled:
   operators inspect and explicitly requeue failures to avoid unbounded
   repeated uploads on unrecoverable sources.
+
+## P2 retention-aware GC preview (physical deletion disabled)
+
+Root-admin GET `/api/v1/admin/storage/gc-candidates` lists aged FAILED
+journals, excludes PENDING/READY, counts source references across HEADs,
+published versions, aliases and multipart parts. Every candidate remains
+unapproved for physical deletion until independent Telegram ownership
+verification and explicit retention approvals are implemented.

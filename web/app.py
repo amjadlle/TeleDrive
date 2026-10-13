@@ -865,6 +865,27 @@ def rotate_api_key(identifier: str, request: Request, _: None = Depends(require_
         conn.close()
 
 
+@app.get("/api/v1/admin/storage/gc-candidates", tags=["Storage recovery"],
+         summary="Retention-aware dry-run FAILED journal planning, never deletion")
+def list_storage_gc_candidates(
+    min_age_seconds: int = Query(default=7*86400, ge=86400, le=365*86400),
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: None = Depends(require_auth),
+):
+    conn = db_connect()
+    try:
+        catalog = BucketCatalog(ManifestStore(conn))
+        return {
+            "candidates": StorageGCInventory(catalog.manifests).preview_failed_retention(
+                now=int(time.time()), min_age_seconds=min_age_seconds, limit=limit
+            ),
+            "dry_run": True, "physical_deletion_enabled": False,
+            "remote_history_scan_required": True,
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/api/v1/admin/storage/gc-audit", tags=["API keys"],
          summary="Audit Telegram object references before any physical cleanup")
 def get_storage_gc_audit(
