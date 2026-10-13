@@ -1041,11 +1041,40 @@ def storage_operations_health(_: None = Depends(require_auth)):
         pending = catalog.manifests.stale_pending(now=now, limit=1000)
         completing = MultipartStore(catalog).stale_completions(now=now, limit=1000)
         gc = StorageGCInventory(catalog.manifests).inspect()
+        states = {state: int(count) for state, count in counts}
+        alerts = []
+        if states.get("failed", 0):
+            alerts.append({
+                "code": "failed_upload_jobs", "severity": "warning",
+                "count": states["failed"],
+                "message": "Failed upload jobs require explicit operator retry or cancellation",
+            })
+        if pending:
+            alerts.append({
+                "code": "stale_pending_uploads", "severity": "warning",
+                "count": len(pending),
+                "message": "Expired PENDING writers need dry-run recovery review",
+            })
+        if completing:
+            alerts.append({
+                "code": "stale_multipart_completions", "severity": "warning",
+                "count": len(completing),
+                "message": "Stale multipart completion leases need dry-run review",
+            })
+        truncated = len(pending) >= 1000 or len(completing) >= 1000
+        if truncated:
+            alerts.append({
+                "code": "sample_limit_reached", "severity": "critical",
+                "count": None,
+                "message": "Recovery sample limit reached; inventory may be incomplete",
+            })
         return {
-            "job_states": {state: count for state, count in counts},
+            "job_states": states,
+            "alerts": alerts,
+            "unresolved_alert_count": len(alerts),
             "stale_pending_sample_count": len(pending),
             "stale_multipart_sample_count": len(completing),
-            "samples_truncated": len(pending) >= 1000 or len(completing) >= 1000,
+            "samples_truncated": truncated,
             "telegram_messages_retained": gc.total_telegram_messages,
             "live_object_heads": gc.live_object_heads,
             "copy_aliases": gc.copy_aliases,

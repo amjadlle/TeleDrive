@@ -300,3 +300,11 @@ verification and explicit retention approvals are implemented.
 - Generic presigned POST, including CreateMultipartUpload and unbound
   payload signatures, remains rejected. A future supported-scope S3
   presigned POST must meet the same integrity and owner requirements.
+
+## P1.4 actionable operator health alerts
+
+- Admin-only `/api/v1/admin/storage/health` now returns structured
+  nonsecret alerts for failed durable jobs, expired PENDING writers,
+  stale multipart completions and incomplete 1000-record inventories.
+  WebUI shows alert code, severity and count; operator recovery and
+  retries remain manual, and no Telegram physical deletion is enabled.

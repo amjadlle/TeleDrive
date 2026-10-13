@@ -247,6 +247,8 @@ $('#refreshStorageHealth').onclick=async()=>{
     const h=await api('/api/v1/admin/storage/health');
     target.textContent=[
       'Job states: '+JSON.stringify(h.job_states),
+      'Unresolved alerts: '+h.unresolved_alert_count,
+      ...(h.alerts||[]).map(a=>'['+a.severity.toUpperCase()+'] '+a.code+': '+a.count+' — '+a.message),
       'Stale PENDING uploads: '+h.stale_pending_sample_count,
       'Stale multipart completions: '+h.stale_multipart_sample_count,
       'Telegram messages retained: '+h.telegram_messages_retained,
