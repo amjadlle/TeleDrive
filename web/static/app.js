@@ -108,6 +108,34 @@ async function loadS3Keys(){
     });
   }catch(e){$('#s3KeysRows').textContent='S3 key storage unavailable: '+e.message}
 }
+async function loadS3Recovery(){
+  const target=$('#s3RecoveryRows');
+  try {
+    const response=await api('/api/v1/admin/s3-multipart/stale?min_age_seconds=3600');
+    const uploads=response.uploads||[];
+    target.innerHTML=uploads.length?uploads.map(u=>
+      '<tr><td>'+esc(u.bucket)+'</td><td>'+esc(u.object_key)+'</td>'
+      +'<td><code>'+esc(u.id)+'</code></td><td>'+fmtTs(u.lease_until)+'</td>'
+      +'<td><button class="btn compact s3-recover" data-id="'+esc(u.id)+'">Preview / Recover</button></td></tr>'
+    ).join(''):'<tr><td colspan="5">No eligible stale completions</td></tr>';
+    $('.s3-recover').forEach(button=>button.onclick=async()=>{
+      const uploadId=button.dataset.id;
+      const url='/api/v1/admin/s3-multipart/'+encodeURIComponent(uploadId)+'/recover';
+      button.disabled=true;
+      try {
+        const preview=await api(url,{method:'POST',body:JSON.stringify({execute:false,min_age_seconds:3600})});
+        if(!preview.eligible){toast('Upload no longer eligible for recovery',true);await loadS3Recovery();return}
+        if(!confirm('Recover this expired multipart completion? No Telegram messages will be deleted. The S3 client must retry Complete explicitly.'))return;
+        const done=await api(url,{method:'POST',body:JSON.stringify({execute:true,min_age_seconds:3600})});
+        toast(done.recovered?'Upload safely returned to active':'Recovery eligibility changed; no action taken',!done.recovered);
+        await loadS3Recovery();
+      }catch(e){toast(e.message,true)}
+      finally{button.disabled=false}
+    });
+  }catch(e){target.textContent='Cannot scan stale multipart uploads: '+e.message}
+}
+$('#refreshS3Recovery').onclick=loadS3Recovery;
+
 function hideS3Secret(){
   $('#s3NewSecret').value='';$('#s3NewAccess').value='';$('#createdS3Card').style.display='none';
 }
