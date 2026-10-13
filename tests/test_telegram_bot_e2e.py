@@ -753,12 +753,14 @@ def test_live_bot_rejected_429_then_remote_chunk_sha_and_sql_restart():
                 database.close()
                 database = connect_database(str(db_path))
                 source.unlink()
+                # Cleanup must use this reopened BotFileIndex, not the
+                # transport bound to the closed pre-restart connection.
+                transport = BotApiChunkTransport(
+                    real_api, BotFileIndex(database), chat_id=int(chat_id),
+                    account="bot-ci-429-fencing",
+                )
                 after_restart = TelegramObjectStorage(
-                    ManifestStore(database),
-                    BotApiChunkTransport(
-                        real_api, BotFileIndex(database), chat_id=int(chat_id),
-                        account="bot-ci-429-fencing",
-                    ),
+                    ManifestStore(database), transport,
                     chunk_size=128 * 1024, scratch_directory=root,
                 )
                 restored = root / "restored.bin"
