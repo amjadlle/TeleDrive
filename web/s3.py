@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import tempfile
 import time
 import zlib
@@ -400,13 +401,45 @@ def _list_xml(bucket: str, keys: list, common: list[str], prefix: str,
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
+def _virtual_host_bucket(request: Request) -> str | None:
+    """Use Host only when a public DNS suffix was explicitly configured.
+
+    SigV4 must authenticate the exact Host afterwards; never trust proxy
+    forwarding headers for bucket selection. The default remains path-style.
+    """
+    suffix = os.environ.get("TELEDRIVE_S3_VHOST_SUFFIX", "").strip().lower().strip(".")
+    if not suffix:
+        return None
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    if len(suffix) > 253 or re.fullmatch(label + r"(?:\." + label + r")+", suffix) is None:
+        raise SigV4Error("InvalidArgument", "Invalid virtual-host DNS suffix")
+    authority = request.headers.get("host", "").lower()
+    if authority.count(":") == 1 and authority.rsplit(":", 1)[1].isdigit():
+        hostname = authority.rsplit(":", 1)[0]
+    else:
+        hostname = authority
+    ending = "." + suffix
+    if not hostname.endswith(ending):
+        return None
+    bucket = hostname[:-len(ending)]
+    try:
+        BucketCatalog.validate_bucket(bucket)
+    except ValueError as exc:
+        raise SigV4Error("InvalidArgument", "Invalid virtual-host bucket") from exc
+    return bucket
+
+
 async def _handle(request: Request):
     db = None
     retain = False
     try:
         raw_path = request.scope.get("raw_path", b"/").decode("ascii")
         logical = unquote(raw_path.lstrip("/"))
-        bucket, separator, key = logical.partition("/")
+        virtual_bucket = _virtual_host_bucket(request)
+        if virtual_bucket is not None:
+            bucket, separator, key = virtual_bucket, "/" if logical else "", logical
+        else:
+            bucket, separator, key = logical.partition("/")
         if not bucket:
             if request.method != "GET":
                 return _error("MethodNotAllowed", "Use GET to list buckets", 405)

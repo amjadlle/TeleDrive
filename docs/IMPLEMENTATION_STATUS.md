@@ -316,3 +316,14 @@ verification and explicit retention approvals are implemented.
 - Tests reject corrupt snapshots, forged HEAD/version hashes and symlinks.
   Restoring production Telegram sessions and missing remote media still
   requires an isolated staging rehearsal and remains unverified.
+
+## P2 opt-in virtual-host-style S3
+
+- S3 can parse a SigV4-authenticated virtual-host bucket only when
+  TELEDRIVE_S3_VHOST_SUFFIX is explicitly set to a valid DNS suffix.
+  Path-style remains the default, and Host is authenticated by SigV4.
+  Proxy X-Forwarded-Host is never used for permission or bucket routing.
+- Signed virtual-host GET/HEAD/PUT/ListBucket and host-spoofing rejection
+  are covered by Storage API CI. DNS, wildcard TLS certificates, reverse
+  proxy forwarding and real external-client verification remain deployment
+  prerequisites, not implied automatic compatibility.
