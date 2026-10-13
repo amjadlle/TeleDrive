@@ -83,15 +83,19 @@ def test_tags_copy_snapshot_isolated_from_source_and_overwrites(service):
     try:
         catalog = BucketCatalog(ManifestStore(db))
         from sqlalchemy import select
-        old = db.connection.execute(
-            select(objects.c.id).where(
+        recorded = db.connection.execute(
+            select(objects.c.id, objects.c.sha256).where(
                 objects.c.object_key == "file.bin"
-            ).order_by(objects.c.created_at, objects.c.id)
-        ).scalars().all()
-        assert len(old) == 2
+            )
+        ).all()
+        assert len(recorded) == 2
+        by_digest = {row.sha256: row.id for row in recorded}
+        old_version_id = by_digest[hashlib.sha256(b"v1").hexdigest()]
+        current_version_id = by_digest[hashlib.sha256(b"v2").hexdigest()]
+        assert catalog.get("backup-bucket", "file.bin").item.id == current_version_id
         tagger = ObjectTagStore(catalog)
-        assert tagger.get(old[0]) == [("stage", "modified")]
-        assert tagger.get(old[1]) == []
+        assert tagger.get(old_version_id) == [("stage", "modified")]
+        assert tagger.get(current_version_id) == []
     finally:
         db.close()
 
