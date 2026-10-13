@@ -83,3 +83,11 @@ Production physical GC and full AWS S3 compliance are not implemented.
   persistence, checksum verification and test-only message cleanup.
 - P0.2, P0.3 and P0.5 require their remaining acceptance checks before
   they can be declared fully closed.
+
+## P0 final acceptance additions
+
+- `tests/test_s3_p0_final.py` injects a database commit failure after multipart
+  chunk reparenting, Telegram retrieval failure during Complete, revoked
+  presigned read/write credentials, and 5 MiB+ multi-chunk Range/HEAD tests.
+- P0.2/P0.3/P0.5 remain open until the latest SHA passes CI and any
+  unautomated external-client acceptance (notably Cyberduck) is verified.

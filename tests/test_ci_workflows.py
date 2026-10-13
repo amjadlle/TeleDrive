@@ -111,6 +111,7 @@ def test_security_includes_bot_target_and_api_tests():
         "tests/test_rest_api.py",
         "tests/test_s3_sigv4_defense.py",
         "tests/test_s3_p0_acceptance.py",
+        "tests/test_s3_p0_final.py",
     ):
         assert path in scripts
     for tool in ("pip-audit", "bandit", "docker build", "trivy"):
