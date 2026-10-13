@@ -32,7 +32,7 @@ from teledrive.s3.credentials import S3CredentialStore, load_master_key, DEFAULT
 from teledrive.s3.multipart import MultipartStore
 from teledrive.storage.gc import StorageGCInventory
 from teledrive.storage.manifest import ManifestStore
-from teledrive.storage.jobs import StorageUploadJobs, UploadJobError
+from teledrive.storage.jobs import StorageUploadJobs, UploadJobError, jobs as storage_job_rows
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
@@ -414,9 +414,45 @@ async def scheduler_loop() -> None:
             await asyncio.sleep(10)
 
 
+async def upload_job_scheduler_loop() -> None:
+    """Opt-in durable job worker; SQL leases prevent duplicate claims.
+
+    Disabled unless TELEDRIVE_JOB_AUTO_RUN=1. Every cycle gets its own
+    connection; failures retain job metadata for explicit operator retry.
+    """
+    while True:
+        conn = None
+        try:
+            if os.environ.get("TELEDRIVE_JOB_AUTO_RUN") != "1":
+                await asyncio.sleep(10)
+                continue
+            root = _storage_job_root()
+            conn = db_connect()
+            queue = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+            transport = storage_bot_transport(conn)
+            scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+            _secure_mkdir(scratch)
+            result = await queue.run_next(
+                transport, allowed_root=root, scratch_directory=scratch,
+                chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+            )
+            await asyncio.sleep(2 if result else 10)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Do not log source paths, credentials or Telegram tokens.
+            LOG_BUFFER.append(
+                "[web] durable upload job scheduler: " + type(exc).__name__
+            )
+            await asyncio.sleep(20)
+        finally:
+            if conn is not None:
+                conn.close()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global scheduler_task
+    global scheduler_task, upload_job_scheduler_task
     os.umask(0o077)
     if not WEB_PASSWORD and not ALLOW_INSECURE:
         raise RuntimeError(
@@ -431,9 +467,13 @@ async def lifespan(_: FastAPI):
     except Exception as exc:
         LOG_BUFFER.append(_scrub_text(f"[web] startup database warning: {exc}"))
     scheduler_task = asyncio.create_task(scheduler_loop())
+    upload_job_scheduler_task = asyncio.create_task(upload_job_scheduler_loop())
     yield
     if scheduler_task:
         scheduler_task.cancel()
+    if upload_job_scheduler_task:
+        upload_job_scheduler_task.cancel()
+        await asyncio.gather(upload_job_scheduler_task, return_exceptions=True)
     await stop_uploader()
 
 
@@ -958,6 +998,37 @@ def restore_published_version(
             "id": restored.object_id, "source_version_id": version_id,
             "etag": restored.etag, "size": restored.size,
             "generation": catalog.get(payload.bucket, payload.key).generation,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/admin/storage/health", tags=["Storage jobs"],
+         summary="Read storage jobs, stale leases and protected-media metrics")
+def storage_operations_health(_: None = Depends(require_auth)):
+    from sqlalchemy import func, select
+
+    conn = db_connect()
+    try:
+        catalog = BucketCatalog(ManifestStore(conn))
+        queue = StorageUploadJobs(catalog)
+        counts = conn.connection.execute(
+            select(storage_job_rows.c.state, func.count())
+            .group_by(storage_job_rows.c.state)
+        ).all()
+        now = int(time.time())
+        pending = catalog.manifests.stale_pending(now=now, limit=1000)
+        completing = MultipartStore(catalog).stale_completions(now=now, limit=1000)
+        gc = StorageGCInventory(catalog.manifests).inspect()
+        return {
+            "job_states": {state: count for state, count in counts},
+            "stale_pending_sample_count": len(pending),
+            "stale_multipart_sample_count": len(completing),
+            "samples_truncated": len(pending) >= 1000 or len(completing) >= 1000,
+            "telegram_messages_retained": gc.total_telegram_messages,
+            "live_object_heads": gc.live_object_heads,
+            "copy_aliases": gc.copy_aliases,
+            "physical_deletion_enabled": False,
         }
     finally:
         conn.close()

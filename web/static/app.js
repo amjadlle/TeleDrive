@@ -234,6 +234,22 @@ async function loadStorageJobs(){
   }catch(e){target.textContent='Cannot list upload jobs: '+e.message}
 }
 $('#refreshStorageJobs').onclick=loadStorageJobs;
+$('#refreshStorageHealth').onclick=async()=>{
+  const target=$('#storageHealthSummary');
+  try{
+    const h=await api('/api/v1/admin/storage/health');
+    target.textContent=[
+      'Job states: '+JSON.stringify(h.job_states),
+      'Stale PENDING uploads: '+h.stale_pending_sample_count,
+      'Stale multipart completions: '+h.stale_multipart_sample_count,
+      'Telegram messages retained: '+h.telegram_messages_retained,
+      'Live object heads: '+h.live_object_heads,
+      'Copy aliases: '+h.copy_aliases,
+      'Physical GC enabled: '+(h.physical_deletion_enabled?'YES':'no'),
+      'Samples truncated: '+(h.samples_truncated?'yes':'no'),
+    ].join('\n');
+  }catch(e){target.textContent='Health check failed: '+e.message}
+};
 $('#queueStorageJob').onclick=async()=>{
   const bucket=$('#storageJobBucket').value.trim();
   const key=$('#storageJobKey').value;

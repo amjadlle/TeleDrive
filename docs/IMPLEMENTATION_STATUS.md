@@ -176,3 +176,16 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
   current HEAD pointers, never guesses old unpublished READY manifests;
   WebUI has an opt-in preview/index control. Earlier superseded versions
   without publication records remain unavailable for safe automatic import.
+
+## P1.4 upload worker and observability (opt-in)
+
+- `TELEDRIVE_JOB_AUTO_RUN=1` enables a single per-WebUI-process
+  worker loop. The default remains off. SQL job tokens and TTL protect
+  multi-process claims; source-root confinement is mandatory.
+- Admin GET `/api/v1/admin/storage/health` reports queue state counts,
+  stale lease samples, live/current alias counts and retained Telegram
+  message totals; WebUI presents these without exposing credentials or
+  enabling physical GC.
+- Automatic retries of failed jobs are deliberately **not** enabled:
+  operators inspect and explicitly requeue failures to avoid unbounded
+  repeated uploads on unrecoverable sources.

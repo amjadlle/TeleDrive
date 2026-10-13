@@ -182,7 +182,9 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 <button class="btn primary compact" id="queueStorageJob">Queue file</button>
 <button class="btn compact" id="runStorageJob">Run next job</button>
 <button class="btn compact" id="refreshStorageJobs">Refresh jobs</button>
+<button class="btn compact" id="refreshStorageHealth">Storage health</button>
 </div>
+<pre id="storageHealthSummary" class="section" style="white-space:pre-wrap;overflow-wrap:anywhere">Not checked</pre>
 <div class="scroll section"><table><thead><tr><th>Bucket / key</th><th>Source</th><th>Status</th><th>Attempts</th><th>Updated</th><th>Action</th></tr></thead><tbody id="storageJobsRows"></tbody></table></div>
 </div>
 <div class="card section">

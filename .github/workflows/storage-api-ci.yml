@@ -84,6 +84,7 @@ jobs:
             tests/test_storage_pending_admin.py \
             tests/test_storage_jobs.py \
             tests/test_storage_versions.py \
+            tests/test_storage_ops_health.py \
             tests/test_storage_catalog.py \
             tests/test_bot_storage.py \
             tests/test_s3_gateway.py \
