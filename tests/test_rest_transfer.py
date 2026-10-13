@@ -147,10 +147,12 @@ def test_missing_key_is_404_and_overwrite_is_versioned(service):
     result = client.get("/api/v1/buckets/backup-bucket/content",
                         params={"key": "data.bin"}, headers=headers)
     assert result.content == b"two"
+    uploads_before_conflict = bot.counter
     conflicting = client.put("/api/v1/buckets/backup-bucket/content",
         params={"key": "data.bin", "generation": 1},
         headers={**headers, "Content-Type": "application/octet-stream"}, content=b"three")
     assert conflicting.status_code == 409
+    assert bot.counter == uploads_before_conflict  # zero Telegram writes for a stale generation
 
 
 def test_missing_bot_credentials_returns_503_before_upload(service, monkeypatch):
