@@ -28,7 +28,9 @@ jobs:
     env:
       TELEDRIVE_E2E_BOT_TOKEN: ${{ secrets.TELEDRIVE_E2E_BOT_TOKEN }}
       TELEDRIVE_E2E_BOT_CHAT_ID: ${{ vars.TELEDRIVE_E2E_BOT_CHAT_ID }}
-      TELEDRIVE_E2E_MULTIPART: ${{ github.event_name == 'workflow_dispatch' && inputs.run_multipart && '1' || '0' }}
+      # One-shot P0 acceptance is opt-in via [live-multipart] commit marker.
+      # Never run the 5 MiB+ workload on routine pushes or untrusted PRs.
+      TELEDRIVE_E2E_MULTIPART: ${{ ((github.event_name == 'workflow_dispatch' && inputs.run_multipart) || (github.event_name == 'push' && github.ref == 'refs/heads/feature/docker-webui-multiaccount' && contains(github.event.head_commit.message, '[live-multipart]'))) && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09

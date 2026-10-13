@@ -138,5 +138,17 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
     api = workflow("storage-api-ci.yml")["jobs"]["storage-api"]
     commands = "\n".join(s.get("run", "") for s in api["steps"])
     for path in ("tests/test_rest_api.py", "tests/test_rest_transfer.py",
-                 "tests/test_storage_catalog.py", "tests/test_bot_storage.py"):
+                 "tests/test_storage_catalog.py", "tests/test_bot_storage.py",
+                 "tests/test_p0_security_matrix.py"):
         assert path in commands
+
+
+def test_live_multipart_push_is_explicitly_opted_in():
+    bot = workflow("telegram-bot-e2e.yml")
+    job = bot["jobs"]["telegram-bot-roundtrip"]
+    expression = job["env"]["TELEDRIVE_E2E_MULTIPART"]
+    assert "inputs.run_multipart" in expression
+    assert "[live-multipart]" in expression
+    assert "github.event_name == 'push'" in expression
+    assert "github.ref == 'refs/heads/feature/docker-webui-multiaccount'" in expression
+    assert job["timeout-minutes"] == "15"

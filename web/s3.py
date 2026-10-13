@@ -875,6 +875,11 @@ async def _handle(request: Request):
             )
             if any(request.headers.get(name) is not None for name in unsupported_headers):
                 return _error("NotImplemented", "CopyObject option is unsupported", 501)
+            if (request.headers.get("x-amz-metadata-directive") is not None
+                    and "x-amz-metadata-directive" not in signed_headers):
+                raise SigV4Error(
+                    "AccessDenied", "Copy metadata directive must be signed"
+                )
             metadata_directive = request.headers.get(
                 "x-amz-metadata-directive", "COPY"
             )
