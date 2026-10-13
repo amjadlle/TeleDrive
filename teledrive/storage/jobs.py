@@ -193,7 +193,12 @@ class StorageUploadJobs:
                         row = self.db.connection.execute(
                             select(jobs).where(jobs.c.id == ident)
                         ).mappings().one()
-                        return dict(row)
+                        snapshot = dict(row)
+                        # A leftover read transaction after a successful
+                        # claim can become SQLITE_BUSY_SNAPSHOT when a second
+                        # worker commits before this worker begins uploading.
+                        self.db.connection.commit()
+                        return snapshot
                 self.db.connection.rollback()
                 return None
             except OperationalError as exc:
