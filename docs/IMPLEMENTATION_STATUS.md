@@ -152,3 +152,18 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
 - A competing write between remote chunk verification and final publication
   yields HTTP 412 and keeps staged messages retryable. Unsigned conditions
   are rejected; incompatible date-based write conditions remain 501.
+
+## P1.3 published immutable history and administrator restore
+
+- New `storage_published_versions` index records only manifests that won
+  actual head publication; failed writes, multipart staging objects and
+  unfinished uploads never appear in a version list.
+- Scoped Bearer GET `/api/v1/buckets/{bucket}/versions?key=...` returns
+  verified published IDs, SHA-256, size and current version status.
+- Root-admin POST `/api/v1/admin/storage/versions/{id}/restore` makes
+  a new immutable alias with metadata and tags copied from the historical
+  version and atomically publishes it under generation+object-id CAS.
+  No Telegram payload is copied or deleted.
+- Versions before installation of this index are not reliably recoverable
+  as *published* from old READY journals alone, so no speculative backfill.
+  Full S3 `ListObjectVersions`/delete-marker semantics remain pending.

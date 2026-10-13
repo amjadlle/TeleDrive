@@ -34,6 +34,7 @@ from teledrive.storage.gc import StorageGCInventory
 from teledrive.storage.manifest import ManifestStore
 from teledrive.storage.jobs import StorageUploadJobs, UploadJobError
 from teledrive.storage.catalog import BucketCatalog
+from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.bot_api_adapter import (
     BotApiClient, BotApiChunkTransport, BotFileIndex, BOT_RECOMMENDED_CHUNK_SIZE,
@@ -551,6 +552,12 @@ class StorageUploadJobRequest(BaseModel):
     source_path: str = Field(min_length=1, max_length=4096)
 
 
+class VersionRestoreRequest(BaseModel):
+    bucket: str = Field(min_length=3, max_length=63)
+    key: str = Field(min_length=1, max_length=1024)
+    expected_generation: int | None = Field(default=None, ge=0)
+
+
 class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
@@ -862,6 +869,47 @@ def _storage_job_root() -> Path:
     return root
 
 
+@app.post("/api/v1/admin/storage/versions/{version_id}/restore",
+          tags=["Storage versions"],
+          summary="Restore a previously published immutable version without Telegram uploads")
+def restore_published_version(
+    version_id: str, request: Request, payload: VersionRestoreRequest,
+    _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        catalog = BucketCatalog(ManifestStore(conn))
+        try:
+            head = catalog.get(payload.bucket, payload.key)
+            generation, current_id = head.generation, head.item.id
+        except FileNotFoundError:
+            generation, current_id = 0, None
+        if payload.expected_generation is not None and (
+            payload.expected_generation != generation
+        ):
+            raise HTTPException(409, "Generation has changed since restore preview")
+        try:
+            restored = copy_object(
+                catalog, payload.bucket, payload.key,
+                payload.bucket, payload.key,
+                source_version_id=version_id,
+                expected_destination_generation=generation,
+                expected_destination_object_id=current_id,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "Published version does not exist") from exc
+        except (CopyConflict, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {
+            "id": restored.object_id, "source_version_id": version_id,
+            "etag": restored.etag, "size": restored.size,
+            "generation": catalog.get(payload.bucket, payload.key).generation,
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/api/v1/admin/storage/jobs", tags=["Storage jobs"],
          summary="Inspect durable local-source upload jobs (no worker tokens)")
 def list_storage_upload_jobs(
@@ -1118,6 +1166,24 @@ def remove_storage_bucket(bucket: str, _: None = Depends(require_api_scope("buck
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/buckets/{bucket}/versions", tags=["Object catalog"],
+         summary="List proven published immutable versions of a key")
+def list_published_object_versions(
+    bucket: str, key: str = Query(..., min_length=1, max_length=1024),
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: None = Depends(require_api_scope("objects:read")),
+):
+    conn = db_connect()
+    try:
+        catalog = BucketCatalog(ManifestStore(conn))
+        if bucket not in catalog.list_buckets():
+            raise HTTPException(404, "Bucket not found")
+        return {"bucket": bucket, "key": key,
+                "versions": catalog.list_versions(bucket, key, limit=limit)}
     finally:
         conn.close()
 
