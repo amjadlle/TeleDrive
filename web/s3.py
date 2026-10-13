@@ -16,7 +16,7 @@ import tempfile
 import time
 import zlib
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, parse_qsl
 from xml.etree import ElementTree as ET
 from defusedxml import ElementTree as SafeET
 from defusedxml.common import DefusedXmlException
@@ -80,6 +80,33 @@ def _verify_upload_sha256(request: Request, digest: bytes) -> None:
     ):
         return
     raise SigV4Error("XAmzContentSHA256Mismatch", "Signed SHA-256 body checksum mismatch")
+
+
+def _initial_tags(request: Request, owner: str, credentials: S3CredentialStore):
+    """Parse only SigV4-bound x-amz-tagging; never let an unsigned header mutate metadata."""
+    raw = request.headers.get("x-amz-tagging")
+    if raw is None:
+        return None
+    if len(raw.encode("utf-8")) > 8192:
+        raise TaggingError("InvalidTag", "Tag header is too large")
+    if "X-Amz-Algorithm" in request.query_params:
+        signed = request.query_params.get("X-Amz-SignedHeaders", "").split(";")
+    else:
+        auth = request.headers.get("authorization", "")
+        signed = auth.partition("SignedHeaders=")[2].split(",", 1)[0].split(";")
+    if "x-amz-tagging" not in signed:
+        raise SigV4Error("AccessDenied", "x-amz-tagging must be signed")
+    if credentials.resolve(owner, "s3:PutObjectTagging") is None:
+        raise SigV4Error("AccessDenied", "PutObjectTagging permission required")
+    import re
+    if re.search(r"%(?![0-9A-Fa-f]{2})", raw):
+        raise TaggingError("InvalidTag", "Malformed tag URL encoding")
+    try:
+        pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=True,
+                          encoding="utf-8", errors="strict", max_num_fields=10)
+    except (UnicodeError, ValueError) as exc:
+        raise TaggingError("InvalidTag", "Malformed tagging header") from exc
+    return validate_tags(pairs)
 
 
 def _tag_xml(tags: list[tuple[str, str]]) -> bytes:
@@ -329,6 +356,9 @@ async def _handle(request: Request):
         db = db_connect()
         store = S3CredentialStore(db, master)
         owner = verify_header_signature(request, store.resolve, action)
+        inline_tags = _initial_tags(request, owner, store) if (
+            separator and request.method == "PUT" and not is_object_tagging
+        ) else None
         catalog = BucketCatalog(ManifestStore(db))
 
         if not bucket:
@@ -456,11 +486,6 @@ async def _handle(request: Request):
                 tags.replace_current(bucket, key, [])
                 return Response(status_code=204)
             return _error("NotImplemented", "Unsupported object tagging method", 501)
-
-        if request.method == "PUT" and request.headers.get("x-amz-tagging") is not None:
-            # Do not silently ignore initial/copy tagging headers. Atomic tagging
-            # on initial PutObject will be enabled with a dedicated contract.
-            return _error("NotImplemented", "PutObject with x-amz-tagging unsupported", 501)
 
         if mpu_start or mpu_part or mpu_complete or mpu_abort or mpu_list:
             mpu = MultipartStore(catalog)
@@ -616,8 +641,10 @@ async def _handle(request: Request):
             if request.headers.get("x-amz-metadata-directive", "COPY") != "COPY":
                 return _error("NotImplemented", "Metadata replacement is unsupported", 501)
             tag_directive = request.headers.get("x-amz-tagging-directive", "COPY")
-            if tag_directive != "COPY":
-                return _error("NotImplemented", "CopyObject tag replacement unsupported", 501)
+            if tag_directive not in {"COPY", "REPLACE"}:
+                raise TaggingError("InvalidArgument", "Invalid CopyObject tagging directive")
+            if tag_directive == "COPY" and inline_tags is not None:
+                raise TaggingError("InvalidRequest", "x-amz-tagging requires TaggingDirective=REPLACE")
             if (request.headers.get("x-amz-tagging-directive") is not None
                     and "x-amz-tagging-directive" not in signed_headers):
                 raise SigV4Error("AccessDenied", "Copy tagging directive must be signed")
@@ -658,6 +685,7 @@ async def _handle(request: Request):
                 result = copy_object(
                     catalog, src_bucket, src_key, bucket, key,
                     expected_source_id=source_item.id,
+                    replacement_tags=(inline_tags or []) if tag_directive == "REPLACE" else None,
                 )
             except CopyConflict:
                 return _error("OperationAborted", "Concurrent source/destination mutation", 409)
@@ -703,7 +731,12 @@ async def _handle(request: Request):
                     catalog.manifests, transport,
                     chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=root,
                 )
+                # PUT's tagging metadata and head pointer share one SQL
+                # transaction. Failed tag writes never publish an untagged key.
+                tag_store = ObjectTagStore(catalog) if inline_tags is not None else None
                 item = await engine.put_file(bucket, key, stage)
+                if tag_store is not None:
+                    tag_store.attach_uncommitted(item.id, inline_tags)
                 catalog.publish(item.id, now=int(time.time()))
                 return Response(status_code=200, headers={"ETag": '"' + item.sha256 + '"'})
             finally:
