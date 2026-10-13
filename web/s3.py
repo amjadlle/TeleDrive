@@ -285,6 +285,12 @@ async def _handle(request: Request):
             db.close()
 
 
+@app.get("/__health", include_in_schema=False)
+def health():
+    # Container-local liveness only; no credentials or Telegram calls.
+    return {"ok": True}
+
+
 @app.api_route("/", methods=["GET", "PUT", "POST", "DELETE", "HEAD"])
 async def root(request: Request):
     return await _handle(request)
