@@ -254,6 +254,93 @@ and `X-TeleDrive-Object-ID` without downloading bytes from Telegram.
 Keys need the `objects:read` scope. This is REST functionality, **not yet
 a complete AWS S3 HEAD Object implementation**.
 
+## S3-compatible gateway — initial Telegram-backed core
+
+**This is an early core subset, not full AWS S3 compatibility.** Bucket and
+object payloads reside in Telegram; SQLAlchemy stores only object metadata,
+encrypted S3 credentials and chunk/file IDs. No MinIO or external S3 backend
+is used. The gateway is a **separate Docker Compose profile** and is disabled
+by default.
+
+### First-time S3 setup
+
+1. Configure `TELEDRIVE_STORAGE_BOT_TOKEN` and
+   `TELEDRIVE_STORAGE_BOT_CHAT_ID` in your local `.env`, following the
+   Telegram Bot storage instructions. The bot must be an administrator in the
+   dedicated private Telegram channel.
+2. Generate a persistent S3 encryption master key on the Docker host:
+
+~~~bash
+mkdir -p config data
+python - <<'PY'
+from pathlib import Path
+from cryptography.fernet import Fernet
+p = Path("config/s3-master.key")
+if p.exists():
+    raise SystemExit("Refusing to overwrite existing master key")
+with p.open("xb") as stream:
+    stream.write(Fernet.generate_key() + b"\\n")
+p.chmod(0o600)
+PY
+~~~
+
+Install `cryptography` locally if needed: `python -m pip install cryptography`.
+Ensure the S3 container's `PUID`/`PGID` can read this file. **Back up the
+master key securely**; losing it makes all issued S3 secrets unusable, and
+replacing it does not restore old credentials.
+
+3. Start both management UI and the opt-in S3 gateway:
+
+~~~bash
+docker compose --profile s3 up -d --build
+~~~
+
+The gateway binds **127.0.0.1:9000** by default. For remote clients, put
+it behind an HTTPS reverse proxy or private VPN. Do not expose plaintext
+HTTP or the Telegram bot token to the internet.
+
+4. Open **WebUI → API Management → S3-compatible gateway**. Issue an S3
+Access Key ID and Secret Access Key, selecting only the required permissions.
+The secret is displayed once, encrypted in the DB and revocable immediately.
+
+Example using boto3 (simple path-style, signed-payload requests):
+
+~~~python
+import boto3
+from botocore.config import Config
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url="http://127.0.0.1:9000",
+    aws_access_key_id="YOUR_ACCESS_KEY_ID",
+    aws_secret_access_key="YOUR_SECRET_ACCESS_KEY",
+    region_name="us-east-1",
+    config=Config(
+        signature_version="s3v4",
+        s3={"addressing_style": "path", "payload_signing_enabled": True},
+        request_checksum_calculation="when_required",
+        response_checksum_validation="when_required",
+    ),
+)
+s3.create_bucket(Bucket="backup-bucket")
+s3.put_object(Bucket="backup-bucket", Key="test.txt", Body=b"Hello Telegram")
+assert s3.get_object(Bucket="backup-bucket", Key="test.txt")["Body"].read() == b"Hello Telegram"
+~~~
+
+**Implemented now:** SigV4 header authentication (15-minute timestamp window),
+individually scoped and encrypted access keys, ListBuckets, CreateBucket,
+HeadBucket, ListObjectsV2 without delimiter, PutObject, GetObject, HeadObject,
+DeleteObject (logical unlink), DeleteBucket (only physically empty),
+and single byte-range GET. Object writes are acknowledged only after Telegram
+upload and manifest commit.
+
+**Not yet supported:** multipart UploadPart/Complete/Abort, presigned URLs,
+virtual-host-style buckets, AWS chunked/unsigned PUT bodies, ACL/policy APIs,
+version listing, lifecycle, object lock, notifications, delimiter/common-prefix
+listing, replication, and full SDK interoperability. Unsupported operations
+return explicit S3 XML `NotImplemented`, not simulated success. S3 compatibility
+tests include botocore-signed HTTP requests and boto3 loopback integration.
+
 ## Telegram-only object storage: Phase 1 foundation
 
 A new `teledrive.storage` module provides immutable object manifests and
