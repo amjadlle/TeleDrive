@@ -242,8 +242,11 @@ def test_real_boto3_http_conditional_put_contract(service):
             assert exc.response["Error"]["Code"] == "PreconditionFailed"
         else:
             raise AssertionError("SDK conditional create ignored existing object")
-        second = sdk.put_object(Bucket="sdk-condition", Key="key",
-                                Body=b"two", IfMatch=first["ETag"])
+        try:
+            second = sdk.put_object(Bucket="sdk-condition", Key="key",
+                                    Body=b"two", IfMatch=first["ETag"])
+        except ClientError as exc:
+            raise AssertionError(f"Conditional PUT SDK wire failure: {exc.response!r}") from exc
         assert second["ETag"] != first["ETag"]
         try:
             sdk.put_object(Bucket="sdk-condition", Key="key",
