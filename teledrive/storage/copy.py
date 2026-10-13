@@ -17,6 +17,7 @@ from teledrive.storage.catalog import BucketCatalog, heads
 from teledrive.storage.manifest import object_aliases, objects
 from teledrive.s3.multipart import MultipartStore, multipart_etags
 from teledrive.s3.tagging import ObjectTagStore
+from teledrive.s3.object_metadata import ObjectMetadataStore
 
 
 class CopyConflict(ValueError):
@@ -36,6 +37,7 @@ def copy_object(
     destination_bucket: str, destination_key: str, *, now: int | None = None,
     expected_source_id: str | None = None,
     replacement_tags: list[tuple[str, str]] | None = None,
+    replacement_metadata: dict[str, str] | None = None,
 ) -> CopiedObject:
     """Publish a snapshot copy with one SQL transaction.
 
@@ -78,6 +80,11 @@ def copy_object(
             tagging.copy_tags(source.id, identifier)
         else:
             tagging.attach_uncommitted(identifier, replacement_tags)
+        http = ObjectMetadataStore(catalog)
+        if replacement_metadata is None:
+            http.copy_uncommitted(source.id, identifier)
+        else:
+            http.attach_uncommitted(identifier, replacement_metadata)
         if original_tag != source.sha256:
             db.connection.execute(insert(multipart_etags).values(
                 object_id=identifier, etag=original_tag,
