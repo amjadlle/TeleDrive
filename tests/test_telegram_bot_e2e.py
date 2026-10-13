@@ -1265,3 +1265,126 @@ def test_live_bot_accepted_upload_lost_ack_is_fenced_until_proven():
                     db.close()
 
     asyncio.run(scenario())
+
+@pytest.mark.skipif(
+    os.getenv("TELEDRIVE_E2E_SOAK") != "1",
+    reason="Bounded real Bot API mixed-payload soak is manual-only",
+)
+def test_live_bot_bounded_mixed_binary_soak_sql_reopens_and_range_integrity():
+    """Manual real test: twelve distinct objects, multiple SQL generations.
+
+    Telegram posts are tracked before SQL persistence. This test intentionally
+    avoids uncontrolled 429 spam or physical deletion of non-test messages.
+    """
+    import time
+    from sqlalchemy import select
+    from teledrive.storage.bot_api_adapter import _bot_files
+
+    token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
+    chat = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
+    if not token or not chat:
+        pytest.skip("Dedicated Bot API test channel not configured")
+
+    sizes = (
+        0, 1, 2047, 2048, 2049, 65537, 262144 + 13,
+        1024 * 1024 - 1, 1024 * 1024, 1024 * 1024 + 17,
+        2 * 1024 * 1024 + 17, 3 * 1024 * 1024 + 31,
+    )
+    chunk_size = 1024 * 1024
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-live-soak-") as folder:
+            root = Path(folder)
+            db_path = root / "soak.db"
+            db = connect_database(str(db_path))
+            real_api = BotApiClient(token)
+            uploaded_ids = set()
+
+            class OwnedTracked:
+                async def call(self, method, fields, source=None):
+                    response = await real_api.call(method, fields, source)
+                    if method == "sendDocument":
+                        assert int(response["chat"]["id"]) == int(chat)
+                        uploaded_ids.add(int(response["message_id"]))
+                    return response
+
+                async def download_file(self, remote_path, destination):
+                    return await real_api.download_file(remote_path, destination)
+
+            def setup(current):
+                transport = BotApiChunkTransport(
+                    OwnedTracked(), BotFileIndex(current),
+                    chat_id=int(chat), account="bot-ci-bounded-soak",
+                    min_upload_interval=1.1,
+                )
+                engine = TelegramObjectStorage(
+                    ManifestStore(current), transport,
+                    chunk_size=chunk_size, scratch_directory=root,
+                )
+                return transport, engine
+
+            objects = []
+            try:
+                transport, engine = setup(db)
+                await transport.verify_target()
+                for n, size in enumerate(sizes):
+                    if n and n % 3 == 0:
+                        db.close()
+                        db = connect_database(str(db_path))
+                        transport, engine = setup(db)
+                    content = (bytes((0, 255)) * ((size + 1) // 2))[:size] if n % 3 == 0 else os.urandom(size)
+                    key = f"soak/İstanbul-{n}-{size}.bin"
+                    source = root / f"source-{n}.bin"
+                    source.write_bytes(content)
+                    item = await engine.put_file("ci-mixed-soak", key, source)
+                    assert item.sha256 == hashlib.sha256(content).hexdigest()
+                    parts = ManifestStore(db).parts(item.id)
+                    assert len(parts) == (size + chunk_size - 1) // chunk_size
+                    assert sum(part.size for part in parts) == size
+                    assert [(p.ordinal, p.offset) for p in parts] == [
+                        (idx, idx * chunk_size) for idx in range(len(parts))
+                    ]
+                    source.unlink()
+                    objects.append((item.id, content, item.sha256))
+                # Reopen once more: readback requires only durable SQL file IDs
+                # plus Telegram's actual remote document bytes.
+                db.close()
+                db = connect_database(str(db_path))
+                transport, engine = setup(db)
+                for object_id, content, checksum in objects:
+                    destination = root / f"{object_id}.download"
+                    await engine.download_to_path(object_id, destination)
+                    assert destination.read_bytes() == content
+                    assert hashlib.sha256(destination.read_bytes()).hexdigest() == checksum
+                    size = len(content)
+                    for start, end in (
+                        (0, min(17, size)),
+                        (max(0, chunk_size - 3), min(size, chunk_size + 5)),
+                        (max(0, size - 31), size),
+                        (size, size),
+                    ):
+                        if start > end:
+                            continue
+                        received = b"".join([
+                            chunk async for chunk in engine.iter_bytes(
+                                object_id, start=start, end=end, block_size=7,
+                            )
+                        ])
+                        assert received == content[start:end]
+                indexed = set(db.connection.execute(
+                    select(_bot_files.c.message_id),
+                ).scalars().all())
+                assert indexed == uploaded_ids
+                assert BotFileIndex(db).unresolved_count() == 0
+            finally:
+                try:
+                    # Own-message-only cleanup also covers an upload that
+                    # was ACKed but failed during SQL journal persistence.
+                    for mid in sorted(uploaded_ids):
+                        await real_api.call("deleteMessage", {
+                            "chat_id": int(chat), "message_id": int(mid),
+                        })
+                finally:
+                    db.close()
+
+    asyncio.run(scenario())
