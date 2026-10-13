@@ -163,6 +163,25 @@ def test_real_rclone_sync_and_integrity(live_s3, tmp_path, service):
     assert cli("lsf", "td:rclone-test/deep/path", "--files-only").strip() == ""
     assert transport.uploads >= 2 and transport.downloads >= 2
 
+    # Force the actual Go rclone executable down the multipart S3 path,
+    # including CreateMultipartUpload, UploadPart, Complete and range-safe GET.
+    # The fake Telegram transport stores the full binary body and the
+    # independently read-back SHA-256 must match.
+    multipart_body = os.urandom(5 * 1024 * 1024 + 513)
+    large_path = tmp_path / "large.bin"
+    large_path.write_bytes(multipart_body)
+    uploads_before = transport.uploads
+    cli("copyto", str(large_path), "td:rclone-test/deep/path/multipart.bin",
+        "--s3-upload-cutoff", "5M", "--s3-chunk-size", "5M")
+    restored = tmp_path / "multipart-restored.bin"
+    cli("copyto", "td:rclone-test/deep/path/multipart.bin", str(restored))
+    assert hashlib.sha256(restored.read_bytes()).digest() == hashlib.sha256(
+        multipart_body
+    ).digest()
+    assert transport.uploads >= uploads_before + 2, (
+        "Expected at least two Telegram chunks, proving multipart rather than one PUT"
+    )
+
 
 def test_real_aws_cli_high_level_sync_round_trip_and_delete(live_s3, tmp_path):
     """Exercise aws s3 sync directory semantics, not just s3api single-object calls."""
