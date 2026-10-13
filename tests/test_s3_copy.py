@@ -229,3 +229,54 @@ def test_real_boto3_copy_object_over_http(service):
         thread.join(timeout=10)
         sock.close()
         assert not thread.is_alive()
+
+
+def test_source_version_change_fails_without_publishing_destination(service):
+    from teledrive.storage.copy import CopyConflict, copy_object
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/source", b"original").status_code == 200
+    db = service[3]()
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        original_id = catalog.get("backup-bucket", "source").item.id
+    finally:
+        db.close()
+    assert signed(service, "PUT", "/backup-bucket/source", b"replacement").status_code == 200
+    db = service[3]()
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        with pytest.raises(CopyConflict, match="changed"):
+            copy_object(catalog, "backup-bucket", "source",
+                        "backup-bucket", "destination",
+                        expected_source_id=original_id)
+        with pytest.raises(FileNotFoundError):
+            catalog.get("backup-bucket", "destination")
+    finally:
+        db.close()
+    assert signed(service, "GET", "/backup-bucket/source").content == b"replacement"
+
+
+def test_changed_copy_source_header_invalidates_sigv4_signature(service):
+    from botocore.auth import S3SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/source-one", b"one").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/source-two", b"two").status_code == 200
+    req = AWSRequest(
+        method="PUT", url="http://localhost:9000/backup-bucket/target",
+        data=b"", headers={
+            "x-amz-copy-source": "/backup-bucket/source-one",
+            "x-amz-content-sha256": hashlib.sha256(b"").hexdigest(),
+        },
+    )
+    req.context["payload_signing_enabled"] = True
+    S3SigV4Auth(Credentials(service[1].access_key, service[1].secret_key),
+                "s3", "us-east-1").add_auth(req)
+    modified = dict(req.headers)
+    modified["X-Amz-Copy-Source"] = "/backup-bucket/source-two"
+    result = service[0].put("/backup-bucket/target", content=b"", headers=modified)
+    assert result.status_code == 403
+    assert b"SignatureDoesNotMatch" in result.content
+    assert signed(service, "GET", "/backup-bucket/target").status_code == 404
