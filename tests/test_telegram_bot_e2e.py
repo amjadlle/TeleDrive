@@ -925,3 +925,164 @@ def test_live_bot_versioned_real_payload_copy_and_revocation_without_remote_rese
                 finally:
                     conn.close()
     asyncio.run(scenario())
+
+
+
+def test_live_bot_five_durable_jobs_three_sql_workers_different_sizes():
+    """Bounded real Telegram workload, independent SQL workers and byte readback.
+
+    Three workers share a durable SQLite WAL database but own separate SQL
+    connections and Bot transports. Send operations are throttled *across*
+    those transports in this E2E test to stay within channel flood limits;
+    job claims and SQL publication genuinely overlap during Telegram I/O.
+    """
+    import time
+    from sqlalchemy import select
+    from types import SimpleNamespace
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.jobs import StorageUploadJobs
+    from teledrive.storage.bot_api_adapter import _bot_files
+
+    token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
+    chat = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
+    if not token or not chat:
+        pytest.skip("Dedicated Telegram Bot API E2E channel not configured")
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-live-3workers-") as folder:
+            root = Path(folder)
+            dbpath = root / "workers.db"
+            payloads = {f"batch/{size}.bin": os.urandom(size)
+                        for size in (0, 1, 8193, 65537, 131073)}
+            seed_db = connect_database(str(dbpath))
+            try:
+                catalog = BucketCatalog(ManifestStore(seed_db))
+                catalog.create_bucket("ci-real-workers", int(time.time()))
+                manager = StorageUploadJobs(catalog)
+                for key, content in payloads.items():
+                    filename = root / key.replace("/", "-")
+                    filename.write_bytes(content)
+                    manager.enqueue(
+                        "ci-real-workers", key, filename,
+                        allowed_root=root,
+                    )
+            finally:
+                seed_db.close()
+
+            api = BotApiClient(token)
+            gate = asyncio.Lock()
+            posted = []
+
+            class SerializedTelegram:
+                async def call(self, method, fields, source=None):
+                    if method != "sendDocument":
+                        return await api.call(method, fields, source)
+                    async with gate:
+                        result = await api.call(method, fields, source)
+                        posted.append(int(result["message_id"]))
+                        await asyncio.sleep(1.3)
+                        return result
+
+                async def download_file(self, remote_path, destination):
+                    await api.download_file(remote_path, destination)
+
+            connections = []
+            results = []
+            cleanup = None
+            try:
+                for _ in range(3):
+                    connection = connect_database(str(dbpath))
+                    connections.append(connection)
+                    # Schema initialization completes before workers race.
+                    StorageUploadJobs(BucketCatalog(ManifestStore(connection)))
+                    connection.commit()
+                transport_api = SerializedTelegram()
+                await BotApiChunkTransport(
+                    transport_api, BotFileIndex(connections[0]),
+                    chat_id=int(chat), account="bot-ci-3workers",
+                ).verify_target()
+
+                async def worker(connection):
+                    queue = StorageUploadJobs(BucketCatalog(ManifestStore(connection)))
+                    transport = BotApiChunkTransport(
+                        transport_api, BotFileIndex(connection),
+                        chat_id=int(chat), account="bot-ci-3workers",
+                        min_upload_interval=0,
+                    )
+                    owned = []
+                    for _ in range(8):
+                        result = await queue.run_next(
+                            transport, allowed_root=root,
+                            scratch_directory=root, chunk_size=65536,
+                        )
+                        if result is None:
+                            break
+                        owned.append(result)
+                    return owned
+
+                produced = await asyncio.gather(
+                    *(worker(connection) for connection in connections)
+                )
+                results = [item for worker_rows in produced for item in worker_rows]
+                assert len(results) == len(payloads), results
+                assert len({item["id"] for item in results}) == len(payloads)
+                assert all(item["state"] == "done" for item in results)
+                assert len(posted) == 7 and len(set(posted)) == 7
+            finally:
+                for connection in connections:
+                    connection.close()
+
+            cleanup = connect_database(str(dbpath))
+            try:
+                catalog = BucketCatalog(ManifestStore(cleanup))
+                queue = StorageUploadJobs(catalog)
+                jobs = queue.list_jobs(limit=100)
+                assert len(jobs) == 5
+                assert all(job["state"] == "done" and job["attempts"] == 1
+                           for job in jobs)
+                transport = BotApiChunkTransport(
+                    api, BotFileIndex(cleanup), chat_id=int(chat),
+                    account="bot-ci-3workers",
+                )
+                engine = TelegramObjectStorage(
+                    catalog.manifests, transport, chunk_size=65536,
+                    scratch_directory=root,
+                )
+                for key, expected in payloads.items():
+                    obj = catalog.get("ci-real-workers", key).item
+                    assert obj.sha256 == hashlib.sha256(expected).hexdigest()
+                    (root / key.replace("/", "-")).unlink()
+                    restored = root / ("restored-" + str(len(expected)) + ".bin")
+                    await engine.download_to_path(obj.id, restored)
+                    assert restored.read_bytes() == expected
+                    for start, stop in (
+                        (0, min(13, len(expected))),
+                        (max(0, len(expected)-7), len(expected)),
+                        (len(expected), len(expected)),
+                    ):
+                        window = b"".join([block async for block in engine.iter_bytes(
+                            obj.id, start=start, end=stop, block_size=7,
+                        )])
+                        assert window == expected[start:stop]
+            finally:
+                # The independent receipt index, not test-local filenames or
+                # guessed Telegram history, strictly scopes physical deletion.
+                try:
+                    if cleanup is not None:
+                        transport = BotApiChunkTransport(
+                            api, BotFileIndex(cleanup), chat_id=int(chat),
+                            account="bot-ci-3workers",
+                        )
+                        for account, peer, message in cleanup.connection.execute(select(
+                            _bot_files.c.account, _bot_files.c.chat_id,
+                            _bot_files.c.message_id,
+                        )).all():
+                            await transport.delete(SimpleNamespace(
+                                account=account, chat_id=int(peer),
+                                message_id=int(message),
+                            ))
+                finally:
+                    if cleanup is not None:
+                        cleanup.close()
+
+    asyncio.run(scenario())
