@@ -149,8 +149,46 @@ class ManifestStore:
         if token != row[0] or int(row[1]) < now:
             raise ManifestError("Writer lease lost or expired")
 
+    def stale_pending(self, *, now: int, min_age_seconds: int = 3600,
+                      limit: int = 100) -> list[dict[str, Any]]:
+        """Dry-run inventory: only expired, aged and explicitly fenced pending rows.
+
+        Never infer that a legacy PENDING object without a lease is abandoned.
+        The result deliberately excludes the bearer-style writer token.
+        """
+        if min_age_seconds < 60 or not 1 <= limit <= 1000:
+            raise ValueError("Invalid abandonment policy")
+        records = self.db.connection.execute(
+            select(
+                objects.c.id, objects.c.bucket, objects.c.object_key,
+                objects.c.size, objects.c.updated_at,
+                writer_fences.c.lease_until, writer_fences.c.heartbeat_at,
+            )
+            .join(writer_fences, objects.c.id == writer_fences.c.object_id)
+            .where(
+                objects.c.status == "pending",
+                objects.c.updated_at <= now - min_age_seconds,
+                writer_fences.c.lease_until < now,
+            )
+            .order_by(objects.c.updated_at, objects.c.id).limit(limit)
+        ).mappings().all()
+        result = []
+        for row in records:
+            count = self.db.connection.execute(
+                select(func.count()).select_from(chunks)
+                .where(chunks.c.object_id == row["id"])
+            ).scalar_one()
+            result.append({
+                "id": row["id"], "bucket": row["bucket"], "key": row["object_key"],
+                "size": int(row["size"]), "updated_at": int(row["updated_at"]),
+                "lease_until": int(row["lease_until"]),
+                "heartbeat_at": int(row["heartbeat_at"]),
+                "journaled_chunks": int(count),
+            })
+        return result
+
     def abandon_stale_pending(self, *, now: int, min_age_seconds: int = 3600,
-                              limit: int = 100) -> list[str]:
+                              limit: int = 100, object_id: str | None = None) -> list[str]:
         """Fence expired writers and mark aged pending objects failed.
 
         Never touch unleased/legacy pending rows or a live writer. The expired
@@ -159,14 +197,19 @@ class ManifestStore:
         """
         if min_age_seconds < 60 or not (1 <= limit <= 1000):
             raise ValueError("Invalid abandonment policy")
-        rows = self.db.connection.execute(
+        candidates = (
             select(objects.c.id)
             .join(writer_fences, objects.c.id == writer_fences.c.object_id)
             .where(
                 objects.c.status == "pending",
                 objects.c.updated_at <= now - min_age_seconds,
                 writer_fences.c.lease_until < now,
-            ).order_by(objects.c.created_at, objects.c.id).limit(limit)
+            )
+        )
+        if object_id is not None:
+            candidates = candidates.where(objects.c.id == object_id)
+        rows = self.db.connection.execute(
+            candidates.order_by(objects.c.created_at, objects.c.id).limit(limit)
         ).all()
         abandoned = []
         for row in rows:

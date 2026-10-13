@@ -110,3 +110,15 @@ non-destructive Telegram storage behavior. Do not infer that Cyberduck, full
 S3/AWS feature parity, live cross-worker process kill or physical GC have
 passed acceptance. The next workstream is durable queue/resume and operator
 stale-PENDING recovery with explicit fencing and dry-run approval.
+
+## P1.1 operator-safe PENDING recovery
+
+- Admin GET `/api/v1/admin/storage/pending-stale` inventories aged and
+  expired writer-fenced PENDING objects, including journaled chunk counts,
+  without revealing writer tokens or deleting Telegram messages.
+- Admin POST `/api/v1/admin/storage/pending-stale/{object_id}/abandon`
+  defaults to dry-run; explicit `execute=true` requires Basic/CSRF and
+  compare-and-update SQL fencing against that object alone. Legacy unfenced,
+  live heartbeat and READY objects cannot be abandoned. Journal kept for
+  independent recovery; deletion remains disabled.
+- This is metadata reconciliation, **not** automatic retry or physical GC.

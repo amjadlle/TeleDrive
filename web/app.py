@@ -539,6 +539,11 @@ class S3CompletionRecoveryRequest(BaseModel):
     min_age_seconds: int = Field(default=3600, ge=60, le=30 * 86400)
 
 
+class PendingUploadRecoveryRequest(BaseModel):
+    execute: bool = False
+    min_age_seconds: int = Field(default=3600, ge=60, le=30 * 86400)
+
+
 class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
@@ -832,6 +837,56 @@ def get_storage_gc_audit(
             ],
             "truncated": len(inventory.protected_chunks) > limit,
         }
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/admin/storage/pending-stale", tags=["Storage recovery"],
+         summary="Preview aged PENDING upload leases; no Telegram deletion")
+def list_stale_pending_objects(
+    min_age_seconds: int = Query(default=3600, ge=60, le=30 * 86400),
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: None = Depends(require_auth),
+):
+    conn = db_connect()
+    try:
+        items = ManifestStore(conn).stale_pending(
+            now=int(time.time()), min_age_seconds=min_age_seconds, limit=limit
+        )
+        return {"uploads": items, "dry_run": True, "physical_deletion_enabled": False}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/storage/pending-stale/{object_id}/abandon",
+          tags=["Storage recovery"],
+          summary="Explicitly fence an aged PENDING writer and retain Telegram journal")
+def abandon_stale_pending_object(
+    object_id: str, request: Request,
+    payload: PendingUploadRecoveryRequest,
+    _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        manifests = ManifestStore(conn)
+        now = int(time.time())
+        # A preview never mutates the writer's lease, even after a restart.
+        if not payload.execute:
+            matches = manifests.stale_pending(
+                now=now, min_age_seconds=payload.min_age_seconds, limit=1000
+            )
+            return {"object_id": object_id,
+                    "eligible": any(item["id"] == object_id for item in matches),
+                    "abandoned": False, "dry_run": True}
+        # Only this object can be transitioned. The SQL conditional update
+        # ensures a heartbeat, completed object or another admin wins safely.
+        affected = manifests.abandon_stale_pending(
+            now=now, min_age_seconds=payload.min_age_seconds,
+            limit=1, object_id=object_id,
+        )
+        return {"object_id": object_id, "eligible": bool(affected),
+                "abandoned": bool(affected), "dry_run": False}
     finally:
         conn.close()
 
