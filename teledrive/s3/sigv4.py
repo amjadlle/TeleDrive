@@ -37,10 +37,17 @@ def _canonical_query(raw: bytes) -> str:
 
 
 def _canonical_path(request: Request) -> str:
-    # S3 does not normalize double slashes or dot segments in object keys.
-    # Botocore signs the URL-encoded path, with each '%' encoded a second time.
+    # S3SigV4Auth (unlike generic SigV4Auth) deliberately does NOT re-encode
+    # or normalize the already URL-encoded request path. Preserve percent
+    # escapes, double slashes and dot segments byte-for-byte.
     raw = request.scope.get("raw_path") or request.url.path.encode("utf-8")
-    return quote(raw.decode("ascii"), safe="/~")
+    try:
+        path = raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise SigV4Error("SignatureDoesNotMatch", "Invalid encoded URL path") from exc
+    if not path.startswith("/"):
+        raise SigV4Error("SignatureDoesNotMatch", "Invalid absolute URL path")
+    return path
 
 
 def verify_header_signature(request: Request, lookup_secret, permission: str, *,
