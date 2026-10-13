@@ -225,7 +225,20 @@ def test_boto3_tagging_over_actual_http_server(service):
             {"Key":"environment","Value":"ci"}
         ]
         sdk.delete_bucket_tagging(Bucket="backup-bucket")
-        assert remote.uploads == before
+        inserted = sdk.put_object(Bucket="backup-bucket", Key="sdk-inline",
+                                  Body=b"sdk-inline-bytes", Tagging="source=sdk")
+        assert inserted["ResponseMetadata"]["HTTPStatusCode"] == 200
+        assert sdk.get_object_tagging(Bucket="backup-bucket", Key="sdk-inline")["TagSet"] == [
+            {"Key":"source","Value":"sdk"}
+        ]
+        uploaded = remote.uploads
+        sdk.copy_object(Bucket="backup-bucket", Key="sdk-inline-copy",
+                        CopySource={"Bucket":"backup-bucket", "Key":"sdk-inline"},
+                        TaggingDirective="REPLACE", Tagging="source=copy")
+        assert sdk.get_object_tagging(Bucket="backup-bucket", Key="sdk-inline-copy")["TagSet"] == [
+            {"Key":"source","Value":"copy"}
+        ]
+        assert remote.uploads == uploaded == before + 1
     finally:
         server.should_exit = True
         worker.join(timeout=10)
