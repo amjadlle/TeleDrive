@@ -16,10 +16,22 @@ FORM_LIMIT = 20 * 1024 * 1024
 REQUIRED_FIELDS = frozenset(("key", "policy", "x-amz-algorithm",
                              "x-amz-credential", "x-amz-date",
                              "x-amz-signature", "x-amz-checksum-sha256"))
-OPTIONAL_FIELDS = frozenset(("success_action_status", "success_action_redirect",
-                             "Content-Type"))
+OPTIONAL_FIELDS = frozenset((
+    "success_action_status", "success_action_redirect", "Content-Type",
+    "Cache-Control", "Content-Disposition", "Content-Encoding",
+    "Content-Language", "Expires",
+))
 FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 CONDITIONS = (REQUIRED_FIELDS - {"policy", "x-amz-signature"}) | {"bucket"}
+MAX_CUSTOM_METADATA_FIELDS = 12
+MAX_FORM_PARTS = len(FIELDS) + MAX_CUSTOM_METADATA_FIELDS + 1
+_METADATA_FIELD = re.compile(r"x-amz-meta-[a-z0-9][a-z0-9_-]{0,127}\\Z")
+
+
+def _allowed_field(name):
+    return isinstance(name, str) and (
+        name in FIELDS or _METADATA_FIELD.fullmatch(name) is not None
+    )
 
 
 def parse_form(content_type: str, data: bytes):
@@ -38,7 +50,7 @@ def parse_form(content_type: str, data: bytes):
     if not msg.is_multipart() or msg.defects:
         raise SigV4Error("InvalidRequest", "Malformed multipart upload")
     items = list(msg.iter_parts())
-    if len(items) > len(FIELDS) + 1:
+    if len(items) > MAX_FORM_PARTS:
         raise SigV4Error("InvalidRequest", "Too many browser form parts")
     fields = {}
     file_bytes = None
@@ -46,7 +58,7 @@ def parse_form(content_type: str, data: bytes):
         name = part.get_param("name", header="content-disposition")
         if (part.is_multipart() or part.defects or
                 part.get_content_disposition() != "form-data" or
-                name not in FIELDS | {"file"} or
+                (name != "file" and not _allowed_field(name)) or
                 part.get("Content-Transfer-Encoding", "binary").lower()
                 not in ("binary", "7bit", "8bit")):
             raise SigV4Error("InvalidRequest", "Unsupported form field")
@@ -65,7 +77,9 @@ def parse_form(content_type: str, data: bytes):
             except UnicodeError as exc:
                 raise SigV4Error("InvalidRequest", "Invalid field encoding") from exc
     if (file_bytes is None or not REQUIRED_FIELDS.issubset(fields)
-            or not set(fields).issubset(FIELDS)):
+            or sum(name.startswith("x-amz-meta-") for name in fields)
+            > MAX_CUSTOM_METADATA_FIELDS
+            or any(not _allowed_field(name) for name in fields)):
         raise SigV4Error("InvalidRequest", "Missing or unsupported signed browser form fields")
     return fields, file_bytes
 
@@ -93,6 +107,10 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
     status = fields.get("success_action_status")
     redirect = fields.get("success_action_redirect")
     content_type = fields.get("Content-Type")
+    extra = set(fields) - REQUIRED_FIELDS
+    if (len(extra) > len(OPTIONAL_FIELDS) + MAX_CUSTOM_METADATA_FIELDS
+            or any(not _allowed_field(name) for name in fields)):
+        raise SigV4Error("InvalidArgument", "Unsupported POST metadata fields")
     if status is not None and status not in ("200", "201", "204"):
         raise SigV4Error("InvalidArgument", "Unsupported POST success response status")
     # Redirects are only browser instructions (the server never fetches
@@ -132,19 +150,13 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
         raise SigV4Error("InvalidArgument", "Invalid POST policy JSON") from exc
     if (not isinstance(doc, dict) or set(doc) != {"conditions", "expiration"}
             or not isinstance(clauses, list)
-            or len(clauses) != len(CONDITIONS) + 1
-            + (status is not None) + (redirect is not None)
-            + (content_type is not None)
+            or len(clauses) != len(CONDITIONS) + 1 + len(extra)
             or not now < expiration <= signed_at + timedelta(minutes=15)):
         raise SigV4Error("AccessDenied", "Policy must expire within fifteen minutes")
     bound = {name: fields[name] for name in CONDITIONS if name != "bucket"}
     bound["bucket"] = bucket
-    if status is not None:
-        bound["success_action_status"] = status
-    if redirect is not None:
-        bound["success_action_redirect"] = redirect
-    if content_type is not None:
-        bound["Content-Type"] = content_type
+    for name in extra:
+        bound[name] = fields[name]
     expected_conditions = set(bound)
     seen = set()
     has_range = False
