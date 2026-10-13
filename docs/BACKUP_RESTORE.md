@@ -85,3 +85,23 @@ This does **not** restore lost Telegram account access or confirm that arbitrary
 production media is still accessible. Repeat DR rehearsals with a dedicated
 staging bot, a full secret-restore procedure, and native PostgreSQL/MySQL
 snapshots before calling a production recovery plan ready.
+
+## Disposable native PostgreSQL 17 and MySQL 8.4 restore rehearsal
+
+The database CI now seeds a unique bucket with multiple published versions,
+real SHA-256 metadata across 8 KiB and 1-byte chunk boundaries, delete markers
+and VersionId removals, version tags, an unjournaled Bot ACK receipt, a queued
+source, and an independently encrypted test S3 credential. **No production
+secrets or real Telegram media are created by this SQL-only drill.**
+
+CI runs PostgreSQL 17 `pg_dump -Fc` then `pg_restore` into a **new**
+`teledrive_dr_ci` database, and MySQL 8.4 `mysqldump --single-transaction`
+then restore into another new isolated database. The test verifies identical
+HEAD and generation, exact immutable chunk reference identities/checksums,
+logical deletions and visibility, Bot ACK recovery index, queued job state
+and decryptability of the test S3 credential across fresh connections.
+
+The dump files and synthetic receipt stay in the disposable GitHub runner's
+temporary directory. No restore targets an existing production database and
+no physical Telegram cleanup is enabled. Repeat separately using actual
+production backup roles and staging secrets before production P1 sign-off.

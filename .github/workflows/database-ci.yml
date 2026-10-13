@@ -12,6 +12,7 @@ on:
       - "teledrive/s3/**"
       - "teledrive/uploader.py"
       - "tests/test_database_live.py"
+      - "scripts/rehearse_native_database_restore.py"
       - "tests/test_storage_engine.py"
       - "tests/test_s3_p0_final.py"
       - "tests/test_storage_recovery.py"
@@ -25,6 +26,7 @@ on:
       - "teledrive/s3/**"
       - "teledrive/uploader.py"
       - "tests/test_database_live.py"
+      - "scripts/rehearse_native_database_restore.py"
       - "tests/test_storage_engine.py"
       - "tests/test_s3_p0_final.py"
       - "tests/test_storage_recovery.py"
@@ -39,7 +41,7 @@ jobs:
   database:
     name: PostgreSQL + MySQL integration
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17-alpine
@@ -88,3 +90,28 @@ jobs:
           python -m pip check
       - name: Run live PostgreSQL/MySQL integration tests
         run: python -m pytest -vv tests/test_database_live.py tests/test_storage_engine.py tests/test_storage_recovery.py
+      - name: Seed realistic metadata before native database backup
+        run: |
+          python scripts/rehearse_native_database_restore.py seed --url-env DB_TEST_POSTGRES_URL --receipt "$RUNNER_TEMP/pg-dr.json" --source "$RUNNER_TEMP/pg-source.bin"
+          python scripts/rehearse_native_database_restore.py seed --url-env DB_TEST_MYSQL_URL --receipt "$RUNNER_TEMP/mysql-dr.json" --source "$RUNNER_TEMP/mysql-source.bin"
+      - name: Native PostgreSQL 17 pg_dump and isolated pg_restore
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -e PGPASSWORD=test-password -v "$RUNNER_TEMP:/snap" postgres:17-alpine \
+            pg_dump --host=127.0.0.1 --username=teledrive --dbname=teledrive --format=custom --file=/snap/pg-ci.backup --no-owner
+          docker run --rm --network host -e PGPASSWORD=test-password postgres:17-alpine \
+            psql --host=127.0.0.1 --username=teledrive --dbname=teledrive --set=ON_ERROR_STOP=1 \
+            --command="CREATE DATABASE teledrive_dr_ci"
+          docker run --rm --network host -e PGPASSWORD=test-password -v "$RUNNER_TEMP:/snap" postgres:17-alpine \
+            pg_restore --host=127.0.0.1 --username=teledrive --dbname=teledrive_dr_ci --no-owner --no-privileges --exit-on-error /snap/pg-ci.backup
+          python scripts/rehearse_native_database_restore.py verify --url-env DB_TEST_POSTGRES_URL --restore-database teledrive_dr_ci --receipt "$RUNNER_TEMP/pg-dr.json"
+      - name: Native MySQL 8.4 mysqldump and isolated restore
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -e MYSQL_PWD=test-password mysql:8.4 \
+            mysqldump --host=127.0.0.1 --user=teledrive --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF teledrive > "$RUNNER_TEMP/mysql-ci.sql"
+          docker run --rm --network host -e MYSQL_PWD=root-test-password mysql:8.4 \
+            mysql --host=127.0.0.1 --user=root --execute="CREATE DATABASE teledrive_dr_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON teledrive_dr_ci.* TO 'teledrive'@'%';"
+          docker run --rm --interactive --network host -e MYSQL_PWD=test-password mysql:8.4 \
+            mysql --host=127.0.0.1 --user=teledrive --database=teledrive_dr_ci < "$RUNNER_TEMP/mysql-ci.sql"
+          python scripts/rehearse_native_database_restore.py verify --url-env DB_TEST_MYSQL_URL --restore-database teledrive_dr_ci --receipt "$RUNNER_TEMP/mysql-dr.json"
