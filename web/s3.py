@@ -17,7 +17,7 @@ import tempfile
 import time
 import zlib
 from pathlib import Path
-from urllib.parse import unquote, parse_qsl, quote
+from urllib.parse import unquote, parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from xml.etree import ElementTree as ET
 from defusedxml import ElementTree as SafeET
 from defusedxml.common import DefusedXmlException
@@ -653,8 +653,26 @@ async def _handle(request: Request):
                 post_catalog.publish(obj.id, now=int(time.time()))
                 etag = '"' + obj.sha256 + '"'
                 response_headers = {"ETag": etag, "x-amz-version-id": obj.id}
-                # Browser POST completion status is an authenticated part
-                # of the signed policy. Never honor unsigned response options.
+                # A redirect is an explicit signed browser instruction. The
+                # gateway never contacts the target and does not disclose
+                # credentials or original payload in the callback parameters.
+                redirect = post_fields.get("success_action_redirect")
+                if redirect is not None:
+                    parsed_redirect = urlsplit(redirect)  # verified HTTPS URL
+                    parameters = urlencode({
+                        "bucket": bucket, "key": post_key, "etag": etag,
+                    })
+                    redirect_query = (parsed_redirect.query + "&" + parameters
+                                      if parsed_redirect.query else parameters)
+                    location = urlunsplit((
+                        parsed_redirect.scheme, parsed_redirect.netloc,
+                        parsed_redirect.path, redirect_query, "",
+                    ))
+                    return Response(status_code=303, headers={
+                        **response_headers, "Location": location,
+                    })
+                # The requested response status is itself an exact signed
+                # policy condition; no unsigned status override is accepted.
                 status = int(post_fields.get("success_action_status", "204"))
                 if status == 201:
                     # Quote untrusted key text before placing it in Location.
