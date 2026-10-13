@@ -557,3 +557,58 @@ def test_bucket_cors_policy_durable_and_delete_safe_on_real_database(env_name):
             cors.get(bucket)
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_conditional_s3_head_cas_blocks_cross_connection_aba(env_name):
+    """Real DB conflict: old generation must not authorize a replaced object.
+
+    Includes DELETE/RECREATE ABA (both generations equal 1), where only
+    comparing the generation would incorrectly allow stale writes/deletes.
+    """
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from hashlib import sha256
+    from uuid import uuid4
+    from teledrive.storage.manifest import ManifestStore
+    from teledrive.storage.catalog import BucketCatalog
+
+    a, b = connect_database(url), connect_database(url)
+    try:
+        one, two = BucketCatalog(ManifestStore(a)), BucketCatalog(ManifestStore(b))
+        name = "ci-" + uuid4().hex[:20]
+        object_key = "conditional/aba.bin"
+        now = int(time.time())
+        one.create_bucket(name, now)
+
+        def new_empty(catalog):
+            ident = catalog.manifests.begin(name, object_key, 0, now)
+            catalog.manifests.finish(ident, sha256(b"").hexdigest(), now)
+            return ident
+
+        first = new_empty(one)
+        one.publish(first, now=now)
+        snapshot = one.get(name, object_key)
+        a.commit()
+        assert snapshot.generation == 1
+        assert two.remove_current(name, object_key)
+        second = new_empty(two)
+        two.publish(second, now=now)
+        assert two.get(name, object_key).generation == 1
+        candidate = new_empty(one)
+
+        with pytest.raises(ValueError, match="object ID precondition"):
+            one.publish(candidate, now=now,
+                        expected_generation=snapshot.generation,
+                        expected_object_id=snapshot.item.id)
+        a.connection.rollback()
+        with pytest.raises(ValueError, match="object ID precondition"):
+            one.remove_current(name, object_key,
+                               expected_generation=snapshot.generation,
+                               expected_object_id=snapshot.item.id)
+        a.connection.rollback()
+        assert one.get(name, object_key).item.id == second
+    finally:
+        a.close()
+        b.close()
