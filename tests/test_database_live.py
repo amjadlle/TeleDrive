@@ -310,3 +310,75 @@ def test_multipart_recovery_fences_prior_worker_across_live_sql_connections(env_
     finally:
         a.close()
         b.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_copy_object_alias_preserves_telegram_uniqueness_live_sql(env_name, tmp_path):
+    """Real RDBMS + two connections: immutable source, no duplicate Telegram refs."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    import asyncio
+    import hashlib
+    from uuid import uuid4
+    from sqlalchemy import func, select
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.copy import copy_object
+    from teledrive.storage.engine import TelegramObjectStorage
+    from teledrive.storage.manifest import ManifestStore, ChunkReference, chunks, object_aliases
+
+    now = int(time.time())
+    payload = b"PostgreSQL-MySQL-immutable-CopyObject" * 37
+    bucket = "ci-" + uuid4().hex[:20]
+    key = "source.dat"
+    chat_id = -1001234567890
+    message_id = int(uuid4().hex[:8], 16) % 1_900_000_000 + 1
+
+    first = connect_database(url)
+    second = connect_database(url)
+    try:
+        manifests = ManifestStore(first)
+        catalog = BucketCatalog(manifests)
+        catalog.create_bucket(bucket, now)
+        obj = manifests.begin(bucket, key, len(payload), now)
+        manifests.append(obj, ChunkReference(
+            ordinal=0, offset=0, size=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(), account="ci-copy",
+            chat_id=chat_id, message_id=message_id,
+        ), now)
+        manifests.finish(obj, hashlib.sha256(payload).hexdigest(), now)
+        catalog.publish(obj, now=now)
+
+        copied = copy_object(catalog, bucket, key, bucket, "copy.dat", now=now)
+        assert copied.object_id != obj
+        assert copied.source_object_id == obj
+        assert copied.etag == hashlib.sha256(payload).hexdigest()
+        catalog.remove_current(bucket, key)
+
+        from_second = BucketCatalog(ManifestStore(second))
+        clone = from_second.get(bucket, "copy.dat").item
+        assert clone.id == copied.object_id
+        assert clone.size == len(payload)
+        assert first.connection.execute(
+            select(func.count()).select_from(chunks).where(chunks.c.object_id == obj)
+        ).scalar_one() == 1
+        assert first.connection.execute(
+            select(func.count()).select_from(chunks).where(
+                chunks.c.object_id == copied.object_id
+            )
+        ).scalar_one() == 0
+        assert second.connection.execute(select(object_aliases.c.source_object_id)
+                     .where(object_aliases.c.object_id == copied.object_id)).scalar_one() == obj
+
+        class FakeTelegram:
+            async def download(self, ref, dest):
+                assert ref.account == "ci-copy" and ref.message_id == message_id
+                dest.write_bytes(payload)
+        engine = TelegramObjectStorage(ManifestStore(second), FakeTelegram(),
+                                       scratch_directory=tmp_path)
+        async def read():
+            return b"".join([part async for part in engine.iter_bytes(clone.id)])
+        assert asyncio.run(read()) == payload
+    finally:
+        first.close()
+        second.close()
