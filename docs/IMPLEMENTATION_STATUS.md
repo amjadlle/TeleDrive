@@ -403,3 +403,7 @@ verification and explicit retention approvals are implemented.
 - Mixed control selectors, unsigned payload digests, revoked credentials,
   and path tampering remain forbidden. This extends presigned multipart
   support; generic browser form uploads are still unsupported.
+
+- All CRC64NVME declarations use one verified checksum helper: small
+  XML/tagging/CORS writes also compare actual bytes, rather than ever
+  acknowledging a digest that only PUT/UploadPart checks.

@@ -140,6 +140,7 @@ def _reject_unimplemented_write_options(request: Request) -> None:
 def _verify_upload_sha256(
     request: Request, digest: bytes, *, md5_digest: bytes | None = None,
     sha1_digest: bytes | None = None,
+    crc64nvme_value: int | None = None,
 ) -> None:
     """Verify *every* supplied checksum, not only the first matching digest.
 
@@ -157,6 +158,16 @@ def _verify_upload_sha256(
             md5_header, base64.b64encode(md5_digest).decode("ascii")
         ):
             raise SigV4Error("BadDigest", "Content-MD5 checksum mismatch")
+    crc64_header = request.headers.get("x-amz-checksum-crc64nvme")
+    if crc64_header is not None:
+        if crc64nvme_value is None:
+            # Never acknowledge an unverified CRC64NVME declaration.
+            raise SigV4Error("NotImplemented", "CRC64NVME not verified on this operation")
+        actual_crc64 = base64.b64encode(
+            crc64nvme_value.to_bytes(8, "big")
+        ).decode("ascii")
+        if not hmac.compare_digest(crc64_header, actual_crc64):
+            raise SigV4Error("BadDigest", "CRC64NVME checksum mismatch")
     sha1_header = request.headers.get("x-amz-checksum-sha1")
     if sha1_header is not None:
         if sha1_digest is None or not hmac.compare_digest(
@@ -257,7 +268,9 @@ async def _tag_request_tags(request: Request) -> list[tuple[str, str]]:
         body.extend(block)
         if len(body) > 16 * 1024:
             raise TaggingError("MalformedXML", "Tagging XML exceeds maximum size")
-    _verify_upload_sha256(request, hashlib.sha256(body).digest())
+    _verify_upload_sha256(
+        request, hashlib.sha256(body).digest(), crc64nvme_value=crc64nvme(body),
+    )
     md5_header = request.headers.get("content-md5")
     if md5_header and not hmac.compare_digest(
         md5_header,
@@ -647,7 +660,10 @@ async def _handle(request: Request):
                         body.extend(block)
                         if len(body) > MAX_CORS_XML_BYTES:
                             raise CORSError("MalformedXML", "CORS XML exceeds 64 KiB")
-                    _verify_upload_sha256(request, hashlib.sha256(body).digest())
+                    _verify_upload_sha256(
+                        request, hashlib.sha256(body).digest(),
+                        crc64nvme_value=crc64nvme(body),
+                    )
                     md5_header = request.headers.get("content-md5")
                     if md5_header and not hmac.compare_digest(
                         md5_header,
@@ -1027,8 +1043,10 @@ async def _handle(request: Request):
                         output.write(block)
                     output.flush()
                     os.fsync(output.fileno())
-                _verify_upload_sha256(request, sha.digest(), md5_digest=md5.digest(),
-                                      sha1_digest=sha1.digest())
+                _verify_upload_sha256(
+                    request, sha.digest(), md5_digest=md5.digest(),
+                    sha1_digest=sha1.digest(), crc64nvme_value=crc64_value,
+                )
                 checksum_crc = request.headers.get("x-amz-checksum-crc32")
                 if checksum_crc and checksum_crc != base64.b64encode(
                     (crc & 0xffffffff).to_bytes(4, "big")
@@ -1040,12 +1058,6 @@ async def _handle(request: Request):
                     base64.b64encode(crc32c_value.to_bytes(4, "big")).decode("ascii"),
                 ):
                     raise MultipartError("BadDigest", "CRC32C checksum mismatch")
-                declared_crc64 = request.headers.get("x-amz-checksum-crc64nvme")
-                if declared_crc64 is not None and not hmac.compare_digest(
-                    declared_crc64,
-                    base64.b64encode(crc64_value.to_bytes(8, "big")).decode("ascii"),
-                ):
-                    raise MultipartError("BadDigest", "CRC64NVME checksum mismatch")
                 transport = storage_bot_transport(db)
                 await transport.verify_target()
                 engine = TelegramObjectStorage(
@@ -1257,8 +1269,10 @@ async def _handle(request: Request):
                         dest.write(block)
                     dest.flush()
                     os.fsync(dest.fileno())
-                _verify_upload_sha256(request, digest.digest(), md5_digest=md5.digest(),
-                                      sha1_digest=sha1.digest())
+                _verify_upload_sha256(
+                    request, digest.digest(), md5_digest=md5.digest(),
+                    sha1_digest=sha1.digest(), crc64nvme_value=crc64_value,
+                )
                 checksum_crc = request.headers.get("x-amz-checksum-crc32")
                 if checksum_crc and checksum_crc != base64.b64encode((crc & 0xffffffff).to_bytes(4, "big")).decode():
                     return _error("BadDigest", "CRC32 checksum mismatch", 400)
@@ -1268,12 +1282,6 @@ async def _handle(request: Request):
                     base64.b64encode(crc32c_value.to_bytes(4, "big")).decode("ascii"),
                 ):
                     return _error("BadDigest", "CRC32C checksum mismatch", 400)
-                declared_crc64 = request.headers.get("x-amz-checksum-crc64nvme")
-                if declared_crc64 is not None and not hmac.compare_digest(
-                    declared_crc64,
-                    base64.b64encode(crc64_value.to_bytes(8, "big")).decode("ascii"),
-                ):
-                    return _error("BadDigest", "CRC64NVME checksum mismatch", 400)
                 engine = TelegramObjectStorage(
                     catalog.manifests, transport,
                     chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=root,

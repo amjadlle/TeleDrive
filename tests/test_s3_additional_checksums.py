@@ -179,3 +179,18 @@ def test_crc64nvme_multipart_part_accepts_correct_digest_only(service):
                                  "x-amz-sdk-checksum-algorithm": "CRC64NVME"})
     assert good.status_code == 200, good.text
     assert service[2].uploads == before + 1
+
+
+def test_crc64nvme_declared_on_metadata_xml_cannot_bypass_validation(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/tags.bin", b"data").status_code == 200
+    before = service[2].uploads
+    wrong = {"x-amz-checksum-crc64nvme": _b64(b"0" * 8)}
+    # XML control-plane writes share the checksum declaration parser.
+    bad_cors = signed(service, "PUT", "/backup-bucket?cors",
+                      b"<CORSConfiguration/>", extra_headers=wrong)
+    assert bad_cors.status_code == 400 and b"BadDigest" in bad_cors.content
+    bad_tags = signed(service, "PUT", "/backup-bucket/tags.bin?tagging",
+                      b"<Tagging><TagSet/></Tagging>", extra_headers=wrong)
+    assert bad_tags.status_code == 400 and b"BadDigest" in bad_tags.content
+    assert service[2].uploads == before
