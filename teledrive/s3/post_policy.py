@@ -25,7 +25,7 @@ FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 CONDITIONS = (REQUIRED_FIELDS - {"policy", "x-amz-signature"}) | {"bucket"}
 MAX_CUSTOM_METADATA_FIELDS = 12
 MAX_FORM_PARTS = len(FIELDS) + MAX_CUSTOM_METADATA_FIELDS + 1
-_METADATA_FIELD = re.compile(r"x-amz-meta-[a-z0-9][a-z0-9_-]{0,127}\\Z")
+_METADATA_FIELD = re.compile(r"x-amz-meta-[a-z0-9][a-z0-9_-]{0,127}$")
 
 
 def _allowed_field(name):
