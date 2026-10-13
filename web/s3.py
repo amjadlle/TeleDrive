@@ -7,6 +7,7 @@ Unimplemented S3 operations explicitly return NotImplemented (501).
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -102,7 +103,7 @@ def _cursor_decode(token: str, master: bytes, bucket: str,
                 or not isinstance(parsed.get("skip_prefix"), str)):
             raise ValueError("Cursor does not match request")
         return parsed["after"], parsed["skip_prefix"]
-    except (ValueError, UnicodeError, TypeError, KeyError) as exc:
+    except (ValueError, UnicodeError, TypeError, KeyError, binascii.Error) as exc:
         raise SigV4Error("InvalidArgument", "Invalid continuation token") from exc
 
 
@@ -243,29 +244,26 @@ async def _handle(request: Request):
                 return _error("NotImplemented", "Only ListObjectsV2 is supported", 501)
             prefix = request.query_params.get("prefix", "")
             delimiter = request.query_params.get("delimiter", "")
-            if delimiter:
-                return _error("NotImplemented", "Delimiter listing is not supported yet", 501)
+            if len(prefix.encode("utf-8")) > 1024 or len(delimiter.encode("utf-8")) > 16:
+                return _error("InvalidArgument", "Prefix or delimiter is too large", 400)
             token = request.query_params.get("continuation-token")
             if token:
-                try:
-                    padding = "=" * (-len(token) % 4)
-                    after = base64.urlsafe_b64decode(token + padding).decode("utf-8")
-                except (ValueError, UnicodeError):
-                    return _error("InvalidArgument", "Invalid continuation token", 400)
-                if not after.startswith(prefix):
-                    return _error("InvalidArgument", "Continuation token prefix does not match", 400)
+                after, skip_prefix = _cursor_decode(token, master, bucket, prefix, delimiter)
             else:
                 after = request.query_params.get("start-after", "")
+                skip_prefix = ""
             try:
                 limit = int(request.query_params.get("max-keys", "1000"))
             except ValueError:
                 return _error("InvalidArgument", "Invalid max-keys", 400)
             if limit < 1 or limit > 1000:
                 return _error("InvalidArgument", "max-keys must be between 1 and 1000", 400)
-            items = catalog.list_objects(bucket, prefix=prefix, after=after, limit=limit)
-            more = bool(items and catalog.list_objects(bucket, prefix=prefix,
-                                                        after=items[-1].item.key, limit=1))
-            return Response(_list_xml(bucket, items, prefix, limit, after, more),
+            keys, common, last, skipped, more = _page(
+                catalog, bucket, prefix, delimiter, after, limit, skip_prefix
+            )
+            next_token = _cursor_encode(master, bucket, prefix, delimiter, last, skipped) if more else None
+            return Response(_list_xml(bucket, keys, common, prefix, limit,
+                                      after if not token else "", delimiter, more, next_token),
                             media_type="application/xml")
 
         if bucket not in catalog.list_buckets():
