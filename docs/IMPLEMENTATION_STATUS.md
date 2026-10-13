@@ -440,3 +440,19 @@ verification and explicit retention approvals are implemented.
 - This is deterministic multi-process SQL/engine acceptance. Actual Telegram
   429/revocation stress, distributed PostgreSQL/MySQL throughput and extended
   live soak remain separate operational requirements.
+
+
+## P1.4 live Telegram DR snapshot rehearsal (opt-in credentials)
+
+- The standard Telegram Bot Storage E2E workflow now creates a published
+  immutable object in a dedicated test bucket, writes a transactional online
+  SQLite snapshot, verifies its independent SHA-256 and HEAD/version/chunk
+  referential integrity, closes the original SQL connection, and opens the
+  restored snapshot with a freshly instantiated Bot API file index.
+- The restored object is fetched from the **real Telegram test channel**,
+  verified byte-for-byte and via a cross-chunk range read, then only test-
+  owned Telegram messages are cleaned up. No production data is touched.
+- This tests a genuine metadata-restore + remote-payload read path; it does
+  **not** certify PostgreSQL/MySQL native restores, Telegram Bot account
+  revocation recovery, multi-region disaster scenarios or operator secrets
+  recovery. Those remain staging/operational acceptance tasks.

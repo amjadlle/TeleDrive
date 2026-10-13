@@ -175,3 +175,96 @@ def test_live_bot_s3_multipart_moves_real_telegram_messages():
                     database.close()
 
     asyncio.run(scenario())
+
+
+def test_live_bot_sqlite_snapshot_restores_remote_telegram_object():
+    """Real Bot API DR rehearsal: snapshot -> separate SQL restore -> download.
+
+    Snapshot metadata is not itself a Telegram backup; restored Bot file IDs
+    are checked against real still-existing channel messages before cleanup.
+    """
+    import time
+
+    from scripts.backup_metadata import backup_sqlite
+    from scripts.verify_metadata_backup import verify_snapshot
+    from teledrive.storage.catalog import BucketCatalog
+
+    token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
+    if not token or not chat_id:
+        pytest.skip("Live Bot API disaster-recovery test requires E2E credentials")
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-bot-dr-") as folder:
+            root = Path(folder)
+            live_path = root / "live.sqlite"
+            snapshot_path = root / "restore.sqlite"
+            payload = os.urandom(3071)
+            source = root / "source.bin"
+            source.write_bytes(payload)
+            live_db = connect_database(str(live_path))
+            active_db = live_db
+            refs = []
+            transport = None
+            try:
+                catalog = BucketCatalog(ManifestStore(live_db))
+                catalog.create_bucket("live-dr-ci", int(time.time()))
+                transport = BotApiChunkTransport(
+                    BotApiClient(token), BotFileIndex(live_db),
+                    chat_id=int(chat_id), account="bot-ci-dr",
+                )
+                await transport.verify_target()
+                uploaded = await TelegramObjectStorage(
+                    catalog.manifests, transport, chunk_size=2048,
+                    scratch_directory=root,
+                ).put_file("live-dr-ci", "snapshots/file.bin", source)
+                refs = catalog.manifests.parts(uploaded.id)
+                assert len(refs) == 2
+                catalog.publish(uploaded.id, now=int(time.time()))
+                checksum = backup_sqlite(live_path, snapshot_path)
+                validated = verify_snapshot(snapshot_path, checksum)
+                assert validated["valid"] and validated["heads"] == 1
+                assert validated["versions"] == 1
+                assert validated["telegram_chunk_refs"] == len(refs)
+                live_db.close()
+                active_db = None
+
+                restored_db = connect_database(str(snapshot_path))
+                active_db = restored_db
+                recovered_catalog = BucketCatalog(ManifestStore(restored_db))
+                recovered = recovered_catalog.get("live-dr-ci", "snapshots/file.bin")
+                assert recovered.item.id == uploaded.id
+                assert recovered.item.sha256 == hashlib.sha256(payload).hexdigest()
+                assert {r.message_id for r in recovered_catalog.manifests.parts(uploaded.id)} == {
+                    r.message_id for r in refs
+                }
+                restored_transport = BotApiChunkTransport(
+                    BotApiClient(token), BotFileIndex(restored_db),
+                    chat_id=int(chat_id), account="bot-ci-dr",
+                )
+                transport = restored_transport
+                await restored_transport.verify_target()
+                restored_source = root / "restored.bin"
+                restored_engine = TelegramObjectStorage(
+                    recovered_catalog.manifests, restored_transport,
+                    chunk_size=2048, scratch_directory=root,
+                )
+                await restored_engine.download_to_path(uploaded.id, restored_source)
+                assert restored_source.read_bytes() == payload
+                received = bytearray()
+                async for block in restored_engine.iter_bytes(
+                    uploaded.id, start=2047, end=2051,
+                ):
+                    received.extend(block)
+                assert bytes(received) == payload[2047:2051]
+            finally:
+                # Never delete unrelated media. Only this test's ACK IDs.
+                try:
+                    if transport is not None:
+                        for ref in refs:
+                            await transport.delete(ref)
+                finally:
+                    if active_db is not None:
+                        active_db.close()
+
+    asyncio.run(scenario())

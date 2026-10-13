@@ -70,3 +70,18 @@ key hashes and the published-version index. It only reads local metadata;
 it does not contact Telegram, recover missing messages, rotate credentials
 or turn on physical garbage collection. Test actual Telegram recovery
 separately before production cutover.
+
+
+## Live Bot API disposable restore rehearsal
+
+The regular configured `Telegram Bot Storage E2E` CI workflow also exercises
+an actual remote restore: it snapshots a dedicated test SQLite database,
+verifies its SHA-256, opens the snapshot as a separate SQL connection,
+reconstructs the published HEAD, retrieves the preserved Bot API file IDs and
+reads back real Telegram channel media with exact SHA-256 and ranged integrity
+checks. Cleanup is restricted to messages sent by that test invocation.
+
+This does **not** restore lost Telegram account access or confirm that arbitrary
+production media is still accessible. Repeat DR rehearsals with a dedicated
+staging bot, a full secret-restore procedure, and native PostgreSQL/MySQL
+snapshots before calling a production recovery plan ready.
