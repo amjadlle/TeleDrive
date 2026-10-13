@@ -121,9 +121,14 @@ def _presigned_initiate(service, *, checksum=True, extra=""):
 
 def _multipart_session_count(service):
     from sqlalchemy import func, select
-    from teledrive.s3.multipart import uploads
+    from teledrive.s3.multipart import MultipartStore, uploads
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
     db = service[3]()
     try:
+        # The first test may inspect sessions before any multipart endpoint
+        # has initialized the schema.
+        MultipartStore(BucketCatalog(ManifestStore(db)))
         return db.connection.execute(
             select(func.count()).select_from(uploads)
         ).scalar_one()
