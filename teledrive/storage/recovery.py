@@ -95,15 +95,14 @@ class RecoveryManager:
         if int(row[1]) > now - self.min_age_seconds:
             raise UnsafeCleanup("Failure has not aged beyond the cleanup safety interval")
 
-    async def cleanup(self, object_id: str, *, dry_run: bool = True,
-                      now: int | None = None) -> CleanupReport:
+    async def cleanup(self, object_id: str, *, dry_run: bool = True) -> CleanupReport:
         """Reconcile journal+Telegram, optionally delete; must run with uploader stopped.
 
         Acquires a per-object DB lease to serialize cleanup workers, and
         checks readiness/age both before and after scanning. If a Telegram
         target is not exhaustively scanned, no messages are deleted.
         """
-        now = int(time.time() if now is None else now)
+        now = int(time.time())
         self._eligible(object_id, now)
         db = self.manifests.db
         lease_name = f"storage-gc:{object_id}"
@@ -144,11 +143,11 @@ class RecoveryManager:
                 return CleanupReport(object_id, len(journal), len(found.matches),
                                      orphaned, missing, 0, True, False)
 
-            self._eligible(object_id, int(time.time()) if now > 1_000_000_000 else now)
+            self._eligible(object_id, int(time.time()))
             deleted = 0
             for part in all_refs.values():
                 # Lease expiration must fail closed, never continue deleting.
-                if not db.renew_lease(lease_name, holder, int(time.time()) if now > 1_000_000_000 else now, 300):
+                if not db.renew_lease(lease_name, holder, int(time.time()), 300):
                     raise UnsafeCleanup("Cleanup lease lost")
                 verdict = await self.transport.probe(part, object_id=object_id)
                 if verdict == "missing":
@@ -162,6 +161,9 @@ class RecoveryManager:
             after = await self.transport.discover(object_id, scan_limit=self.scan_limit)
             if not after.complete or after.matches:
                 raise UnsafeCleanup("Residual Telegram messages remain after cleanup")
+            if not db.renew_lease(lease_name, holder, int(time.time()), 300):
+                raise UnsafeCleanup("Cleanup lease lost during final scan")
+            self._eligible(object_id, int(time.time()))
 
             # Do not publish a tombstone if state was changed by another actor.
             result = db.connection.execute(
