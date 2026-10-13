@@ -106,14 +106,19 @@ def test_browser_post_prefix_policy_binds_bucket_checksum_and_destination(servic
     # The signed policy authorizes a prefix, rather than the form's original key.
     authorized = {**form, "key": "browser/prefix/nested/İstanbul.bin"}
     assert post(service, data, authorized).status_code == 204
+    # Also verify independent SigV4 GET readback through an ASCII HTTP path.
+    # Raw non-ASCII URL normalization is covered by the dedicated S3 path tests.
+    assert post(
+        service, data, {**form, "key": "browser/prefix/nested/check.bin"},
+    ).status_code == 204
     assert signed(
-        service, "GET", "/backup-bucket/browser/prefix/nested/İstanbul.bin",
+        service, "GET", "/backup-bucket/browser/prefix/nested/check.bin",
     ).content == data
     for forbidden in ("browser/outside.bin", "browser/prefix-escape.bin"):
         assert post(service, data, {**form, "key": forbidden}).status_code == 403
     assert post(service, data+b"x", authorized).status_code in (400, 403)
     assert post(service, data, authorized, bucket="other-bucket").status_code == 403
-    assert service[2].uploads == 1
+    assert service[2].uploads == 2
 
 
 @pytest.mark.parametrize("bad_condition", [
