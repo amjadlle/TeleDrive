@@ -477,7 +477,7 @@ def test_browser_post_unsigned_mime_and_malformed_mime_denied_before_send(servic
     assert post(service, body, make_form(
         service, body, content_type="text/plain", clauses=constraints,
     )).status_code == 403
-    malformed = make_form(service, body, content_type="text/\\u0001")
+    malformed = make_form(service, body, content_type="text/" + chr(1))
     assert post(service, body, malformed).status_code == 400
     assert service[2].uploads == 0
 
