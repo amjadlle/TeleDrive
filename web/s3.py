@@ -651,9 +651,24 @@ async def _handle(request: Request):
                     scratch_directory=directory,
                 ).put_file(bucket, post_key, staged)
                 post_catalog.publish(obj.id, now=int(time.time()))
-                return Response(status_code=204, headers={
-                    "ETag": '"' + obj.sha256 + '"', "x-amz-version-id": obj.id,
-                })
+                etag = '"' + obj.sha256 + '"'
+                response_headers = {"ETag": etag, "x-amz-version-id": obj.id}
+                # Browser POST completion status is an authenticated part
+                # of the signed policy. Never honor unsigned response options.
+                status = int(post_fields.get("success_action_status", "204"))
+                if status == 201:
+                    # Quote untrusted key text before placing it in Location.
+                    # The XML serializer escapes the same key in the body.
+                    location = (str(request.base_url).rstrip("/")
+                                + "/" + quote(bucket, safe="")
+                                + "/" + quote(post_key, safe="/"))
+                    response_headers["Location"] = location
+                    return Response(_xml("PostResponse", [
+                        ("Location", location), ("Bucket", bucket),
+                        ("Key", post_key), ("ETag", etag),
+                    ]), media_type="application/xml", status_code=201,
+                        headers=response_headers)
+                return Response(status_code=status, headers=response_headers)
             finally:
                 staged.unlink(missing_ok=True)
         owner = verify_header_signature(request, store.resolve, action)
