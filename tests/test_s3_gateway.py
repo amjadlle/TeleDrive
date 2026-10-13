@@ -252,3 +252,34 @@ def test_real_boto3_sdk_over_http_loopback(service):
         thread.join(timeout=10)
         sock.close()
         assert not thread.is_alive(), "ASGI S3 server did not stop"
+
+
+@pytest.mark.parametrize("raw_key", [
+    "a%20file.txt", "caf%C3%A9.txt", "folder%2Fencoded-slash.bin",
+    "x%2525literal-percent.txt",
+])
+def test_url_encoded_keys_preserve_s3_sigv4_semantics(service, raw_key):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    content = b"encoded-key-content:" + raw_key.encode("ascii")
+    uri = "/backup-bucket/" + raw_key
+    uploaded = signed(service, "PUT", uri, content)
+    assert uploaded.status_code == 200, uploaded.text
+    retrieved = signed(service, "GET", uri)
+    assert retrieved.status_code == 200, retrieved.text
+    assert retrieved.content == content
+
+
+def test_encoded_path_tampering_invalidates_signature(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = b"same-body"
+    req = AWSRequest(method="PUT", url="http://localhost:9000/backup-bucket/a%20b.txt",
+                     data=payload, headers={
+                         "x-amz-content-sha256": hashlib.sha256(payload).hexdigest(),
+                     })
+    req.context["payload_signing_enabled"] = True
+    S3SigV4Auth(Credentials(service[1].access_key, service[1].secret_key),
+                "s3", "us-east-1").add_auth(req)
+    tampered = service[0].put("/backup-bucket/a%20c.txt", headers=dict(req.headers),
+                              content=payload)
+    assert tampered.status_code == 403
+    assert b"SignatureDoesNotMatch" in tampered.content
