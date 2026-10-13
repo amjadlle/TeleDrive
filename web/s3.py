@@ -391,6 +391,8 @@ async def _handle(request: Request):
                 "PUT": "s3:PutBucketTagging",
                 "DELETE": "s3:DeleteBucketTagging",
             }.get(request.method)
+        elif bucket and not separator and "location" in request.query_params:
+            action = "s3:GetBucketLocation" if request.method == "GET" else None
         elif mpu_start or mpu_part or mpu_complete:
             action = "s3:PutObject"
         elif mpu_bucket_list:
@@ -408,7 +410,7 @@ async def _handle(request: Request):
         unsupported = {
             "acl", "versioning", "versions", "lifecycle", "policy",
             "notification", "cors", "replication",
-            "retention", "legal-hold", "logging", "location",
+            "retention", "legal-hold", "logging",
             "encryption", "object-lock", "publicAccessBlock", "versionId",
         }
         if any(parameter in request.query_params for parameter in unsupported):
@@ -498,6 +500,17 @@ async def _handle(request: Request):
                 return _error("NoSuchBucket", "The specified bucket does not exist", 404)
             if request.method == "HEAD":
                 return Response(status_code=200)
+            if "location" in request.query_params:
+                if request.method != "GET":
+                    return _error("MethodNotAllowed", "GetBucketLocation requires GET", 405)
+                if bucket not in catalog.list_buckets():
+                    return _error("NoSuchBucket", "The specified bucket does not exist", 404)
+                # AWS represents us-east-1 as an empty LocationConstraint.
+                root = ET.Element("LocationConstraint", xmlns=NAMESPACE)
+                return Response(
+                    ET.tostring(root, encoding="utf-8", xml_declaration=True),
+                    media_type="application/xml",
+                )
             if mpu_bucket_list:
                 records, more = MultipartStore(catalog).list_uploads(
                     bucket, owner,
