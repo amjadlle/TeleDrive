@@ -640,6 +640,52 @@ def test_real_boto3_presigned_post_custom_metadata_cache_and_binary_readback(ser
     assert service[2].uploads == 1
 
 
+
+def test_browser_post_metadata_non_latin1_cannot_publish_unreadable_object(service):
+    """HTTP server cannot emit U+6771 directly in response header values."""
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"metadata-header-encoding-regression" * 47
+    fields = make_form(service, data, extra_fields={
+        "x-amz-meta-unsafe": "東京",
+    })
+    response = post(service, data, fields)
+    assert response.status_code == 400, response.text
+    assert service[2].uploads == 0
+
+
+@pytest.mark.parametrize("field,content", [
+    ("x-amz-meta-bad@name", "value"),
+    ("x-amz-meta-", "empty-name"),
+    ("x-amz-meta-double.dot", "unsupported-name"),
+    ("Content-MD5", "unbound-unsupported-checksum"),
+    ("x-amz-server-side-encryption", "AES256"),
+])
+def test_browser_post_rejects_unsupported_signed_fields_before_upload(service, field, content):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"do-not-write-insecure-metadata"
+    response = post(service, body, make_form(
+        service, body, extra_fields={field: content},
+    ))
+    assert response.status_code == 400, response.text
+    assert service[2].uploads == 0
+
+
+def test_browser_post_metadata_duplicate_constraints_fail_closed(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"duplicate-user-meta-must-fail"
+    base = make_form(service, body, extra_fields={
+        "x-amz-meta-ci": "signed",
+    })
+    constraints = json.loads(base64.b64decode(base["policy"]))["conditions"]
+    constraints[-2] = {"x-amz-meta-ci": "signed"}
+    response = post(service, body, make_form(
+        service, body, extra_fields={"x-amz-meta-ci": "signed"},
+        clauses=constraints,
+    ))
+    assert response.status_code == 403, response.text
+    assert service[2].uploads == 0
+
+
 def test_browser_post_rejects_expired_or_revoked_signers(service):
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
     body = b"secret"
