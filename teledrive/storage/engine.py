@@ -8,7 +8,9 @@ This module intentionally does not implement S3's HTTP semantics yet.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import secrets
 import os
 import stat
 import tempfile
@@ -16,7 +18,7 @@ import time
 from pathlib import Path
 from typing import AsyncIterator, Protocol
 
-from .manifest import ChunkReference, ManifestStore, StoredObject
+from .manifest import ChunkReference, ManifestStore, StoredObject, ManifestError
 
 
 class IntegrityError(RuntimeError):
@@ -57,19 +59,47 @@ def _digest_file(path: Path) -> tuple[int, str]:
 class TelegramObjectStorage:
     def __init__(self, manifests: ManifestStore, transport: TelegramTransport,
                  *, chunk_size: int = 64 * 1024 * 1024,
-                 scratch_directory: Path | None = None):
+                 scratch_directory: Path | None = None,
+                 writer_ttl_seconds: int = 120):
         if chunk_size <= 0 or chunk_size > 1024 * 1024 * 1024:
             raise ValueError("chunk_size must be between 1 byte and 1 GiB")
         self.manifests = manifests
         self.transport = transport
         self.chunk_size = chunk_size
         self.scratch_directory = scratch_directory
+        if writer_ttl_seconds < 5:
+            raise ValueError("writer_ttl_seconds must be at least 5")
+        self.writer_ttl_seconds = writer_ttl_seconds
+
+    async def _keep_writer_alive(self, identifier: str, token: str,
+                                 stop: asyncio.Event, lost: asyncio.Event) -> None:
+        interval = max(1, self.writer_ttl_seconds // 3)
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                if not self.manifests.heartbeat_writer(
+                    identifier, token, int(time.time()), self.writer_ttl_seconds
+                ):
+                    lost.set()
+                    return
+            except Exception:
+                lost.set()
+                return
 
     async def put_file(self, bucket: str, key: str, source: Path) -> StoredObject:
         source = Path(source)
         with _regular_source(source) as handle:
             before = os.fstat(handle.fileno())
             identifier = self.manifests.begin(bucket, key, before.st_size, int(time.time()))
+            token = secrets.token_hex(24)
+            self.manifests.start_writer(identifier, token, int(time.time()), self.writer_ttl_seconds)
+            stop = asyncio.Event()
+            lost = asyncio.Event()
+            renewal = asyncio.create_task(self._keep_writer_alive(identifier, token, stop, lost))
             full_sha = hashlib.sha256()
             offset = 0
             ordinal = 0
@@ -88,6 +118,12 @@ class TelegramObjectStorage:
                         account, chat_id, message_id = await self.transport.upload(
                             part, object_id=identifier, ordinal=ordinal, checksum=digest,
                         )
+                        # The remote message may already exist if our SQL lease
+                        # expired: reject publication and leave the marker for GC.
+                        if lost.is_set() or not self.manifests.heartbeat_writer(
+                            identifier, token, int(time.time()), self.writer_ttl_seconds
+                        ):
+                            raise ManifestError("Writer ownership lost before chunk journal")
                         self.manifests.append(identifier, ChunkReference(
                             ordinal=ordinal, offset=offset, size=len(data), sha256=digest,
                             account=account, chat_id=int(chat_id), message_id=int(message_id),
@@ -101,15 +137,25 @@ class TelegramObjectStorage:
                     or before.st_mtime_ns != after.st_mtime_ns
                     or before.st_size != after.st_size):
                     raise IntegrityError("Source changed during upload")
-                return self.manifests.finish(identifier, full_sha.hexdigest(), int(time.time()))
+                if lost.is_set() or not self.manifests.heartbeat_writer(
+                    identifier, token, int(time.time()), self.writer_ttl_seconds
+                ):
+                    raise ManifestError("Writer ownership lost before publication")
+                return self.manifests.finish(
+                    identifier, full_sha.hexdigest(), int(time.time()), writer_token=token
+                )
             except BaseException as exc:
                 # Do not delete recorded Telegram chunks here. They form a
                 # recovery journal and may be needed by a later reconciler.
                 try:
-                    self.manifests.fail(identifier, type(exc).__name__, int(time.time()))
+                    self.manifests.fail(identifier, type(exc).__name__, int(time.time()),
+                                        writer_token=token)
                 except Exception:
                     pass
                 raise
+            finally:
+                stop.set()
+                await renewal
 
     async def iter_bytes(self, identifier: str, *,
                          start: int = 0, end: int | None = None,
