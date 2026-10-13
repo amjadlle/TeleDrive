@@ -698,7 +698,7 @@ verification and explicit retention approvals are implemented.
   unsupported wildcard fields and independently generated boto3
   browser-prefix policies with a browser-expanded key.
 - Live Bot API and Telethon standard E2E matrices add random 2 MiB + 17 B
-  two-chunk uploads with real message IDs, exact readback, SQL restart,
+  three-chunk uploads (1 MiB + 1 MiB + 17 B) with real message IDs, SQL restart,
   per-chunk checksums, Range validation and scoped cleanup; Telethon also
   adds 2047 B and Bot adds exact 8192 B.
 - **Acceptance is provisional until this SHA's GitHub Actions jobs finish.**
