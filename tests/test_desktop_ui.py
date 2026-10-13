@@ -9,7 +9,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 import yaml
 from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox
-from PySide6.QtCore import QProcess
+from PySide6.QtCore import QProcess, QCoreApplication, QEvent, Qt
+import shiboken6
 
 from app import window as desktop
 from app.paths import DEFAULT_CONFIG
@@ -19,7 +20,12 @@ from teledrive import db
 @pytest.fixture(scope="module")
 def qt_app():
     app = QApplication.instance() or QApplication([])
+    app.setQuitOnLastWindowClosed(False)
     yield app
+    app.closeAllWindows()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
 
 
 @pytest.fixture
@@ -33,6 +39,7 @@ def ui(tmp_path, monkeypatch, qt_app):
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]) or QMessageBox.StandardButton.Ok)
     win = desktop.MainWindow()
+    win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
     win.show()
     qt_app.processEvents()
     yield win, config, warnings
@@ -44,6 +51,10 @@ def ui(tmp_path, monkeypatch, qt_app):
         win.process.waitForFinished(5000)
     win.close()
     qt_app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qt_app.processEvents()
+    if shiboken6.isValid(win):
+        shiboken6.delete(win)
 
 
 def test_desktop_launches_and_has_account_controls(ui):
