@@ -18,7 +18,9 @@ NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
 
 def xml_text(response, key):
-    return ET.fromstring(response.content).findtext(NS + key)
+    root = ET.fromstring(response.content)
+    # S3 successful responses have the S3 XML namespace; Error XML does not.
+    return root.findtext(key if root.tag == "Error" else NS + key)
 
 
 def begin(svc, key="asset.bin"):
