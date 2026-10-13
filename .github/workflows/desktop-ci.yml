@@ -55,6 +55,14 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Install Linux Qt runtime libraries
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0
+
       - name: Install desktop and test dependencies
         run: |
           python -m pip install --upgrade pip
@@ -63,7 +71,7 @@ jobs:
       - name: Compile all Python modules
         run: python -m compileall -q app teledrive tests
       - name: Desktop and account integration tests
-        run: python -m pytest -q tests/test_desktop_support.py tests/test_desktop_ui.py
+        run: python -m pytest -vv -s tests/test_desktop_support.py tests/test_desktop_ui.py
       - name: Test desktop module/CLI entrypoint
         run: |
           python -m teledrive.uploader --help
