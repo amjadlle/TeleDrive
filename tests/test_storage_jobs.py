@@ -261,3 +261,123 @@ def test_cancel_job_endpoint_requires_root_and_csrf_and_fences_active_jobs(
     assert client.get("/api/v1/admin/storage/jobs", auth=auth).json()["jobs"][0]["state"] == "cancelled"
     assert client.post("/api/v1/admin/storage/jobs/" + job_id + "/retry",
                        auth=auth, headers={"x-teledrive-csrf": "1"}).status_code == 409
+
+
+def _simulate_crash_after_first_journaled_chunk(manager, root, remote):
+    """Leave the SQL job and object with expired independent worker fences."""
+    import hashlib
+    from sqlalchemy import update
+    from teledrive.storage.manifest import ChunkReference, writer_fences
+
+    payload = bytes(range(31))
+    source = root / "resume-source.bin"
+    source.write_bytes(payload)
+    job_id = manager.enqueue("job-bucket", "resumable.bin", source, allowed_root=root)
+    claim = manager.claim_next()
+    assert claim["id"] == job_id
+    now = int(time.time())
+    manifests = manager.catalog.manifests
+    identifier = manifests.begin("job-bucket", "resumable.bin", len(payload), now)
+    manifests.start_writer(identifier, "crashed-owner", now, ttl=120)
+    assert manager.mark_pending(job_id, claim["lease_token"], identifier, now=now)
+    first = root / "sent-before-crash.bin"
+    first.write_bytes(payload[:5])
+    checksum = hashlib.sha256(payload[:5]).hexdigest()
+    account, chat, message = asyncio.run(remote.upload(
+        first, object_id=identifier, ordinal=0, checksum=checksum,
+    ))
+    part = ChunkReference(0, 0, 5, checksum, account, chat, message)
+    manifests.append(identifier, part, now, writer_token="crashed-owner")
+    manager.db.connection.execute(
+        update(writer_fences).where(writer_fences.c.object_id == identifier)
+        .values(lease_until=0)
+    )
+    manager.db.connection.execute(
+        update(jobs).where(jobs.c.id == job_id).values(lease_until=0)
+    )
+    manager.db.commit()
+    return job_id, identifier, payload, part
+
+
+def test_resume_journaled_chunks_after_crash_and_db_restart(queue):
+    manager, root, db_path = queue
+    remote = MemoryTelegram()
+    job_id, object_id, payload, preserved = _simulate_crash_after_first_journaled_chunk(
+        manager, root, remote,
+    )
+    original_uploads = remote.uploads
+    assert original_uploads == 1
+    assert manager.catalog.manifests.recovery_parts(object_id) == [preserved]
+
+    new_connection = connect_database(db_path)
+    try:
+        runner = StorageUploadJobs(BucketCatalog(ManifestStore(new_connection)))
+        result = asyncio.run(runner.run_next(
+            remote, allowed_root=root, scratch_directory=root, chunk_size=5,
+        ))
+        assert result == {"id": job_id, "state": "done", "object_id": object_id}
+        assert remote.uploads == 1 + (len(payload) - 5 + 4) // 5
+        assert remote.downloads == 1, "Old Telegram chunk must be verified"
+        refs = runner.catalog.manifests.parts(object_id)
+        assert refs[0] == preserved
+        assert len(refs) == remote.uploads
+        assert runner.catalog.get("job-bucket", "resumable.bin").item.id == object_id
+        restored = root / "resumed-output.bin"
+        asyncio.run(TelegramObjectStorage(
+            runner.catalog.manifests, remote
+        ).download_to_path(object_id, restored))
+        assert restored.read_bytes() == payload
+        assert runner.list_jobs()[0]["state"] == "done"
+    finally:
+        new_connection.close()
+
+
+def test_resume_corrupt_remote_fails_closed_and_retry_preserves_orphan(queue):
+    manager, root, db_path = queue
+    remote = MemoryTelegram()
+    job_id, object_id, payload, preserved = _simulate_crash_after_first_journaled_chunk(
+        manager, root, remote,
+    )
+    remote.data[preserved.account, preserved.chat_id, preserved.message_id] = b"bad!"
+    reopened = connect_database(db_path)
+    try:
+        runner = StorageUploadJobs(BucketCatalog(ManifestStore(reopened)))
+        from teledrive.storage.engine import IntegrityError
+        with pytest.raises(IntegrityError):
+            asyncio.run(runner.run_next(
+                remote, allowed_root=root, scratch_directory=root, chunk_size=5,
+            ))
+        assert remote.uploads == 1
+        assert runner.list_jobs()[0]["state"] == "failed"
+        assert runner.catalog.manifests.recovery_parts(object_id) == [preserved]
+        with pytest.raises(FileNotFoundError):
+            runner.catalog.get("job-bucket", "resumable.bin")
+        assert runner.retry(job_id)
+        assert runner.list_jobs()[0]["object_id"] is None
+        fixed = asyncio.run(runner.run_next(
+            remote, allowed_root=root, scratch_directory=root, chunk_size=5,
+        ))
+        assert fixed["state"] == "done"
+        assert fixed["object_id"] != object_id
+        assert (preserved.account, preserved.chat_id, preserved.message_id) in remote.data
+        restored = root / "after-retry.bin"
+        asyncio.run(TelegramObjectStorage(
+            runner.catalog.manifests, remote
+        ).download_to_path(fixed["object_id"], restored))
+        assert restored.read_bytes() == payload
+    finally:
+        reopened.close()
+
+
+def test_pending_writer_reclaim_rejects_live_and_unfenced_manifests(queue):
+    manager, root, _ = queue
+    now = int(time.time())
+    store = manager.catalog.manifests
+    identifier = store.begin("job-bucket", "guard.bin", 0, now)
+    store.start_writer(identifier, "current", now, ttl=120)
+    assert not store.reclaim_writer(identifier, "intruder", now)
+    assert store.heartbeat_writer(identifier, "current", now)
+    legacy = store.begin("job-bucket", "legacy-guard.bin", 0, now - 86400)
+    assert not store.reclaim_writer(legacy, "intruder", now)
+    assert store.reclaim_writer(identifier, "recovered", now + 121)
+    assert not store.heartbeat_writer(identifier, "current", now + 122)
