@@ -23,6 +23,7 @@ from defusedxml.common import DefusedXmlException
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response, StreamingResponse
+from sqlalchemy import select
 
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
@@ -36,7 +37,7 @@ from teledrive.s3.cors import (BucketCORSStore, CORSError, MAX_CORS_XML_BYTES,
 from teledrive.s3.object_metadata import (
     ObjectMetadataStore, ObjectMetadataError, parse_object_metadata, signed_header_names,
 )
-from teledrive.storage.catalog import BucketCatalog
+from teledrive.storage.catalog import BucketCatalog, published_versions
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.manifest import ManifestStore
@@ -422,6 +423,14 @@ async def _handle(request: Request):
             )
             if has_write_cond and not (simple_object or multipart_completion):
                 return _error("NotImplemented", "Unsupported conditional S3 operation", 501)
+        is_version_read = bool(
+            separator and request.method in ("GET", "HEAD")
+            and "versionId" in request.query_params
+            and all(key_name == "versionId" or key_name.startswith("X-Amz-")
+                    for key_name in request.query_params)
+        )
+        if is_version_read and len(request.query_params.getlist("versionId")) != 1:
+            return _error("InvalidArgument", "Ambiguous version ID", 400)
         mpu_bucket_list = bool(bucket and not separator and "uploads" in request.query_params
                                and request.method == "GET")
         mpu_start = bool(separator and "uploads" in request.query_params and request.method == "POST")
@@ -488,7 +497,9 @@ async def _handle(request: Request):
             "retention", "legal-hold", "logging",
             "encryption", "object-lock", "publicAccessBlock", "versionId",
         }
-        if any(parameter in request.query_params for parameter in unsupported):
+        if any(parameter in request.query_params and (
+            parameter != "versionId" or not is_version_read
+        ) for parameter in unsupported):
             return _error("NotImplemented", "This S3 extension is not implemented", 501)
 
         master = load_master_key()
@@ -1061,10 +1072,30 @@ async def _handle(request: Request):
             finally:
                 stage.unlink(missing_ok=True)
 
-        try:
-            item = catalog.get(bucket, key).item
-        except FileNotFoundError:
-            return _error("NoSuchKey", "The specified key does not exist", 404)
+        if is_version_read:
+            version_id = request.query_params["versionId"]
+            if not version_id or len(version_id) > 80:
+                return _error("InvalidArgument", "Invalid version ID", 400)
+            published = db.connection.execute(
+                select(published_versions.c.object_id).where(
+                    published_versions.c.object_id == version_id,
+                    published_versions.c.bucket == bucket,
+                    published_versions.c.key_hash == catalog._keyhash(key),
+                )
+            ).scalar_one_or_none()
+            if published is None:
+                return _error("NoSuchVersion", "Object version is not published", 404)
+            try:
+                item = catalog.manifests.get(version_id)
+            except FileNotFoundError:
+                return _error("NoSuchVersion", "Object version is not readable", 404)
+            if item.bucket != bucket or item.key != key:
+                return _error("NoSuchVersion", "Version ownership mismatch", 404)
+        else:
+            try:
+                item = catalog.get(bucket, key).item
+            except FileNotFoundError:
+                return _error("NoSuchKey", "The specified key does not exist", 404)
         item_etag = MultipartStore(catalog).object_etag(item.id, item.sha256)
         if is_object_attributes:
             raw = request.headers.get("x-amz-object-attributes", "")

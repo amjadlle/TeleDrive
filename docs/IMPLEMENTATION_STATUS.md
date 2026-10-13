@@ -197,3 +197,14 @@ journals, excludes PENDING/READY, counts source references across HEADs,
 published versions, aliases and multipart parts. Every candidate remains
 unapproved for physical deletion until independent Telegram ownership
 verification and explicit retention approvals are implemented.
+
+## P1.3 historical GET/HEAD by VersionId
+
+- Signed S3 GET/HEAD now accepts a single `versionId` only for a version
+  proven published to that bucket/key in the immutable history index.
+  Historical byte ranges and HEAD content-length use the normal checksum
+  verified Telegram transport. Deleted current pointers do not hide
+  previous published versions.
+- Unpublished READY staging manifests and unknown IDs fail with
+  NoSuchVersion. Version-specific DELETE, tagging, CopySource and AWS
+  `ListObjectVersions` remain unsupported until full safe semantics exist.
