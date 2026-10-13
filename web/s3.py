@@ -218,7 +218,14 @@ def _initial_tags(request: Request, owner: str, credentials: S3CredentialStore):
         raise SigV4Error("AccessDenied", "x-amz-tagging must be signed")
     if credentials.resolve(owner, "s3:PutObjectTagging") is None:
         raise SigV4Error("AccessDenied", "PutObjectTagging permission required")
+    return _parse_initial_tags(raw)
+
+
+def _parse_initial_tags(raw: str) -> list[tuple[str, str]]:
+    """Strictly decode and validate either signed header or POST form tags."""
     import re
+    if len(raw.encode("utf-8")) > 8192:
+        raise TaggingError("InvalidTag", "Tag payload is too large")
     if re.search(r"%(?![0-9A-Fa-f]{2})", raw):
         raise TaggingError("InvalidTag", "Malformed tag URL encoding")
     try:
@@ -644,6 +651,15 @@ async def _handle(request: Request):
             post_metadata = parse_object_metadata(
                 post_headers, set(post_headers),
             )
+            # Tagging is a separate S3 capability, not included in generic
+            # PutObject credentials. Enforce BOTH privileges before sending
+            # even a single byte, then publish tags in the HEAD transaction.
+            form_tags = None
+            if "x-amz-tagging" in post_fields:
+                credential_access = post_fields["x-amz-credential"].split("/", 1)[0]
+                if store.resolve(credential_access, "s3:PutObjectTagging") is None:
+                    raise SigV4Error("AccessDenied", "PutObjectTagging permission required")
+                form_tags = _parse_initial_tags(post_fields["x-amz-tagging"])
             post_catalog = BucketCatalog(ManifestStore(db))
             if bucket not in post_catalog.list_buckets():
                 return _error("NoSuchBucket", "Upload bucket does not exist", 404)
@@ -666,6 +682,10 @@ async def _handle(request: Request):
                 ObjectMetadataStore(post_catalog).attach_uncommitted(
                     obj.id, post_metadata,
                 )
+                if form_tags is not None:
+                    ObjectTagStore(post_catalog).attach_uncommitted(
+                        obj.id, form_tags,
+                    )
                 post_catalog.publish(obj.id, now=int(time.time()))
                 etag = '"' + obj.sha256 + '"'
                 response_headers = {"ETag": etag, "x-amz-version-id": obj.id}
