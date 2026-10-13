@@ -205,11 +205,42 @@ Implemented in this phase:
 - Deterministic tests for corruption, missing chunks, interrupted upload, source mutation,
   chunk boundaries, empty files and SQLite restart; live PostgreSQL/MySQL tests.
 
-**Not yet implemented:** REST upload endpoints, the S3 gateway, API key management,
-full crash/orphan reconciliation, S3 multipart semantics, object deletion/versioning,
-or an automated migration of legacy `files` entries. This module is a foundation,
-not a production-ready S3 service. The legacy folder uploader continues to work
-independently until migration and shared job orchestration are added.
+**Not yet implemented:** REST upload endpoints, the S3 gateway, API key
+management, automatic recovery of still-pending uploads, S3 multipart semantics,
+object deletion/versioning, or an automated migration of legacy `files`
+entries. This module is a foundation, not a production-ready S3 service.
+The legacy folder uploader continues to work independently until migration
+and shared job orchestration are added.
+
+### Phase 2: conservative failure recovery and orphan cleanup
+
+`teledrive.storage.RecoveryManager` now reconciles the recorded chunk journal
+with **Telegram messages in configured targets**. A process can crash after a
+successful Telegram upload but before recording its message ID in SQL; the
+upload caption contains a stable `teledrive:<object-id>:<part>:<sha-prefix>`
+marker so unindexed messages can be discovered.
+
+- **Dry-run is always the default**, and no background process deletes messages.
+- Only objects in `failed` status and older than a safety window (24 hours
+  by default) can be cleaned. `pending` and `ready` objects are excluded.
+- Cleanup requires a complete Telegram history scan. A scan limit, missing
+  account/target, conflicting marker or unverified ownership blocks deletion.
+- Every message is checked as an outgoing upload with the exact object marker
+  before deletion, then Telegram deletion is verified. Per-object SQL leases
+  serialize cleanup and interrupted deletion is safely retryable.
+- Cleaned objects retain their audit journal but cannot be read as live objects.
+
+**Important limits:** The recovery service is an internal component, not yet
+exposed through WebUI, Desktop or REST. Hard-killed workers can leave stale
+`pending` objects; writer heartbeats/fencing and explicit abandonment must be
+implemented before those become cleanup candidates. Changed Telegram targets,
+inaccessible history, or large histories beyond the scan limit prevent reliable
+orphan discovery, so cleanup refuses to claim success. Metadata DB rebuild
+from Telegram is also a later phase.
+
+CI exercises unindexed crash orphans, corrupt/missing marker ownership,
+incomplete scans, partial deletion retry, safe exclusion of READY objects
+and database cleanup transactions on live PostgreSQL/MySQL.
 
 ### Real Telegram E2E test (requires a dedicated test account)
 
