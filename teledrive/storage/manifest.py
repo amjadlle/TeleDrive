@@ -173,7 +173,7 @@ class ManifestStore:
     def interrupted(self) -> list[tuple[str, str]]:
         """List non-ready objects requiring reconciliation; never show to clients."""
         rows = self.db.connection.execute(
-            select(objects.c.id, objects.c.status).where(objects.c.status != "ready")
+            select(objects.c.id, objects.c.status).where(objects.c.status.in_(["pending", "failed"]))
         ).all()
         return [(str(row[0]), str(row[1])) for row in rows]
 
