@@ -8,11 +8,12 @@ A staged READY manifest can be published without uploading bytes again.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import stat
 import time
 from pathlib import Path
-from uuid import uuid4
+from uuid import uuid4, uuid5, NAMESPACE_URL
 
 from sqlalchemy import (
     BigInteger, Column, Integer, MetaData, String, Table, Text,
@@ -80,8 +81,23 @@ class StorageUploadJobs:
         self.db = catalog.db
         _meta.create_all(self.db.engine)
 
+    @staticmethod
+    def scan_id(bucket: str, key: str, path: Path, info: os.stat_result) -> str:
+        """Stable identity for one exact source revision under one bucket/key.
+
+        A UUIDv5 primary-key collision is serialized by the database even if
+        two legacy folder scanners race. Manual jobs remain UUIDv4.
+        """
+        identity = json.dumps(
+            ["teledrive-legacy-tree-v1", bucket, key, str(path),
+             int(info.st_dev), int(info.st_ino), int(info.st_size),
+             int(info.st_mtime_ns)], ensure_ascii=False, separators=(",", ":"),
+        )
+        return str(uuid5(NAMESPACE_URL, identity))
+
     def enqueue(self, bucket: str, key: str, source: Path, *,
-                allowed_root: Path, now: int | None = None) -> str:
+                allowed_root: Path, now: int | None = None,
+                deduplicate: bool = False) -> str:
         now = int(time.time()) if now is None else now
         if bucket not in self.catalog.list_buckets():
             raise FileNotFoundError("Bucket does not exist")
@@ -92,18 +108,45 @@ class StorageUploadJobs:
             generation, observed = current.generation, current.item.id
         except FileNotFoundError:
             generation, observed = 0, None
-        ident = str(uuid4())
-        self.db.connection.execute(insert(jobs).values(
-            id=ident, bucket=bucket, object_key=key,
-            source_path=str(path), source_size=info.st_size,
-            source_device=info.st_dev, source_inode=info.st_ino,
-            source_mtime_ns=info.st_mtime_ns,
-            expected_generation=generation, expected_head_id=observed,
-            state="queued", object_id=None, attempts=0,
-            lease_token=None, lease_until=None,
-            created_at=now, updated_at=now, last_error=None,
-        ))
-        self.db.commit()
+        ident = (
+            self.scan_id(bucket, key, path, info)
+            if deduplicate else str(uuid4())
+        )
+        if deduplicate:
+            previous = self.db.connection.execute(
+                select(jobs).where(jobs.c.id == ident)
+            ).mappings().first()
+            if previous is not None:
+                return ident
+        try:
+            self.db.connection.execute(insert(jobs).values(
+                id=ident, bucket=bucket, object_key=key,
+                source_path=str(path), source_size=info.st_size,
+                source_device=info.st_dev, source_inode=info.st_ino,
+                source_mtime_ns=info.st_mtime_ns,
+                expected_generation=generation, expected_head_id=observed,
+                state="queued", object_id=None, attempts=0,
+                lease_token=None, lease_until=None,
+                created_at=now, updated_at=now, last_error=None,
+            ))
+            self.db.commit()
+        except IntegrityError:
+            self.db.connection.rollback()
+            if not deduplicate:
+                raise
+            # The other worker may have won the same stable primary key.
+            # Never swallow an unrelated constraint violation.
+            previous = self.db.connection.execute(
+                select(jobs.c.bucket, jobs.c.object_key, jobs.c.source_path,
+                       jobs.c.source_size, jobs.c.source_device,
+                       jobs.c.source_inode, jobs.c.source_mtime_ns)
+                .where(jobs.c.id == ident)
+            ).one_or_none()
+            if previous != (
+                bucket, key, str(path), info.st_size, info.st_dev,
+                info.st_ino, info.st_mtime_ns,
+            ):
+                raise
         return ident
 
     def list_jobs(self, *, limit: int = 100) -> list[dict]:

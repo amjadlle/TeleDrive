@@ -883,6 +883,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--scan-only", action="store_true", help="Only scan and queue files, then exit")
     p.add_argument("--run-once", action="store_true", help="Run one upload batch and exit")
     p.add_argument("--no-scan", action="store_true", help="Skip scan phase before upload")
+    p.add_argument("--queue-object-bucket", metavar="BUCKET",
+                   help="Scan legacy source into the durable object queue; never upload in this mode")
+    p.add_argument("--queue-object-prefix", default="",
+                   help="Relative object-key prefix for --queue-object-bucket")
+    p.add_argument("--queue-object-limit", type=int, default=1000,
+                   help="Maximum new durable jobs from one scan (1..1000)")
     p.add_argument("--auth-dir", help=argparse.SUPPRESS)
     return p.parse_args()
 
@@ -897,6 +903,34 @@ async def async_main() -> int:
 
     try:
         with uploader_lock(cfg.db_path):
+            if args.queue_object_bucket:
+                # Deliberate opt-in migration: no Telethon connection, and
+                # never process_uploads() while creating durable jobs.
+                if args.no_scan or args.run_once:
+                    raise ValueError("Object-queue import cannot run --no-scan or --run-once")
+                from teledrive.storage.catalog import BucketCatalog
+                from teledrive.storage.manifest import ManifestStore
+                from teledrive.storage.jobs import StorageUploadJobs
+                from teledrive.storage.legacy_bridge import enqueue_legacy_folder
+                if not conn.acquire_lease(
+                    LEASE_NAME, RUN_HOLDER, int(time.time()), LEASE_TTL_SECONDS
+                ):
+                    raise RuntimeError("Legacy uploader active; stop it before object-queue import")
+                try:
+                    queue = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+                    report = enqueue_legacy_folder(
+                        cfg, queue, bucket=args.queue_object_bucket,
+                        prefix=args.queue_object_prefix,
+                        max_files=args.queue_object_limit,
+                    )
+                    logging.info(
+                        "Durable import: queued=%d existing=%d excluded=%d bucket=%s",
+                        report.queued, report.already_queued,
+                        report.excluded, args.queue_object_bucket,
+                    )
+                    return 0
+                finally:
+                    conn.release_lease(LEASE_NAME, RUN_HOLDER)
             return await _run_with_distributed_lease(
                 cfg,
                 conn,

@@ -85,6 +85,7 @@ jobs:
             tests/test_storage_recovery.py \
             tests/test_storage_pending_admin.py \
             tests/test_storage_jobs.py \
+            tests/test_legacy_bridge.py \
             tests/test_metadata_backup.py \
             tests/test_storage_sigkill.py \
             tests/test_metadata_snapshot_rehearsal.py \

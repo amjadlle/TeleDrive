@@ -343,3 +343,18 @@ verification and explicit retention approvals are implemented.
   immutable HEAD without deleting or retransmitting the existing media.
 - This verifies a deterministic process crash; it is not a live
   Telegram revocation or multi-server stress/soak certification.
+
+## P1.2 opt-in legacy-to-object durable folder bridge
+
+- `python -m teledrive.uploader --config ... --scan-only
+  --queue-object-bucket EXISTING_BUCKET [--queue-object-prefix RELATIVE_PATH]`
+  now scans the configured legacy source tree, honors extension/size filters,
+  keeps relative paths as object keys and persists immutable source
+  fingerprints in the SQL durable upload queue.
+- Stable UUIDv5 keys make repeat scans idempotent across process restarts.
+  Existing queued/completed jobs are not duplicated. Modified sources create
+  new jobs and must pass destination head CAS when ultimately published.
+- This mode **does not upload, change the legacy files table, or delete media**.
+  It refuses a concurrently leased legacy uploader. Operators must stop the
+  old uploader before enabling the separate durable worker, otherwise
+  the two independent pipelines could send the same files.
