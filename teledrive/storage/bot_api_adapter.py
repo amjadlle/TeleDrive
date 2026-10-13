@@ -14,6 +14,7 @@ import json
 import os
 import re
 import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -194,10 +195,16 @@ class BotApiChunkTransport:
     """TelegramTransport compatible adapter for a single bot/channel pairing."""
 
     def __init__(self, api: Any, index: BotFileIndex, *,
-                 chat_id: int, account: str = "bot"):
+                 chat_id: int, account: str = "bot",
+                 min_upload_interval: float = 1.1):
         if not account or not isinstance(chat_id, int) or chat_id == 0:
             raise ValueError("A bot account alias and numeric channel ID are required")
+        if not 0 <= min_upload_interval <= 60:
+            raise ValueError("Invalid Telegram bot upload interval")
         self.api, self.index, self.chat_id, self.account = api, index, chat_id, account
+        self._min_upload_interval = min_upload_interval
+        self._upload_lock = asyncio.Lock()
+        self._next_upload = 0.0
 
     async def verify_target(self) -> None:
         bot = await self.api.call("getMe", {})
@@ -214,10 +221,19 @@ class BotApiChunkTransport:
                      checksum: str) -> tuple[str, int, int]:
         if path.stat().st_size > BOT_DOWNLOAD_LIMIT:
             raise ValueError("Bot API chunk exceeds cloud download limit (20 MiB)")
-        message = await self.api.call("sendDocument", {
-            "chat_id": self.chat_id,
-            "caption": f"teledrive:{object_id}:{ordinal}:{checksum[:16]}",
-        }, source=path)
+        # Telegram advises roughly one message per second per chat for bots.
+        # Serializing uploads on this transport avoids self-inflicted 429s.
+        async with self._upload_lock:
+            pause = max(0.0, self._next_upload - time.monotonic())
+            if pause:
+                await asyncio.sleep(pause)
+            try:
+                message = await self.api.call("sendDocument", {
+                    "chat_id": self.chat_id,
+                    "caption": f"teledrive:{object_id}:{ordinal}:{checksum[:16]}",
+                }, source=path)
+            finally:
+                self._next_upload = time.monotonic() + self._min_upload_interval
         try:
             mid = int(message["message_id"])
             chat = int(message["chat"]["id"])
