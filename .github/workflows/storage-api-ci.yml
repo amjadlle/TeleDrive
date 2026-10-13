@@ -79,6 +79,7 @@ jobs:
             tests/test_s3_copy.py \
             tests/test_s3_tagging.py \
             tests/test_s3_batch_delete.py \
+            tests/test_s3_metadata.py \
             tests/test_s3_conditions.py \
             tests/test_storage_gc_audit.py \
             tests/test_storage_gc_admin.py
