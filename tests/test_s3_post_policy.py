@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote, urlsplit, parse_qs
+from urllib.parse import quote, urlsplit, parse_qs, urlencode
 from xml.etree import ElementTree as ET
 
 import pytest
@@ -772,6 +772,170 @@ def test_browser_post_metadata_prefix_policy_does_not_weaken_auth(service, bad):
     ))
     assert result.status_code == 403, result.text
     assert service[2].uploads == 0
+
+
+
+def _post_tags(service, key: str):
+    response = signed(service, "GET", "/backup-bucket/" + key + "?tagging")
+    assert response.status_code == 200, response.text
+    root = ET.fromstring(response.content)
+    ns = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+    return sorted(
+        (tag.findtext(ns + "Key"), tag.findtext(ns + "Value"))
+        for tag in root.findall(ns + "TagSet/" + ns + "Tag")
+    )
+
+
+@pytest.mark.parametrize("size", [0, 1, 65537, 1048607])
+def test_browser_post_exact_signed_tags_and_metadata_commit_together(service, size):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = hashlib.shake_256(f"signed-form-tags:{size}".encode()).digest(size)
+    key = f"browser/tags/{size}.bin"
+    tags = urlencode([("source", "browser"), ("şehir", "İstanbul & 東京")])
+    fields = make_form(
+        service, body, key=key, status="201",
+        content_type="application/octet-stream",
+        extra_fields={
+            "x-amz-tagging": tags,
+            "x-amz-meta-ci": "signed",
+        },
+    )
+    result = post(service, body, fields)
+    assert result.status_code == 201, result.text
+    assert ET.fromstring(result.content).findtext("{*}Key") == key
+    assert _post_tags(service, key) == [
+        ("source", "browser"), ("şehir", "İstanbul & 東京"),
+    ]
+    response = signed(service, "GET", "/backup-bucket/" + key)
+    assert response.content == body
+    assert response.headers["x-amz-meta-ci"] == "signed"
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert service[2].uploads == (0 if size == 0 else 1)
+
+
+def test_browser_post_presigned_tags_are_immutable_across_overwrite(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    first = b"first-signed-browse-version" * 5
+    second = b"second-signed-browse-version" * 7
+    assert post(service, first, make_form(
+        service, first, key="browser/tag-versions.bin",
+        extra_fields={"x-amz-tagging": "stage=first"},
+    )).status_code == 204
+    assert _post_tags(service, "browser/tag-versions.bin") == [("stage", "first")]
+    first_id = signed(service, "HEAD", "/backup-bucket/browser/tag-versions.bin").headers[
+        "x-amz-version-id"
+    ]
+    assert post(service, second, make_form(
+        service, second, key="browser/tag-versions.bin",
+        extra_fields={"x-amz-tagging": "stage=second"},
+    )).status_code == 204
+    assert _post_tags(service, "browser/tag-versions.bin") == [("stage", "second")]
+    from teledrive.s3.tagging import ObjectTagStore
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
+    db = service[3]()
+    try:
+        tags = ObjectTagStore(BucketCatalog(ManifestStore(db)))
+        assert tags.get(first_id) == [("stage", "first")]
+    finally:
+        db.close()
+    assert service[2].uploads == 2
+
+
+@pytest.mark.parametrize("wrong", [
+    "source=stolen",
+    "source=browser&second=inserted",
+    "source=browser%ZZ",
+    "source=browser&source=duplicate",
+    "aws%3Asecret=reserved",
+    "key0=0&key1=1&key2=2&key3=3&key4=4&key5=5&key6=6&key7=7&key8=8&key9=9&key10=10",
+])
+def test_browser_post_tampered_or_malformed_tags_never_send_to_telegram(service, wrong):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"presigned-tags-must-stay-pinned"
+    form = make_form(service, data, extra_fields={
+        "x-amz-tagging": "source=browser",
+    })
+    altered = {**form, "x-amz-tagging": wrong}
+    result = post(service, data, altered)
+    assert result.status_code in (400, 403), result.text
+    assert service[2].uploads == 0
+
+
+def test_browser_post_signed_invalid_tagset_is_rejected_before_upload(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"invalid-but-exactly-signed-tags"
+    for bad in (
+        "source=ok&source=duplicated", "aws%3Ainternal=unsafe",
+        "source=bad%ZZ", "=empty-key", "too-many=" + "x" * 257,
+    ):
+        result = post(service, data, make_form(
+            service, data, extra_fields={"x-amz-tagging": bad},
+        ))
+        assert result.status_code == 400, result.text
+    assert service[2].uploads == 0
+
+
+def test_browser_post_tagging_requires_extra_explicit_permission(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    from teledrive.s3.credentials import S3CredentialStore
+    db = service[3]()
+    try:
+        write_only = S3CredentialStore(db, service[4]).create(
+            "browser-post-put-only", ["s3:PutObject"]
+        )
+    finally:
+        db.close()
+    data = b"requires-tagging-privilege"
+    without = make_form(
+        service, data, key="browser/put-only-allowed.bin", issued=write_only,
+    )
+    assert post(service, data, without).status_code == 204
+    with_tags = make_form(
+        service, data, key="browser/put-only-denied.bin", issued=write_only,
+        extra_fields={"x-amz-tagging": "private=blocked"},
+    )
+    denied = post(service, data, with_tags)
+    assert denied.status_code == 403, denied.text
+    assert service[2].uploads == 1
+
+
+def test_real_boto3_browser_post_signed_object_tagging_and_readback(service):
+    import boto3
+    from botocore.config import Config
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = hashlib.shake_256(b"boto3-browser-post-tags").digest(262153)
+    checksum = base64.b64encode(hashlib.sha256(data).digest()).decode()
+    tags = urlencode([("source", "boto3-sdk"), ("test", "binary")])
+    creds = service[1]
+    client = boto3.client(
+        "s3", endpoint_url="http://localhost:9000",
+        aws_access_key_id=creds.access_key, aws_secret_access_key=creds.secret_key,
+        region_name="us-east-1", config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+        ),
+    )
+    signed_form = client.generate_presigned_post(
+        Bucket="backup-bucket", Key="sdk/with-tags.bin",
+        Fields={
+            "x-amz-tagging": tags,
+            "x-amz-checksum-sha256": checksum,
+        },
+        Conditions=[
+            {"x-amz-tagging": tags},
+            {"x-amz-checksum-sha256": checksum},
+            ["content-length-range", 0, 8 * 1024 * 1024],
+        ],
+        ExpiresIn=120,
+    )
+    result = post(service, data, signed_form["fields"])
+    assert result.status_code == 204, result.text
+    assert _post_tags(service, "sdk/with-tags.bin") == [
+        ("source", "boto3-sdk"), ("test", "binary"),
+    ]
+    assert signed(service, "GET", "/backup-bucket/sdk/with-tags.bin").content == data
+    assert service[2].uploads == 1
 
 
 def test_browser_post_rejects_expired_or_revoked_signers(service):
