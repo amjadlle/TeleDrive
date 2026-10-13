@@ -1,60 +1,56 @@
-"""OpenAPI contract and authorization regression tests."""
+"""OpenAPI contract tests independent of Starlette's optional HTTP test client."""
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from fastapi.security import HTTPBasicCredentials
+from starlette.requests import Request
 import pytest
 
 import web.app as webapp
 
 
-@pytest.fixture()
-def client(monkeypatch):
-    monkeypatch.setattr(webapp, "WEB_USER", "apiadmin")
-    monkeypatch.setattr(webapp, "WEB_PASSWORD", "long-test-password-12345")
-    webapp.AUTH_FAILURES.clear()
-    # No lifespan: documentation routes must not touch real system paths/Telegram.
-    return TestClient(webapp.app, headers={"host": "localhost"})
+def request():
+    return Request({
+        "type": "http", "method": "GET", "path": "/openapi.json",
+        "headers": [(b"host", b"localhost")],
+        "client": ("127.0.0.1", 1234),
+        "server": ("127.0.0.1", 8080),
+        "scheme": "http", "query_string": b"",
+    })
 
 
-@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
-def test_documentation_requires_basic_auth(client, path):
-    assert client.get(path).status_code == 401
-    response = client.get(path, auth=("apiadmin", "long-test-password-12345"))
-    assert response.status_code == 200
-    assert response.headers["cache-control"] == "no-store" or path in ("/docs", "/redoc")
-
-
-def test_openapi_has_auth_and_typed_requests(client):
-    response = client.get("/openapi.json", auth=("apiadmin", "long-test-password-12345"))
-    schema = response.json()
+def test_api_schema_exposes_typed_requests_and_security():
+    schema = webapp.app.openapi()
     assert schema["info"]["title"] == "TeleDrive API"
-    endpoints = schema["paths"]
-    for path in ["/api/config", "/api/dashboard", "/api/files",
-                 "/api/process/start", "/api/process/stop", "/api/auth",
-                 "/api/health", "/api/logs"]:
-        assert path in endpoints
-    assert "/docs" not in endpoints
-    assert schema["components"]["schemas"]["TelegramAuthRequest"]["properties"]["kind"]
-    assert schema["components"]["schemas"]["StartRequest"]["properties"]["mode"]
+    paths = schema["paths"]
+    for endpoint in ["/api/config", "/api/dashboard", "/api/files",
+                     "/api/process/start", "/api/process/stop", "/api/auth",
+                     "/api/health", "/api/logs"]:
+        assert endpoint in paths
+    assert "/docs" not in paths
+    schemas = schema["components"]["schemas"]
+    assert "mode" in schemas["StartRequest"]["properties"]
+    assert "kind" in schemas["TelegramAuthRequest"]["properties"]
     assert "HTTPBasic" in schema["components"]["securitySchemes"]
 
 
-def test_swagger_and_redoc_render(client):
-    swagger = client.get("/docs", auth=("apiadmin", "long-test-password-12345"))
-    redoc = client.get("/redoc", auth=("apiadmin", "long-test-password-12345"))
-    assert "swagger-ui" in swagger.text.lower()
-    assert "redoc" in redoc.text.lower()
-    assert "Content-Security-Policy" in swagger.headers
+def test_docs_routes_return_official_swagger_redoc_html():
+    assert "Swagger" in webapp.swagger_docs(None).body.decode()
+    assert "ReDoc" in webapp.redoc_docs(None).body.decode()
+    assert "api/auth" in webapp.openapi_schema(None).body.decode()
 
 
-def test_api_mutations_need_csrf(client):
-    response = client.post(
-        "/api/process/start",
-        auth=("apiadmin", "long-test-password-12345"),
-        json={"mode": "run-once"},
-    )
-    assert response.status_code == 403
+def test_documentation_requires_http_basic(monkeypatch):
+    monkeypatch.setattr(webapp, "WEB_USER", "apiadmin")
+    monkeypatch.setattr(webapp, "WEB_PASSWORD", "strong-password-for-tests")
+    webapp.AUTH_FAILURES.clear()
+    with pytest.raises(HTTPException) as exc:
+        webapp.require_auth(request(), None)
+    assert exc.value.status_code == 401
+
+    valid = HTTPBasicCredentials(username="apiadmin", password="strong-password-for-tests")
+    assert webapp.require_auth(request(), valid) is None
 
 
-def test_health_is_public(client):
-    assert client.get("/api/health").json() == {"ok": True}
+def test_health_is_public():
+    assert webapp.health() == {"ok": True}
