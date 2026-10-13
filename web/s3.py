@@ -39,6 +39,7 @@ from teledrive.s3.cors import (BucketCORSStore, CORSError, MAX_CORS_XML_BYTES,
     parse_cors_xml, cors_xml, matching_rule, response_cors_headers)
 from teledrive.s3.object_metadata import (
     ObjectMetadataStore, ObjectMetadataError, parse_object_metadata, signed_header_names,
+    STANDARD_HEADERS,
 )
 from teledrive.storage.catalog import BucketCatalog, published_versions
 from teledrive.storage.copy import copy_object, CopyConflict
@@ -631,13 +632,18 @@ async def _handle(request: Request):
             post_key = verify_post_policy(
                 post_fields, payload, bucket, store.resolve, max_bytes=form_limit,
             )
-            # A form's Content-Type is independently signed by its policy,
-            # validated like ordinary S3 object metadata and persisted in
-            # the same SQL transaction that publishes the HEAD pointer.
+            # Signed form fields are validated using the same bounded
+            # metadata contract as ordinary S3 PUT. Browser-controlled MIME,
+            # cache rules and x-amz-meta-* values must not be silently
+            # accepted without durable storage.
+            post_headers = {
+                name.lower(): value for name, value in post_fields.items()
+                if name.lower() in STANDARD_HEADERS
+                or name.startswith("x-amz-meta-")
+            }
             post_metadata = parse_object_metadata(
-                {"content-type": post_fields["Content-Type"]},
-                {"content-type"},
-            ) if "Content-Type" in post_fields else {}
+                post_headers, set(post_headers),
+            )
             post_catalog = BucketCatalog(ManifestStore(db))
             if bucket not in post_catalog.list_buckets():
                 return _error("NoSuchBucket", "Upload bucket does not exist", 404)
