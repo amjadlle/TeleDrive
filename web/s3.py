@@ -59,6 +59,26 @@ def _headers(item, etag: str | None = None) -> dict[str, str]:
     }
 
 
+def _verify_upload_sha256(request: Request, digest: bytes) -> None:
+    """Verify actual bytes against checksum committed to the signed request.
+
+    Presigned PUTs cannot use an unsigned mutable payload: the required
+    SHA-256 checksum must be included among the signed request headers.
+    """
+    hexdigest = digest.hex()
+    signed_content = request.headers.get("x-amz-content-sha256", "")
+    signed_checksum = request.headers.get("x-amz-checksum-sha256", "")
+    presigned = "X-Amz-Algorithm" in request.query_params
+    if signed_content == hexdigest:
+        return
+    if presigned and signed_checksum and hmac.compare_digest(
+        signed_checksum,
+        base64.b64encode(digest).decode("ascii"),
+    ):
+        return
+    raise SigV4Error("XAmzContentSHA256Mismatch", "Signed SHA-256 body checksum mismatch")
+
+
 def _range(value: str | None, size: int) -> tuple[int, int, bool]:
     if value is None:
         return 0, size, False
@@ -432,8 +452,7 @@ async def _handle(request: Request):
                         output.write(block)
                     output.flush()
                     os.fsync(output.fileno())
-                if request.headers.get("x-amz-content-sha256") != sha.hexdigest():
-                    raise MultipartError("XAmzContentSHA256Mismatch", "Part SHA-256 mismatch")
+                _verify_upload_sha256(request, sha.digest())
                 checksum_crc = request.headers.get("x-amz-checksum-crc32")
                 if checksum_crc and checksum_crc != base64.b64encode(
                     (crc & 0xffffffff).to_bytes(4, "big")
@@ -479,9 +498,7 @@ async def _handle(request: Request):
                         dest.write(block)
                     dest.flush()
                     os.fsync(dest.fileno())
-                header_digest = request.headers.get("x-amz-content-sha256", "")
-                if header_digest != digest.hexdigest():
-                    return _error("XAmzContentSHA256Mismatch", "Payload checksum mismatch", 400)
+                _verify_upload_sha256(request, digest.digest())
                 checksum_crc = request.headers.get("x-amz-checksum-crc32")
                 if checksum_crc and checksum_crc != base64.b64encode((crc & 0xffffffff).to_bytes(4, "big")).decode():
                     return _error("BadDigest", "CRC32 checksum mismatch", 400)
