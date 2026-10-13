@@ -648,6 +648,12 @@ async def _handle(request: Request):
             if (request.headers.get("x-amz-tagging-directive") is not None
                     and "x-amz-tagging-directive" not in signed_headers):
                 raise SigV4Error("AccessDenied", "Copy tagging directive must be signed")
+            # Copying nonempty source tags is a separate protected read/write
+            # operation; GetObject/PutObject alone must not bypass tag scopes.
+            if tag_directive == "REPLACE":
+                if store.resolve(owner, "s3:PutObjectTagging") is None:
+                    raise SigV4Error("AccessDenied", "Copy tag replacement needs PutObjectTagging")
+
             if (request.headers.get("x-amz-metadata-directive") is not None
                     and "x-amz-metadata-directive" not in signed_headers):
                 raise SigV4Error("AccessDenied", "Metadata directive must be signed")
@@ -669,6 +675,10 @@ async def _handle(request: Request):
                 source_item = catalog.get(src_bucket, src_key).item
             except FileNotFoundError:
                 return _error("NoSuchKey", "CopySource object does not exist", 404)
+            if tag_directive == "COPY" and ObjectTagStore(catalog).get(source_item.id):
+                if (store.resolve(owner, "s3:GetObjectTagging") is None
+                        or store.resolve(owner, "s3:PutObjectTagging") is None):
+                    raise SigV4Error("AccessDenied", "Copying source tags needs tag read/write scopes")
             existing_tag = MultipartStore(catalog).object_etag(source_item.id, source_item.sha256)
             if_match = request.headers.get("x-amz-copy-source-if-match")
             if_none_match = request.headers.get("x-amz-copy-source-if-none-match")
