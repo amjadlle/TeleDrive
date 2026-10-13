@@ -21,9 +21,10 @@ claim of production readiness. Recheck every workflow at the release SHA.
 
 ## P0 — release-blocking validation
 
-- [ ] **P0.1 Immutable green build:** complete Security, Storage API,
-  Database, Desktop (Linux/Windows), and both Telegram E2E workflows on
-  the *same commit SHA*. Cancelled jobs do not count.
+- [x] **P0.1 Immutable green build:** Security, Storage API, Database,
+  Desktop (Linux/Windows), and both Telegram user/bot E2E workflows all
+  passed on commit `904cb15b3cc7c74fbd08297e243232a0eae8b8a5`.
+  Revalidate on every new release candidate: cancelled jobs do not count.
 - [ ] **P0.2 Recovery safety:** inject crashes before/after Telegram ACK,
   at SQL commit, and during multipart Complete; prove SQL fencing and no
   deletion of READY or PENDING Telegram data.
@@ -64,3 +65,17 @@ path is **opt-in and was not established as passing**. Frequent feature
 pushes cancelled Security CI and Storage API Integration CI jobs; these
 checks must finish on an immutable candidate before P0.1 can close.
 Production physical GC and full AWS S3 compliance are not implemented.
+
+## October 13 P0 acceptance hardening
+
+- CopyObject metadata directive is SigV4-bound; intermediaries cannot
+  silently change metadata from COPY to REPLACE.
+- SQL failure after Telegram ACK and cross-connection writer fencing are
+  checked in `tests/test_storage_engine.py`.
+- Revoked, expired, read-only credential HTTP scope regressions live in
+  `tests/test_p0_security_matrix.py` under Storage API CI.
+- Designated feature-branch commits with `[live-multipart]` opt into
+  real 5 MiB+ Telegram Bot multipart without turning on expensive runs for
+  ordinary pushes. The manual workflow input remains supported.
+- P0.4 stays open until the real Telegram multipart acceptance workflow
+  reports a successful completed run.

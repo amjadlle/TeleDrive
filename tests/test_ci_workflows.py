@@ -124,6 +124,8 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
     db = workflow("database-ci.yml")["jobs"]["database"]
     assert {"mysql", "postgres"} <= set(db["services"])
     assert any("tests/test_database_live.py" in s.get("run", "")
+               and "tests/test_storage_engine.py" in s.get("run", "")
+               and "tests/test_storage_recovery.py" in s.get("run", "")
                for s in db["steps"])
 
     desktop = workflow("desktop-ci.yml")["jobs"]["desktop"]
@@ -132,6 +134,7 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
     }
     steps = "\n".join(s.get("run", "") for s in desktop["steps"])
     assert "tests/test_desktop_ui.py" in steps
+    assert "tests/test_storage_engine.py" in workflow("desktop-ci.yml")["on"]["push"]["paths"]
     assert "scripts/build-linux.sh" in steps
     assert "scripts/build.ps1" in steps
 
