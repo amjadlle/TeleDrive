@@ -12,7 +12,7 @@ from teledrive.s3.credentials import S3CredentialStore
 
 
 def make_form(service, data, *, key="browser/upload.bin", seconds=300,
-              missing=None, clauses=None, issued=None):
+              missing=None, clauses=None, issued=None, key_prefix=None):
     credential = issued or service[1]
     current = datetime.now(timezone.utc).replace(microsecond=0)
     day = current.strftime("%Y%m%d")
@@ -24,7 +24,11 @@ def make_form(service, data, *, key="browser/upload.bin", seconds=300,
         "x-amz-checksum-sha256": base64.b64encode(hashlib.sha256(data).digest()).decode(),
     }
     conditions = [{"bucket": "backup-bucket"}]
-    conditions.extend({k: v} for k, v in form.items())
+    conditions.extend(
+        ["starts-with", "$key", key_prefix] if k == "key" and key_prefix is not None
+        else {k: v}
+        for k, v in form.items()
+    )
     conditions.append(["content-length-range", 0, 8 * 1024 * 1024])
     if missing:
         conditions = [c for c in conditions if not isinstance(c, dict) or missing not in c]
@@ -88,9 +92,77 @@ def test_browser_post_requires_exact_policy_conditions(service):
     constraints = json.loads(base64.b64decode(form["policy"]))["conditions"]
     constraints[-1] = ["content-length-range", 0, len(body)-1]
     assert post(service, body, make_form(service, body, clauses=constraints)).status_code == 403
-    constraints[-1] = ["starts-with", "$key", "browser/"]
+    constraints[-1] = ["starts-with", "$key", "unrelated/"]
     assert post(service, body, make_form(service, body, clauses=constraints)).status_code == 403
     assert service[2].uploads == 0
+
+
+def test_browser_post_prefix_policy_binds_bucket_checksum_and_destination(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = hashlib.shake_256(b"browser-prefix").digest(65537)
+    form = make_form(
+        service, data, key="browser/prefix/first.bin", key_prefix="browser/prefix/",
+    )
+    # The signed policy authorizes a prefix, rather than the form's original key.
+    authorized = {**form, "key": "browser/prefix/nested/İstanbul.bin"}
+    assert post(service, data, authorized).status_code == 204
+    assert signed(
+        service, "GET", "/backup-bucket/browser/prefix/nested/İstanbul.bin",
+    ).content == data
+    for forbidden in ("browser/outside.bin", "browser/prefix-escape.bin"):
+        assert post(service, data, {**form, "key": forbidden}).status_code == 403
+    assert post(service, data+b"x", authorized).status_code in (400, 403)
+    assert post(service, data, authorized, bucket="other-bucket").status_code == 403
+    assert service[2].uploads == 1
+
+
+@pytest.mark.parametrize("bad_condition", [
+    ["starts-with", "$x-amz-checksum-sha256", ""],
+    ["starts-with", "$bucket", "backup"],
+    ["starts-with", "$key", 42],
+    ["starts-with", "key", "browser/"],
+])
+def test_browser_post_rejects_unapproved_wildcards(service, bad_condition):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"unchanged"
+    valid = make_form(service, data)
+    constraints = json.loads(base64.b64decode(valid["policy"]))["conditions"]
+    constraints[1] = bad_condition
+    assert post(service, data, make_form(service, data, clauses=constraints)).status_code == 403
+    assert service[2].uploads == 0
+
+
+def test_browser_post_real_boto3_filename_prefix_policy(service):
+    import boto3
+    from botocore.config import Config
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = hashlib.shake_256(b"sdk-prefix").digest(8193)
+    checksum = base64.b64encode(hashlib.sha256(payload).digest()).decode()
+    creds = service[1]
+    client = boto3.client(
+        "s3", endpoint_url="http://localhost:9000",
+        aws_access_key_id=creds.access_key,
+        aws_secret_access_key=creds.secret_key,
+        region_name="us-east-1", config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+        ),
+    )
+    signed_form = client.generate_presigned_post(
+        Bucket="backup-bucket", Key="sdk/prefix/${filename}",
+        Fields={"x-amz-checksum-sha256": checksum},
+        Conditions=[
+            {"x-amz-checksum-sha256": checksum},
+            ["content-length-range", 0, 8 * 1024 * 1024],
+        ],
+        ExpiresIn=120,
+    )
+    assert "${filename}" in signed_form["fields"]["key"]
+    expanded = {**signed_form["fields"], "key": "sdk/prefix/nested.bin"}
+    assert post(service, payload, expanded).status_code == 204
+    assert signed(service, "GET", "/backup-bucket/sdk/prefix/nested.bin").content == payload
+    assert post(service, payload, {**expanded, "key": "sdk/outside.bin"}).status_code == 403
+    assert service[2].uploads == 1
 
 
 def test_browser_post_rejects_expired_or_revoked_signers(service):
