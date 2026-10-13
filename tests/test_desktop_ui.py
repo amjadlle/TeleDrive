@@ -191,3 +191,78 @@ def test_desktop_api_keys_share_database_and_revoke_immediately(ui, monkeypatch)
     finally:
         conn.close()
     assert not warnings
+
+
+def test_native_s3_management_issues_and_revokes_shared_credentials(qt_app, tmp_path, monkeypatch):
+    """Actual Qt widgets, encrypted SQL, one-time display and revocation."""
+    from cryptography.fernet import Fernet
+    from app.pages import s3_management
+    from teledrive.s3.credentials import S3CredentialStore
+    from teledrive.db import connect_database
+    master = Fernet.generate_key()
+    monkeypatch.setattr(s3_management, "load_master_key", lambda: master)
+    shown = []
+    monkeypatch.setattr(QInputDialog, "getMultiLineText",
+                        lambda *args, **kwargs: shown.append(args[-1]) or ("", False))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *args, **kwargs: warnings.append(args[-1]) or QMessageBox.StandardButton.Ok)
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
+    url = str(tmp_path / "shared-state.db")
+    page = s3_management.S3ManagementPage(lambda: connect_database(url))
+    page.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+    page.show()
+    qt_app.processEvents()
+    try:
+        page.name.setText("Desktop backup client")
+        page.create_key()
+        assert not warnings
+        assert len(shown) == 1
+        values = dict(line.split("=", 1) for line in shown[0].splitlines())
+        assert values["AWS_ACCESS_KEY_ID"].startswith("TD")
+        assert len(values["AWS_SECRET_ACCESS_KEY"]) > 32
+        assert page.table.rowCount() == 1
+        conn = connect_database(url)
+        try:
+            store = S3CredentialStore(conn, master)
+            issued = store.list()[0]
+            assert "secret_key" not in str(issued)
+            assert store.resolve(issued["access_key"], "s3:GetObject") == values["AWS_SECRET_ACCESS_KEY"]
+            assert store.resolve(issued["access_key"], "s3:PutObject") is None
+        finally:
+            conn.close()
+        page.table.selectRow(0)
+        page.revoke_selected()
+        assert page.table.item(0, 4).text() == "Revoked"
+        conn = connect_database(url)
+        try:
+            assert S3CredentialStore(conn, master).resolve(
+                issued["access_key"], "s3:GetObject"
+            ) is None
+        finally:
+            conn.close()
+    finally:
+        page.close()
+        qt_app.processEvents()
+
+
+def test_native_s3_page_fails_closed_without_master(qt_app, tmp_path, monkeypatch):
+    from app.pages import s3_management
+    warnings = []
+    monkeypatch.setattr(s3_management, "load_master_key",
+                        lambda: (_ for _ in ()).throw(RuntimeError("Master key required")))
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *args, **kwargs: warnings.append(args[-1]) or QMessageBox.StandardButton.Ok)
+    page = s3_management.S3ManagementPage(
+        lambda: db.connect_database(str(tmp_path / "state.db"))
+    )
+    page.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+    try:
+        page.name.setText("Must fail")
+        page.create_key()
+        assert warnings == ["Master key required"]
+        assert page.table.rowCount() == 0
+    finally:
+        page.close()
+        qt_app.processEvents()
