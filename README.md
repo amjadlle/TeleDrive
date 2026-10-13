@@ -188,6 +188,75 @@ docker compose config --quiet
 
 Security CI also builds the image, exercises the live Web API/authentication, and performs dependency and image scans.
 
+## Telegram-only object storage: Phase 1 foundation
+
+A new `teledrive.storage` module provides immutable object manifests and
+Telegram-backed chunk I/O. Payload bytes are stored **only in Telegram**;
+SQLAlchemy stores message locations, offsets, SHA-256 checksums and upload
+status. Local scratch files are temporary and deleted after use.
+
+Implemented in this phase:
+
+- Bounded-memory chunk upload with a per-chunk DB journal.
+- Fail-closed object visibility: unfinished uploads cannot be read.
+- Telegram message retrieval that refreshes expired media references.
+- Checksum-verified download, half-open byte ranges, and atomic output files.
+- Explicit interrupted/failed upload inspection for future recovery tooling.
+- Deterministic tests for corruption, missing chunks, interrupted upload, source mutation,
+  chunk boundaries, empty files and SQLite restart; live PostgreSQL/MySQL tests.
+
+**Not yet implemented:** REST upload endpoints, the S3 gateway, API key management,
+full crash/orphan reconciliation, S3 multipart semantics, object deletion/versioning,
+or an automated migration of legacy `files` entries. This module is a foundation,
+not a production-ready S3 service. The legacy folder uploader continues to work
+independently until migration and shared job orchestration are added.
+
+### Real Telegram E2E test (requires your dedicated test account)
+
+The repository includes `.github/workflows/telegram-storage-e2e.yml`.
+It is **manual only**, cannot execute without configured GitHub Secrets, and
+does not run on pull requests or untrusted forks. GitHub requires manually
+dispatchable workflows to exist on the repository's default branch; merge the
+workflow before starting it via the Actions tab.
+
+Configure under **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `TELEDRIVE_E2E_API_ID` | Test account's Telegram API ID |
+| `TELEDRIVE_E2E_API_HASH` | Test account's Telegram API hash |
+| `TELEDRIVE_E2E_SESSION` | Authorized Telethon StringSession for a dedicated test account |
+
+Optional **Actions variable**: `TELEDRIVE_E2E_TARGET`, defaults to `me`.
+Use a dedicated account and a private test target. These values are **not**
+needed for the regular Security, Desktop, and Database CI workflows.
+
+To generate the StringSession, install Telethon on a trusted local machine
+and run this Python snippet **locally** (never in GitHub Actions or a public issue):
+
+~~~python
+import asyncio
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+
+async def create_test_session():
+    api_id = int(input("API ID: "))
+    api_hash = input("API hash: ").strip()
+    async with TelegramClient(StringSession(), api_id, api_hash) as client:
+        print("Keep this secret! Telethon session:", client.session.save())
+
+asyncio.run(create_test_session())
+~~~
+
+Move the printed session directly to the GitHub secret. A Telethon session
+grants account-level access; never post it into chat, commits, screenshots
+or CI logs. Revoke the test session in Telegram's Devices settings if exposed.
+
+The E2E scenario uploads a 4,097-byte random file across three Telegram
+messages, downloads and SHA-256-verifies it, tests a cross-chunk Range,
+and deletes only the messages created by the run. It requires the test account
+to have working Telegram access, which ordinary CI cannot simulate.
+
 ## Credits and license
 
 Originally created by [Amjad P A](https://github.com/amjadlle/TeleDrive). This is the [babico/TeleDrive fork](https://github.com/babico/TeleDrive) with Docker and multi-account enhancements. Licensed under [MIT](LICENSE); see [CONTRIBUTING.md](CONTRIBUTING.md) for contributions.
