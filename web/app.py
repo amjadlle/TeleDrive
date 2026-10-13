@@ -20,12 +20,15 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
 from typing import Literal
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from teledrive import uploader
 from teledrive.db import redact_database_url
+from teledrive.api_keys import ApiKeyStore
+from teledrive.storage.manifest import ManifestStore
+from teledrive.storage.catalog import BucketCatalog
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("TELEDRIVE_CONFIG", "/config/config.yaml"))
@@ -67,6 +70,7 @@ _QUERY_SECRET_RE = re.compile(
 )
 
 security = HTTPBasic(auto_error=False)
+bearer_auth = HTTPBearer(auto_error=False)
 process_lock = asyncio.Lock()
 current_process: asyncio.subprocess.Process | None = None
 current_mode: str | None = None
@@ -437,6 +441,8 @@ app = FastAPI(
         {"name": "Configuration", "description": "Settings, Telegram accounts, and database URL"},
         {"name": "Uploads", "description": "Queue/history and uploader lifecycle"},
         {"name": "Authentication", "description": "Telegram code and two-factor password handoff"},
+        {"name": "API keys", "description": "Root-admin API key creation, rotation and revocation"},
+        {"name": "Object catalog", "description": "Bearer-scoped bucket and object metadata"},
     ],
     lifespan=lifespan,
     docs_url=None,
@@ -503,6 +509,34 @@ class TelegramAuthRequest(BaseModel):
 
 class OKResponse(BaseModel):
     ok: bool = True
+
+
+class KeyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    scopes: list[str] = Field(min_length=1, max_length=20)
+    expires_at: int | None = Field(default=None, description="Optional Unix expiry time")
+
+
+class BucketCreateRequest(BaseModel):
+    name: str = Field(min_length=3, max_length=63)
+
+
+def require_api_scope(required: str):
+    """HTTP bearer authorization, independent of the browser Basic/CSRF flow."""
+    def check(credentials: HTTPAuthorizationCredentials | None = Depends(bearer_auth)) -> None:
+        if credentials is None or credentials.scheme.lower() != "bearer":
+            raise HTTPException(401, "API Bearer token required",
+                                headers={"WWW-Authenticate": "Bearer"})
+        conn = db_connect()
+        try:
+            authorized = ApiKeyStore(conn).authorize(credentials.credentials, required)
+        finally:
+            conn.close()
+        if not authorized:
+            raise HTTPException(403, "API token is invalid, expired or lacks permission")
+    return check
+
+
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -653,6 +687,131 @@ def logs(limit: int = Query(300, ge=1, le=1500), _: None = Depends(require_auth)
         except OSError:
             pass
     return {"lines": combined, "process": process_snapshot()}
+
+
+@app.get("/api/v1/admin/keys", tags=["API keys"], summary="List API key metadata; never returns secrets")
+def list_api_keys(_: None = Depends(require_auth)):
+    conn = db_connect()
+    try:
+        return {"keys": ApiKeyStore(conn).list()}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/keys", tags=["API keys"], status_code=201, summary="Issue a scoped API key (secret returned once)")
+def issue_api_key(request: Request, payload: KeyCreateRequest, _: None = Depends(require_auth)):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        try:
+            key = ApiKeyStore(conn).create(payload.name, payload.scopes, expires_at=payload.expires_at)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"id": key.id, "token": key.value, "prefix": key.prefix, "scopes": key.scopes}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/v1/admin/keys/{identifier}", tags=["API keys"], summary="Revoke an API key immediately")
+def revoke_api_key(identifier: str, request: Request, _: None = Depends(require_auth)):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        if not ApiKeyStore(conn).revoke(identifier):
+            raise HTTPException(404, "API key not found or already revoked")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/keys/{identifier}/rotate", tags=["API keys"], summary="Rotate an API key; secret returned once")
+def rotate_api_key(identifier: str, request: Request, _: None = Depends(require_auth)):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        try:
+            key = ApiKeyStore(conn).rotate(identifier)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"id": key.id, "token": key.value, "prefix": key.prefix, "scopes": key.scopes}
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/buckets", tags=["Object catalog"], summary="List Telegram-backed storage buckets")
+def list_storage_buckets(_: None = Depends(require_api_scope("buckets:read"))):
+    conn = db_connect()
+    try:
+        return {"buckets": BucketCatalog(ManifestStore(conn)).list_buckets()}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/buckets", tags=["Object catalog"], status_code=201, summary="Create a bucket")
+def create_storage_bucket(payload: BucketCreateRequest,
+                          _: None = Depends(require_api_scope("buckets:manage"))):
+    conn = db_connect()
+    try:
+        try:
+            BucketCatalog(ManifestStore(conn)).create_bucket(payload.name, int(time.time()))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"name": payload.name}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/v1/buckets/{bucket}", tags=["Object catalog"], summary="Remove a physically empty bucket")
+def remove_storage_bucket(bucket: str, _: None = Depends(require_api_scope("buckets:manage"))):
+    conn = db_connect()
+    try:
+        try:
+            BucketCatalog(ManifestStore(conn)).delete_bucket(bucket)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/buckets/{bucket}/objects", tags=["Object catalog"], summary="List current object metadata")
+def list_current_objects(bucket: str,
+                         prefix: str = Query("", max_length=1024),
+                         after: str | None = Query(None, max_length=1024),
+                         limit: int = Query(100, ge=1, le=1000),
+                         _: None = Depends(require_api_scope("objects:read"))):
+    conn = db_connect()
+    try:
+        items = BucketCatalog(ManifestStore(conn)).list_objects(bucket, prefix=prefix, after=after, limit=limit)
+        return {"objects": [
+            {"id": x.item.id, "key": x.item.key, "bucket": x.item.bucket,
+             "size": x.item.size, "sha256": x.item.sha256,
+             "created_at": x.item.created_at, "generation": x.generation}
+            for x in items
+        ]}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/v1/buckets/{bucket}/objects", tags=["Object catalog"], summary="Unlink a current object (Telegram data retained)")
+def unlink_current_object(bucket: str, key: str = Query(..., min_length=1, max_length=1024),
+                          generation: int | None = Query(None, ge=1),
+                          _: None = Depends(require_api_scope("objects:delete"))):
+    conn = db_connect()
+    try:
+        try:
+            deleted = BucketCatalog(ManifestStore(conn)).remove_current(
+                bucket, key, expected_generation=generation
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"ok": True, "unlinked": deleted}
+    finally:
+        conn.close()
 
 
 @app.get("/api/health", tags=["System"], response_model=OKResponse, summary="Liveness health check (unauthenticated)")
