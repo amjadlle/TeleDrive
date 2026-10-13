@@ -28,6 +28,7 @@ from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
 from teledrive.s3.batch_delete import BatchDeleteError, MAX_XML_BYTES, parse_batch, verify_body
+from teledrive.s3.conditions import http_last_modified, read_precondition
 from teledrive.s3.tagging import ObjectTagStore, BucketTagStore, TaggingError, validate_tags
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object, CopyConflict
@@ -59,6 +60,7 @@ def _headers(item, etag: str | None = None) -> dict[str, str]:
         "Content-Length": str(item.size),
         "Accept-Ranges": "bytes",
         "Content-Type": "application/octet-stream",
+        "Last-Modified": http_last_modified(item.created_at),
         "x-amz-version-id": item.id,
     }
 
@@ -308,6 +310,13 @@ async def _handle(request: Request):
                             and "delete" in request.query_params)
         if "delete" in request.query_params and not multi_delete:
             return _error("NotImplemented", "Unsupported DeleteObjects route", 501)
+        if request.method in ("PUT", "DELETE") and any(
+            name in request.headers for name in (
+                "if-match", "if-none-match", "if-modified-since", "if-unmodified-since"
+            )
+        ):
+            return _error("NotImplemented",
+                          "Conditional writes require atomic precondition support", 501)
         mpu_bucket_list = bool(bucket and not separator and "uploads" in request.query_params
                                and request.method == "GET")
         mpu_start = bool(separator and "uploads" in request.query_params and request.method == "POST")
@@ -796,6 +805,14 @@ async def _handle(request: Request):
         except FileNotFoundError:
             return _error("NoSuchKey", "The specified key does not exist", 404)
         item_etag = MultipartStore(catalog).object_etag(item.id, item.sha256)
+        precondition = read_precondition(request, item_etag, item.created_at)
+        if precondition == 304:
+            return Response(status_code=304, headers={
+                "ETag": '"' + item_etag + '"',
+                "Last-Modified": http_last_modified(item.created_at),
+            })
+        if precondition == 412:
+            return _error("PreconditionFailed", "Object precondition failed", 412)
         if request.method == "HEAD":
             return Response(status_code=200, headers=_headers(item, item_etag))
         start, end, partial = _range(request.headers.get("range"), item.size)
