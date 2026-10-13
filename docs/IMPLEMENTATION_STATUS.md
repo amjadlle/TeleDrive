@@ -171,7 +171,7 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
   No Telegram payload is copied or deleted.
 - Versions before installation of this index are not reliably recoverable
   as *published* from old READY journals alone, so no speculative backfill.
-  Full S3 `ListObjectVersions`/delete-marker semantics remain pending.
+  S3 ListObjectVersions and logical delete-marker semantics are now supported.
 
 - Root-admin GET `/api/v1/admin/storage/versions` and WebUI
   API Management present proven published history, snapshot SHA-256,
@@ -212,7 +212,7 @@ verification and explicit retention approvals are implemented.
   previous published versions.
 - Unpublished READY staging manifests and unknown IDs fail with
   NoSuchVersion. Version-specific tagging, CopySource and limited
-  ListObjectVersions now work; delete markers and version DELETE remain open.
+  ListObjectVersions, delete markers and logical version removal now work.
 
 
 ## Consolidated remaining work — after the current P1/P2 implementation
@@ -231,7 +231,7 @@ verification and explicit retention approvals are implemented.
 
 ### Still open — do not claim these are implemented
 - **P1 remaining:** Bot API ACK-without-receipt loss (not discoverable via
-  Bot API), legacy folder uploader merge, multi-worker soak, S3 delete markers,
+  Bot API), legacy folder uploader merge, extended multi-worker soak,
   generic browser presigned POST, migration and
   real Telegram restoration exercises. Receipt-persisted ACKs now reconcile.
 - **P2 remaining:** audited retention-approved physical GC, S3 SSE/policy/
@@ -255,8 +255,8 @@ verification and explicit retention approvals are implemented.
   permission lists only HEAD-proven published immutable versions, not
   staged READY manifests. Supports bounded `prefix`, `max-keys`,
   `key-marker` and `version-id-marker`, returning correct multipart ETags.
-- This is a **limited subset**: delete markers, S3 versioning controls,
-  version deletion, delimiter and alternate encoding remain unsupported.
+- This is a **limited subset**: S3 versioning controls, delimiter and
+  alternate encoding remain unsupported.
   Unlinked published objects remain safely discoverable and physically intact.
 
 ## P1.3 S3 VersionId tagging
