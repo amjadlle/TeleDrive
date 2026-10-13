@@ -696,7 +696,7 @@ currently rejected as unsupported instead of inventing AWS-like values.
   or If-Match with atomic SQL generation+object-ID fencing, and conditional
   DELETE supports If-Match. Historical Telegram data is retained after
   failed CAS publication; no unsafe automatic cleanup. Still pending:
-  conditional multipart Complete, presigned multipart POST, version-ID
+  presigned multipart POST, version-ID
   tagging, advanced S3 checksum variants, SSE, virtual-host-style requests,
   bucket policies and lifecycle. Standard SigV4 `UNSIGNED-PAYLOAD` PUTs
   are accepted **only when a signed Content-MD5 or SHA-256 checksum is verified**

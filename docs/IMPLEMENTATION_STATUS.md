@@ -143,3 +143,12 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
 - WebUI now supports inspecting, creating, manually running and explicitly
   retrying source-root-confined durable upload jobs. No new Telegram
   primary-payload backend is introduced.
+
+## P1.3 conditional multipart Complete
+
+- Optional signed `If-Match` or `If-None-Match: *` on POST
+  CompleteMultipartUpload now uses a snapshot of generation and immutable
+  object ID, checked again inside the atomic final SQL commit.
+- A competing write between remote chunk verification and final publication
+  yields HTTP 412 and keeps staged messages retryable. Unsigned conditions
+  are rejected; incompatible date-based write conditions remain 501.

@@ -367,7 +367,9 @@ class MultipartStore:
     async def complete(self, identifier: str, bucket: str, key: str, owner: str,
                        selected: list[tuple[int, str]],
                        engine: TelegramObjectStorage, *,
-                       lease_seconds: int = 120) -> CompletedUpload:
+                       lease_seconds: int = 120,
+                       expected_generation: int | None = None,
+                       expected_object_id: str | None = None) -> CompletedUpload:
         self._validate_selection(selected)
         row = self.require(identifier, bucket, key, owner, allow_completed=True)
         if row["state"] == "completed":
@@ -485,11 +487,22 @@ class MultipartStore:
                     heads.c.object_id, heads.c.generation
                 ).where(heads.c.bucket == bucket, heads.c.key_hash == keyhash)).first()
                 if current is None:
+                    if expected_object_id is not None or expected_generation not in (None, 0):
+                        raise MultipartError(
+                            "PreconditionFailed", "Multipart destination changed", 412
+                        )
                     self.db.connection.execute(insert(heads).values(
                         bucket=bucket, key_hash=keyhash, object_id=object_id,
                         generation=1, updated_at=now,
                     ))
                 else:
+                    if expected_generation is not None and (
+                        expected_generation != int(current[1])
+                        or expected_object_id != current[0]
+                    ):
+                        raise MultipartError(
+                            "PreconditionFailed", "Multipart destination changed", 412
+                        )
                     live = self.manifests.get(current[0])
                     if live.bucket != bucket or live.key != key:
                         raise MultipartError("InvalidPart", "Object key collision")

@@ -401,7 +401,9 @@ async def _handle(request: Request):
                             and "delete" in request.query_params)
         if "delete" in request.query_params and not multi_delete:
             return _error("NotImplemented", "Unsupported DeleteObjects route", 501)
-        if request.method in ("PUT", "DELETE"):
+        if request.method in ("PUT", "DELETE") or (
+            request.method == "POST" and separator and request.query_params.get("uploadId")
+        ):
             if any(name in request.headers for name in ("if-modified-since", "if-unmodified-since")):
                 return _error("NotImplemented", "Conditional write dates are unsupported", 501)
             has_write_cond = any(name in request.headers for name in ("if-match", "if-none-match"))
@@ -409,10 +411,17 @@ async def _handle(request: Request):
             # operation selectors. Permit these to use the same signed CAS.
             auth_only_query = all(name.startswith("X-Amz-")
                                   for name in request.query_params)
-            simple_object = bool(separator and auth_only_query
+            simple_object = bool(request.method in ("PUT", "DELETE")
+                                 and separator and auth_only_query
                                  and not request.headers.get("x-amz-copy-source"))
-            if has_write_cond and not simple_object:
-                return _error("NotImplemented", "Conditions are supported only for object PUT/DELETE", 501)
+            multipart_completion = bool(
+                request.method == "POST" and separator
+                and request.query_params.get("uploadId")
+                and all(k == "uploadId" or k.startswith("X-Amz-")
+                        for k in request.query_params)
+            )
+            if has_write_cond and not (simple_object or multipart_completion):
+                return _error("NotImplemented", "Unsupported conditional S3 operation", 501)
         mpu_bucket_list = bool(bucket and not separator and "uploads" in request.query_params
                                and request.method == "GET")
         mpu_start = bool(separator and "uploads" in request.query_params and request.method == "POST")
@@ -760,6 +769,9 @@ async def _handle(request: Request):
                                 media_type="application/xml")
             if mpu_complete:
                 mpu.require(upload_id, bucket, key, owner, allow_completed=True)
+                expected_completion_head = check_write_precondition(
+                    request, catalog, bucket, key,
+                )
                 content = bytearray()
                 async for block in request.stream():
                     content.extend(block)
@@ -791,7 +803,17 @@ async def _handle(request: Request):
                     catalog.manifests, transport,
                     chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
                 )
-                finished = await mpu.complete(upload_id, bucket, key, owner, selected, engine)
+                finished = await mpu.complete(
+                    upload_id, bucket, key, owner, selected, engine,
+                    expected_generation=(
+                        expected_completion_head.generation
+                        if expected_completion_head else None
+                    ),
+                    expected_object_id=(
+                        expected_completion_head.object_id
+                        if expected_completion_head else None
+                    ),
+                )
                 return Response(_xml("CompleteMultipartUploadResult", [
                     ("Bucket", bucket), ("Key", key), ("ETag", '"' + finished.etag + '"'),
                 ]), status_code=200, media_type="application/xml")
