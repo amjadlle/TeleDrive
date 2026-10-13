@@ -134,3 +134,36 @@ def test_real_boto3_legacy_list_objects_over_http(service):
         thread.join(timeout=10)
         sock.close()
         assert not thread.is_alive()
+
+
+def test_v1_v2_url_encoding_preserves_xml_control_and_unicode_keys(service):
+    from urllib.parse import unquote
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    raw = "nested/line\nbreak-ö.txt"
+    path = quote(raw, safe="/")
+    assert signed(service, "PUT", "/backup-bucket/" + path, b"control-byte-file").status_code == 200
+    for query in ("encoding-type=url", "list-type=2&encoding-type=url"):
+        result = list_v1(service, query)
+        assert result.status_code == 200, result.text
+        root = ET.fromstring(result.content)
+        assert root.findtext(NS+"EncodingType") == "url"
+        encoded_key = root.findtext(NS+"Contents/"+NS+"Key")
+        assert "\n" not in encoded_key
+        assert "%0A" in encoded_key
+        assert "%C3%B6" in encoded_key
+        assert unquote(encoded_key) == raw
+    invalid = list_v1(service, "encoding-type=json")
+    assert invalid.status_code == 400
+    assert b"InvalidArgument" in invalid.content
+
+
+def test_signed_url_encoded_listing_with_delimiter(service):
+    from urllib.parse import unquote
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    for key in ("nested/one", "nested/two", "plain"):
+        assert signed(service, "PUT", "/backup-bucket/"+key, key.encode()).status_code == 200
+    response = list_v1(service, "delimiter=%2F&encoding-type=url")
+    root, (keys, dirs) = get_data(response)
+    assert root.findtext(NS+"EncodingType") == "url"
+    assert [unquote(entry) for entry in keys] == ["plain"]
+    assert [unquote(entry) for entry in dirs] == ["nested/"]
