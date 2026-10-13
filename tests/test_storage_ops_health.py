@@ -129,3 +129,48 @@ def test_operator_health_counts_unjournaled_bot_acks_without_exposing_ids(admin)
     assert "unjournaled_bot_acks" not in {
         row["code"] for row in resolved.json()["alerts"]
     }
+
+def test_operator_health_warns_on_unresolved_bot_send_without_identifiers(admin):
+    """Ambiguous sends must be visible but token/file ID/object ID stay private."""
+    import hashlib
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+
+    client, path, _ = admin
+    db = connect_database(path)
+    try:
+        idx = BotFileIndex(db)
+        payload = b"unknown-channel-acceptance"
+        idx.start_send(
+            "private-operator-bot", -10098765432, "private-object-identifier",
+            3, hashlib.sha256(payload).hexdigest(), len(payload),
+        )
+    finally:
+        db.close()
+    url = "/api/v1/admin/storage/health"
+    assert client.get(url).status_code in (401, 403)
+    response = client.get(url, auth=("testadmin", "secure-auth-password"))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["unresolved_bot_send_count"] == 1
+    alerts = {entry["code"]: entry for entry in body["alerts"]}
+    assert alerts["unresolved_bot_sends"]["severity"] == "critical"
+    assert alerts["unresolved_bot_sends"]["count"] == 1
+    for secret in ("private-operator-bot", "private-object-identifier",
+                   "-10098765432", hashlib.sha256(payload).hexdigest()):
+        assert secret not in response.text
+
+    # Definitive non-acceptance clears only the corresponding intent.
+    db = connect_database(path)
+    try:
+        BotFileIndex(db).clear_rejected_send(
+            "private-operator-bot", -10098765432, "private-object-identifier",
+            3, hashlib.sha256(payload).hexdigest(), len(payload),
+        )
+    finally:
+        db.close()
+    again = client.get(url, auth=("testadmin", "secure-auth-password"))
+    assert again.status_code == 200
+    assert again.json()["unresolved_bot_send_count"] == 0
+    assert "unresolved_bot_sends" not in {
+        entry["code"] for entry in again.json()["alerts"]
+    }
