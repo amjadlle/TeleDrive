@@ -700,7 +700,8 @@ currently rejected as unsupported instead of inventing AWS-like values.
   Telegram data is retained after failed CAS publication; no unsafe
   automatic cleanup. Limited signed presigned multipart Complete POST,
   version-ID tagging, SHA-1 integrity checks and opt-in virtual-host routing
-  are now available. Still pending: generic multipart POST/form, CRC32C,
+  are now available. CRC32C (Castagnoli) verification is implemented for
+  object PUT and UploadPart. Still pending: generic multipart POST/form,
   CRC64NVME, SSE, bucket policies and lifecycle. Standard SigV4 `UNSIGNED-PAYLOAD` PUTs
   are accepted **only when a signed Content-MD5 or SHA-256 checksum is verified**
   against the actual received bytes. The gateway recognizes only `private`

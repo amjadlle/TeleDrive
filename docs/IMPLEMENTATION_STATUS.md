@@ -61,7 +61,7 @@ every workflow at the release SHA.
 - [ ] **P1.3 Advanced S3 parity:** published-only version listing/restore,
   conditional and presigned checksum-bound Complete, version tagging,
   historical CopySource and common checksums are implemented; S3 delete
-  markers, CRC32C/CRC64 and generic presigned POST remain outstanding.
+  markers, CRC64NVME and generic presigned POST remain outstanding.
 - [ ] **P1.4 Operations:** operator controls, metrics/alerts, SQLite
   backup/verification and runbooks are implemented; repository protection,
   cross-platform migrations and live-remote DR drills remain outstanding.
@@ -232,7 +232,7 @@ verification and explicit retention approvals are implemented.
 ### Still open — do not claim these are implemented
 - **P1 remaining:** Telegram ACK-without-journal reconciliation for Bot
   API, legacy folder uploader merge, multi-worker soak, S3 delete markers,
-  CRC32C/CRC64NVME, generic presigned multipart forms, migration and
+  CRC64NVME, generic presigned multipart forms, migration and
   real Telegram restoration exercises.
 - **P2 remaining:** audited retention-approved physical GC, S3 SSE/policy/
   lifecycle semantics, DNS/TLS and external virtual-host/Cyberduck acceptance,
@@ -292,9 +292,8 @@ verification and explicit retention approvals are implemented.
   SHA-256 or Content-MD5 headers even if the primary signed payload digest
   matches, before reaching Telegram. SHA-1 is used only for interoperability
   integrity checks, never for authentication or access-key derivation.
-- Unsupported CRC32C and CRC64NVME checksum variants return an explicit
-  NotImplemented response rather than false success. CRC32 verification
-  remains supported; full AWS checksum family compatibility is still open.
+- CRC32 and CRC32C are both validated for signed PUT/UploadPart; CRC64NVME
+  remains explicitly unsupported instead of returning false success.
 
 ## P1.3 checksum-bound presigned multipart Complete
 
@@ -369,3 +368,13 @@ verification and explicit retention approvals are implemented.
   SQL lease is acquired before scanning. The caller cannot select an
   arbitrary host filesystem root. WebUI provides explicit Preview and
   Queue actions, never automatically invokes the Telegram worker.
+
+
+## P1.3 Streaming CRC32C checksum integration
+
+- Independent Castagnoli CRC32C validation on object PUT and multipart
+  UploadPart verifies the signed request bytes before touching Telegram.
+  A declared `CRC32C` SDK checksum must be supplied and correct. The
+  streaming implementation is tested with RFC-style known vectors and
+  wrong-checksum negative HTTP cases. This is an integrity check, not
+  a replacement for SHA-256-bound SigV4 authentication.

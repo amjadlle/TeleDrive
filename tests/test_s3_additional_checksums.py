@@ -8,6 +8,7 @@ import zlib
 import pytest
 
 from test_s3_gateway import service, signed
+from teledrive.s3.checksums import crc32c
 from test_s3_multipart import begin
 
 
@@ -47,9 +48,7 @@ def test_bad_extra_checksums_fail_even_when_signed_body_sha256_is_correct(
     assert service[2].uploads == before
 
 
-@pytest.mark.parametrize("header", [
-    "x-amz-checksum-crc32c", "x-amz-checksum-crc64nvme",
-])
+@pytest.mark.parametrize("header", ["x-amz-checksum-crc64nvme"])
 def test_unsupported_checksum_variants_do_not_silently_succeed(service, header):
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
     before = service[2].uploads
@@ -79,3 +78,49 @@ def test_bad_multipart_checksum_does_not_contact_telegram(service):
                       })
     assert response.status_code == 400
     assert service[2].uploads == before
+
+
+def test_crc32c_known_vector_and_incremental_streaming():
+    assert crc32c(b"123456789") == 0xE3069283
+    assert crc32c(b"") == 0
+    assert crc32c(b"456789", crc32c(b"123")) == 0xE3069283
+    assert crc32c(b"second", crc32c(b"first")) == crc32c(b"firstsecond")
+    with pytest.raises(ValueError):
+        crc32c(b"x", prior=-1)
+
+
+def test_crc32c_signed_put_with_sdk_algorithm(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    content = (b"Castagnoli stream integrity" * 189) + b"tail"
+    checksum = _b64(crc32c(content).to_bytes(4, "big"))
+    answer = signed(service, "PUT", "/backup-bucket/crc32c.bin", content,
+                    extra_headers={"x-amz-checksum-crc32c": checksum,
+                                   "x-amz-sdk-checksum-algorithm": "CRC32C"})
+    assert answer.status_code == 200, answer.text
+    assert signed(service, "GET", "/backup-bucket/crc32c.bin").content == content
+
+
+def test_crc32c_mismatch_prevents_telegram_put(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    before = service[2].uploads
+    denied = signed(service, "PUT", "/backup-bucket/no-crc.bin", b"bound-sha256",
+                    extra_headers={"x-amz-checksum-crc32c": _b64(b"\0" * 4)})
+    assert denied.status_code == 400 and b"BadDigest" in denied.content
+    assert service[2].uploads == before
+    assert signed(service, "GET", "/backup-bucket/no-crc.bin").status_code == 404
+
+
+def test_crc32c_multipart_part_roundtrip_and_negative(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    uid = begin(service)
+    content = b"multipart-crc32c-part" * 33
+    path = f"/backup-bucket/asset.bin?uploadId={uid}&partNumber=1"
+    checksum = {"x-amz-checksum-crc32c": _b64(crc32c(content).to_bytes(4, "big"))}
+    before = service[2].uploads
+    rejected = signed(service, "PUT", path, content + b"-mutated",
+                      extra_headers=checksum)
+    assert rejected.status_code == 400 and b"BadDigest" in rejected.content
+    assert service[2].uploads == before
+    valid = signed(service, "PUT", path, content, extra_headers=checksum)
+    assert valid.status_code == 200, valid.text
+    assert service[2].uploads == before + 1
