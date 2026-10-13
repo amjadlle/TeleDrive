@@ -1048,8 +1048,16 @@ def storage_operations_health(_: None = Depends(require_auth)):
         pending = catalog.manifests.stale_pending(now=now, limit=1000)
         completing = MultipartStore(catalog).stale_completions(now=now, limit=1000)
         gc = StorageGCInventory(catalog.manifests).inspect()
+        from teledrive.storage.bot_api_adapter import BotFileIndex
+        unjournaled_bot_acks = BotFileIndex(conn).unjournaled_count()
         states = {state: int(count) for state, count in counts}
         alerts = []
+        if unjournaled_bot_acks:
+            alerts.append({
+                "code": "unjournaled_bot_acks", "severity": "warning",
+                "count": unjournaled_bot_acks,
+                "message": "Bot API ACK receipts not yet linked to a chunk journal; review persistent samples",
+            })
         if states.get("failed", 0):
             alerts.append({
                 "code": "failed_upload_jobs", "severity": "warning",
@@ -1081,6 +1089,7 @@ def storage_operations_health(_: None = Depends(require_auth)):
             "unresolved_alert_count": len(alerts),
             "stale_pending_sample_count": len(pending),
             "stale_multipart_sample_count": len(completing),
+            "unjournaled_bot_ack_count": unjournaled_bot_acks,
             "samples_truncated": truncated,
             "telegram_messages_retained": gc.total_telegram_messages,
             "live_object_heads": gc.live_object_heads,

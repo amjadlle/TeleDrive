@@ -477,3 +477,15 @@ verification and explicit retention approvals are implemented.
   media readback with exact SHA-256 and Range integrity.
 - A CI pass on an earlier commit does not certify subsequent changes; the
   release candidate still needs a full seven-workflow fresh SHA check.
+
+
+## P1.4 operator warning for unjournaled Bot ACK receipts
+
+- Admin-only storage health now counts Bot API ACK receipts not referenced by
+  any Telegram chunk manifest; this includes transient in-flight ACKs, so
+  operators should investigate **persistent** counts rather than treat every
+  immediate observation as an orphan. A separate warning code is emitted,
+  without exposing Bot file IDs, object IDs, or credentials.
+- Multipart reparenting does not create a false orphan: receipts are matched
+  by durable account/chat/message identity, not by the original object ID.
+  Tests cover a missing journal, redaction and successful journal resolution.

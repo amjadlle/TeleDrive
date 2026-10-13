@@ -21,9 +21,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import BigInteger, Column, Integer, Index, MetaData, String, Table, insert, select, delete
+from sqlalchemy import BigInteger, Column, Integer, Index, MetaData, String, Table, and_, func, insert, select, delete
 
-from .manifest import ChunkReference
+from .manifest import ChunkReference, chunks
 
 BOT_DOWNLOAD_LIMIT = 20 * 1024 * 1024
 BOT_RECOMMENDED_CHUNK_SIZE = 16 * 1024 * 1024
@@ -124,6 +124,24 @@ class BotFileIndex:
             account=account, chat_id=chat_id,
             message_id=int(receipt["message_id"]),
         )
+
+    def unjournaled_count(self) -> int:
+        """Count Bot ACKs not referenced by any manifest chunk journal.
+
+        Multipart completion may reparent a chunk to another object ID:
+        join by the immutable Telegram message identity, not object ID.
+        This inventory is non-destructive and includes in-flight ACKs.
+        """
+        count = self.db.connection.execute(
+            select(func.count()).select_from(
+                _bot_receipts.outerjoin(chunks, and_(
+                    chunks.c.account == _bot_receipts.c.account,
+                    chunks.c.chat_id == _bot_receipts.c.chat_id,
+                    chunks.c.message_id == _bot_receipts.c.message_id,
+                ))
+            ).where(chunks.c.object_id.is_(None))
+        ).scalar_one()
+        return int(count)
 
     def get(self, account: str, chat_id: int, message_id: int) -> str:
         result = self.db.connection.execute(select(_bot_files.c.file_id).where(

@@ -77,3 +77,55 @@ def test_operator_health_alerts_failed_jobs_and_stale_pending_without_secrets(ad
     assert ident not in response.text
     assert stale not in response.text
     assert payload["physical_deletion_enabled"] is False
+
+
+def test_operator_health_counts_unjournaled_bot_acks_without_exposing_ids(admin):
+    """Only persisted ACKs absent from chunk journals produce a warning."""
+    import hashlib
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+    from teledrive.storage.manifest import ChunkReference
+
+    client, path, _ = admin
+    db = connect_database(path)
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        catalog.create_bucket("bot-ack-alert", int(time.time()))
+        identifier = catalog.manifests.begin(
+            "bot-ack-alert", "only-in-receipts.bin", 5, int(time.time()),
+        )
+        digest = hashlib.sha256(b"hello").hexdigest()
+        idx = BotFileIndex(db)
+        idx.put_receipt(
+            "bot-ops-ci", -100987654321, 101, "private-bot-file-id",
+            object_id=identifier, ordinal=0, checksum=digest, size=5,
+        )
+    finally:
+        db.close()
+
+    url = "/api/v1/admin/storage/health"
+    response = client.get(url, auth=("testadmin", "secure-auth-password"))
+    assert response.status_code == 200, response.text
+    assert response.json()["unjournaled_bot_ack_count"] == 1
+    alerts = {row["code"]: row for row in response.json()["alerts"]}
+    assert alerts["unjournaled_bot_acks"]["count"] == 1
+    assert "private-bot-file-id" not in response.text
+    assert identifier not in response.text
+    assert response.json()["physical_deletion_enabled"] is False
+
+    db = connect_database(path)
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        catalog.manifests.append(
+            identifier, ChunkReference(
+                ordinal=0, offset=0, size=5, sha256=digest,
+                account="bot-ops-ci", chat_id=-100987654321, message_id=101,
+            ), int(time.time()),
+        )
+    finally:
+        db.close()
+    resolved = client.get(url, auth=("testadmin", "secure-auth-password"))
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["unjournaled_bot_ack_count"] == 0
+    assert "unjournaled_bot_acks" not in {
+        row["code"] for row in resolved.json()["alerts"]
+    }
