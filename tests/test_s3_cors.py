@@ -230,3 +230,58 @@ def test_real_boto3_bucket_cors_over_http_socket(service):
         worker.join(timeout=10)
         sock.close()
         assert not worker.is_alive()
+
+
+def test_wildcard_subdomain_cors_does_not_match_lookalikes(service):
+    create_bucket(service)
+    body = config_xml(
+        origins=["https://*.example.com"],
+        methods=["GET", "POST"],
+        headers=["x-amz-*"],
+        expose=["ETag"],
+    )
+    assert signed(service, "PUT", "/cors-bucket?cors", body).status_code == 200
+    client = service[0]
+    allowed = client.options("/cors-bucket/one.txt", headers={
+        "Origin": "https://console.example.com",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "X-Amz-Date,X-Amz-Meta-Project",
+    })
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "https://console.example.com"
+    for origin in (
+        "https://example.com",
+        "https://console.example.com.evil.invalid",
+        "http://console.example.com",
+        "https://sub.deeper.example.com",
+        "null",
+    ):
+        denied = client.options("/cors-bucket/one.txt", headers={
+            "Origin": origin, "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "X-Amz-Date",
+        })
+        assert denied.status_code == 403, origin
+
+
+def test_preflight_rejects_header_abuse_and_does_not_authenticate_uploads(service):
+    create_bucket(service)
+    assert signed(service, "PUT", "/cors-bucket?cors", config_xml(
+        origins=["*"], methods=["GET", "PUT"], headers=["*"]
+    )).status_code == 200
+    client, _, transport, _, _ = service
+    huge = client.options("/cors-bucket/item", headers={
+        "Origin": "https://client.example.net",
+        "Access-Control-Request-Method": "PUT",
+        "Access-Control-Request-Headers": ",".join(f"X-Foo-{x}" for x in range(33)),
+    })
+    assert huge.status_code == 403
+    before = transport.uploads
+    # Origin and successful OPTIONS do not authorize a subsequent anonymous PUT.
+    assert client.options("/cors-bucket/item", headers={
+        "Origin": "https://client.example.net",
+        "Access-Control-Request-Method": "PUT",
+    }).status_code == 200
+    direct = client.put("/cors-bucket/item", content=b"must-not-upload",
+                        headers={"Origin": "https://client.example.net"})
+    assert direct.status_code == 403
+    assert before == transport.uploads
