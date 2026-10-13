@@ -42,7 +42,7 @@ from teledrive.s3.object_metadata import (
 from teledrive.storage.catalog import BucketCatalog, published_versions
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
-from teledrive.storage.manifest import ManifestStore
+from teledrive.storage.manifest import ManifestStore, objects
 from teledrive.storage.bot_api_adapter import BOT_RECOMMENDED_CHUNK_SIZE
 from web.app import db_connect, storage_bot_transport, _secure_mkdir
 
@@ -500,6 +500,16 @@ async def _handle(request: Request):
         )
         if is_version_read and len(request.query_params.getlist("versionId")) != 1:
             return _error("InvalidArgument", "Ambiguous version ID", 400)
+        is_version_delete = bool(
+            separator and request.method == "DELETE"
+            and "versionId" in request.query_params
+        )
+        if is_version_delete and (
+            len(request.query_params.getlist("versionId")) != 1
+            or any(k != "versionId" and not k.startswith("X-Amz-")
+                   for k in request.query_params)
+        ):
+            return _error("InvalidArgument", "Ambiguous VersionId deletion selector", 400)
         is_version_listing = bool(
             bucket and not separator and request.method == "GET"
             and "versions" in request.query_params
@@ -588,7 +598,7 @@ async def _handle(request: Request):
             "encryption", "object-lock", "publicAccessBlock", "versionId",
         }
         if any(parameter in request.query_params and (
-            (parameter != "versionId" or not (is_version_read or is_version_tagging))
+            (parameter != "versionId" or not (is_version_read or is_version_tagging or is_version_delete))
             and (parameter != "versions" or not is_version_listing)
         ) for parameter in unsupported):
             return _error("NotImplemented", "This S3 extension is not implemented", 501)
@@ -633,7 +643,7 @@ async def _handle(request: Request):
                 result = ET.Element("DeleteResult", xmlns=NAMESPACE)
                 for key_to_delete in batch.keys:
                     try:
-                        catalog.remove_current(bucket, key_to_delete)
+                        marker = catalog.delete_marker(bucket, key_to_delete)
                     except ValueError:
                         problem = ET.SubElement(result, "Error")
                         ET.SubElement(problem, "Key").text = key_to_delete
@@ -643,6 +653,9 @@ async def _handle(request: Request):
                     if not batch.quiet:
                         deleted = ET.SubElement(result, "Deleted")
                         ET.SubElement(deleted, "Key").text = key_to_delete
+                        ET.SubElement(deleted, "VersionId").text = marker
+                        ET.SubElement(deleted, "DeleteMarker").text = "true"
+                        ET.SubElement(deleted, "DeleteMarkerVersionId").text = marker
                 return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml", status_code=200)
             if is_bucket_cors:
@@ -753,19 +766,25 @@ async def _handle(request: Request):
                     ET.SubElement(root, "NextVersionIdMarker").text = entries[-1]["version_id"]
                 mpu = MultipartStore(catalog)
                 for entry in entries:
-                    element = ET.SubElement(root, "Version")
-                    for label, value in (
+                    element = ET.SubElement(
+                        root, "DeleteMarker" if entry["is_delete_marker"] else "Version"
+                    )
+                    fields = [
                         ("Key", entry["key"]), ("VersionId", entry["version_id"]),
                         ("IsLatest", str(entry["is_current"]).lower()),
                         ("LastModified", time.strftime(
                             "%Y-%m-%dT%H:%M:%S.000Z",
                             time.gmtime(entry["committed_ns"] // 1_000_000_000),
                         )),
-                        ("ETag", '"' + mpu.object_etag(
-                            entry["version_id"], entry["sha256"]
-                        ) + '"'),
-                        ("Size", entry["size"]), ("StorageClass", "STANDARD"),
-                    ):
+                    ]
+                    if not entry["is_delete_marker"]:
+                        fields += [
+                            ("ETag", '"' + mpu.object_etag(
+                                entry["version_id"], entry["sha256"]
+                            ) + '"'),
+                            ("Size", entry["size"]), ("StorageClass", "STANDARD"),
+                        ]
+                    for label, value in fields:
                         ET.SubElement(element, label).text = str(value)
                 return Response(
                     ET.tostring(root, encoding="utf-8", xml_declaration=True),
@@ -861,14 +880,7 @@ async def _handle(request: Request):
                 selected_id = request.query_params.get("versionId", "")
                 if not selected_id or len(selected_id) > 80:
                     return _error("InvalidArgument", "Invalid object VersionId", 400)
-                proven = db.connection.execute(
-                    select(published_versions.c.object_id).where(
-                        published_versions.c.object_id == selected_id,
-                        published_versions.c.bucket == bucket,
-                        published_versions.c.key_hash == catalog._keyhash(key),
-                    )
-                ).scalar_one_or_none()
-                if proven is None:
+                if not catalog.is_visible_version(bucket, key, selected_id):
                     return _error("NoSuchVersion", "Object version is not published", 404)
                 try:
                     version_item = catalog.manifests.get(selected_id)
@@ -1072,6 +1084,24 @@ async def _handle(request: Request):
             finally:
                 stage.unlink(missing_ok=True)
 
+        if is_version_delete:
+            if any(h in request.headers for h in ("if-match", "if-none-match")):
+                return _error("NotImplemented", "Conditional VersionId delete unsupported", 501)
+            version_id = request.query_params["versionId"]
+            if not version_id or len(version_id) > 80:
+                return _error("InvalidArgument", "Invalid version ID", 400)
+            is_marker = db.connection.execute(select(objects.c.status).where(
+                objects.c.id == version_id,
+                objects.c.bucket == bucket,
+                objects.c.object_key == key,
+            )).scalar_one_or_none() == "delete-marker"
+            if not catalog.delete_version(bucket, key, version_id):
+                return _error("NoSuchVersion", "Version does not exist", 404)
+            headers = {"x-amz-version-id": version_id}
+            if is_marker:
+                headers["x-amz-delete-marker"] = "true"
+            return Response(status_code=204, headers=headers)
+
         expected_head = None
         if request.method in ("PUT", "DELETE") and not request.headers.get("x-amz-copy-source"):
             expected_head = check_write_precondition(
@@ -1166,14 +1196,7 @@ async def _handle(request: Request):
             if src_bucket not in catalog.list_buckets():
                 return _error("NoSuchBucket", "CopySource bucket does not exist", 404)
             if source_version_id is not None:
-                proven = db.connection.execute(
-                    select(published_versions.c.object_id).where(
-                        published_versions.c.object_id == source_version_id,
-                        published_versions.c.bucket == src_bucket,
-                        published_versions.c.key_hash == catalog._keyhash(src_key),
-                    )
-                ).scalar_one_or_none()
-                if proven is None:
+                if not catalog.is_visible_version(src_bucket, src_key, source_version_id):
                     return _error("NoSuchVersion", "CopySource version is not published", 404)
                 try:
                     source_item = catalog.manifests.get(source_version_id)
@@ -1222,7 +1245,7 @@ async def _handle(request: Request):
 
         if request.method == "DELETE":
             try:
-                removed = catalog.remove_current(
+                marker = catalog.delete_marker(
                     bucket, key,
                     expected_generation=expected_head.generation if expected_head else None,
                     expected_object_id=expected_head.object_id if expected_head else None,
@@ -1233,11 +1256,9 @@ async def _handle(request: Request):
                         "PreconditionFailed", "Object changed during conditional DELETE", 412
                     ) from exc
                 raise
-            if expected_head is not None and not removed:
-                raise WritePreconditionError(
-                    "PreconditionFailed", "Object changed during conditional DELETE", 412
-                )
-            return Response(status_code=204)
+            return Response(status_code=204, headers={
+                "x-amz-delete-marker": "true", "x-amz-version-id": marker,
+            })
 
         if request.method == "PUT":
             root = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
@@ -1318,15 +1339,20 @@ async def _handle(request: Request):
             version_id = request.query_params["versionId"]
             if not version_id or len(version_id) > 80:
                 return _error("InvalidArgument", "Invalid version ID", 400)
-            published = db.connection.execute(
-                select(published_versions.c.object_id).where(
-                    published_versions.c.object_id == version_id,
-                    published_versions.c.bucket == bucket,
-                    published_versions.c.key_hash == catalog._keyhash(key),
-                )
-            ).scalar_one_or_none()
-            if published is None:
+            if not catalog.is_visible_version(bucket, key, version_id):
                 return _error("NoSuchVersion", "Object version is not published", 404)
+            status_row = db.connection.execute(select(
+                objects.c.status, objects.c.created_at
+            ).where(objects.c.id == version_id)).one_or_none()
+            if status_row is not None and status_row[0] == "delete-marker":
+                response = _error(
+                    "MethodNotAllowed", "Requested version is a delete marker", 405,
+                )
+                response.headers.update({
+                    "x-amz-delete-marker": "true", "x-amz-version-id": version_id,
+                    "Last-Modified": http_last_modified(int(status_row[1])),
+                })
+                return response
             try:
                 item = catalog.manifests.get(version_id)
             except FileNotFoundError:
@@ -1337,6 +1363,12 @@ async def _handle(request: Request):
             try:
                 item = catalog.get(bucket, key).item
             except FileNotFoundError:
+                marker = catalog.current_marker(bucket, key)
+                if marker is not None:
+                    result = _error("NoSuchKey", "Current version is a delete marker", 404)
+                    result.headers["x-amz-delete-marker"] = "true"
+                    result.headers["x-amz-version-id"] = marker
+                    return result
                 return _error("NoSuchKey", "The specified key does not exist", 404)
         item_etag = MultipartStore(catalog).object_etag(item.id, item.sha256)
         if is_object_attributes:

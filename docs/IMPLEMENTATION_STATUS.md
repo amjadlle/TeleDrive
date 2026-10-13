@@ -489,3 +489,21 @@ verification and explicit retention approvals are implemented.
 - Multipart reparenting does not create a false orphan: receipts are matched
   by durable account/chat/message identity, not by the original object ID.
   Tests cover a missing journal, redaction and successful journal resolution.
+
+
+## P1.3 S3 logical DeleteMarker and VersionId removal
+
+- Signed S3 DELETE creates a SQL-only published delete marker with its own
+  stable UUID VersionId and a CAS-fenced HEAD transition. GET/HEAD of the
+  latest key now returns NoSuchKey and delete-marker response headers;
+  historical read-by-VersionId stays supported until explicitly removed.
+  ListObjectVersions emits `DeleteMarker` XML entries with stable cursor
+  ordering, keeping payload `Version` entries unchanged.
+- Signed DELETE `?versionId=` hides only a proven published version for the
+  exact bucket/key, without physically deleting any Telegram data. Deleting
+  the current version atomically switches HEAD to the latest remaining
+  historical version (which may itself be a delete marker). Former version
+  IDs are no longer allowed by GET, CopySource, REST restore or tagging.
+- Generic S3 versioning configuration, lifecycle/retention policies, and
+  physical deletion remain unsupported. Test these only against disposable
+  buckets; production GC is still off.

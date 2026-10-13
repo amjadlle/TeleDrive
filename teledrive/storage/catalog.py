@@ -45,7 +45,7 @@ published_versions = Table(
 # media, manifests or aliases. Existing deployments receive an additive table.
 removed_versions = Table(
     "storage_removed_versions", catalog_metadata,
-    Column("object_id", String(36), ForeignKey("storage_objects.id"), primary_key=True),
+    Column("object_id", String(36), primary_key=True),
     Column("removed_ns", BigInteger, nullable=False),
 )
 Index("ix_storage_published_versions_key",
