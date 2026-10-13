@@ -518,3 +518,42 @@ def test_s3_http_metadata_is_immutable_and_transactional_on_live_database(env_na
         assert props.get(cloned.object_id) == original
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_bucket_cors_policy_durable_and_delete_safe_on_real_database(env_name):
+    """Cross-session CORS policy changes must not leave dangling bucket rows."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from uuid import uuid4
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
+    from teledrive.s3.cors import BucketCORSStore, parse_cors_xml
+
+    bucket = "cors-ci-" + uuid4().hex[:18]
+    xml = (
+        b"<CORSConfiguration><CORSRule><AllowedOrigin>"
+        b"https://*.example.com</AllowedOrigin><AllowedMethod>PUT</AllowedMethod>"
+        b"<AllowedHeader>x-amz-*</AllowedHeader>"
+        b"<MaxAgeSeconds>300</MaxAgeSeconds></CORSRule></CORSConfiguration>"
+    )
+    rules = parse_cors_xml(xml)
+    first = connect_database(url)
+    try:
+        catalog = BucketCatalog(ManifestStore(first))
+        catalog.create_bucket(bucket, int(time.time()))
+        BucketCORSStore(catalog).replace(bucket, rules)
+    finally:
+        first.close()
+    reopened = connect_database(url)
+    try:
+        catalog = BucketCatalog(ManifestStore(reopened))
+        cors = BucketCORSStore(catalog)
+        assert cors.get(bucket) == rules
+        catalog.delete_bucket(bucket)
+        assert bucket not in catalog.list_buckets()
+        with pytest.raises(FileNotFoundError):
+            cors.get(bucket)
+    finally:
+        reopened.close()
