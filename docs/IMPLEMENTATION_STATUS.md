@@ -796,9 +796,9 @@ verification and explicit retention approvals are implemented.
   signed head/readback, and malformed metadata. The multipart file part
   MIME header is **not** treated as an unsigned replacement for this
   independently signed form field.
-- Advanced `x-amz-meta-*` browser fields, arbitrary AWS policy operators
-  and unsupported storage semantics are still rejected rather than
-  acknowledged without persistence. Same-SHA CI signoff remains required.
+- Signed bounded `x-amz-meta-*` browser fields now persist atomically;
+  arbitrary AWS policy operators and unsupported storage semantics remain
+  explicitly rejected. Same-SHA CI signoff remains required.
 
 ## P1 end-to-end acceptance trigger (2026-10-14)
 
@@ -886,3 +886,39 @@ verification and explicit retention approvals are implemented.
   real-data suites: Bot multipart 5/16 MiB, Bot twelve-object mixed-size
   soak, and Telethon 5/16 MiB. Only dedicated E2E test credentials are
   involved; operators still own staging/production signoff.
+
+## P1.3 signed browser POST version-scoped object tags (2026-10-14)
+
+- An optional `x-amz-tagging` browser field must be exactly bound in the
+  SigV4 POST policy. The policy alone is not enough: the issuing credential
+  must have both `s3:PutObject` and `s3:PutObjectTagging`. Otherwise the
+  entire form fails *before* any Telegram upload.
+- URL-encoded tags are parsed with the existing strict signed PUT-tag
+  validator: at most ten unique non-reserved keys; no malformed percent
+  escapes, oversized UTF-16 values or duplicate keys. Successful tags are
+  committed alongside immutable object metadata and the published HEAD.
+  Overwriting the same key creates a separate version's tag set; historical
+  versions cannot inherit edits to a newer head.
+- Contract tests exercise 0 B, 1 B, 64 KiB and 1 MiB+ payloads; Unicode
+  tag names/values; real boto3-generated signed policy; withheld tagging
+  permissions; changed, unsigned, duplicated and invalid tag fields; and
+  SQL fault injection to prove that a failed tag attachment cannot
+  replace a previously published object. No physical Telegram deletion.
+- The durable Bot API receipt path now checks an unresolved pre-send
+  fence's SHA-256 and size *before* committing the received file ID.
+  Invalid operator proof leaves the original fence and no forged receipt.
+  Separate tests cover checksum/size conflicts and malformed message IDs.
+- Both real Telegram account transports also cover 4 MiB + 1 B split into
+  **five** 1 MiB-bounded message chunks, with SQL reopen, remote readback,
+  chunk SHA-256 verification and range integrity.
+- Advanced AWS browser conditions not explicitly implemented still fail
+  closed. Multi-host production stress, original lost-ACK ownership proof,
+  live cutover and full S3 lifecycle are not implied by these tests.
+
+## Current GitHub acceptance
+
+- Run all seven workflows against the *same final commit SHA*. Explicitly
+  include the bounded real Bot multipart and twelve-object mixed-size soak,
+  and Telethon large-size tests. Prior SHA green runs are baseline only.
+- Neither an in-progress workflow nor a skipped opt-in stress case closes
+  production acceptance. Operator-controlled operations are still open.
