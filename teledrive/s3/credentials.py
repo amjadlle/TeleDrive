@@ -31,6 +31,7 @@ credentials = Table(
 PERMISSIONS = frozenset({
     "s3:ListAllMyBuckets", "s3:CreateBucket", "s3:DeleteBucket",
     "s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+    "s3:GetObjectTagging", "s3:PutObjectTagging", "s3:DeleteObjectTagging",
 })
 DEFAULT_PERMISSIONS = tuple(sorted(PERMISSIONS))
 
