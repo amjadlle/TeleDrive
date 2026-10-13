@@ -35,6 +35,7 @@ def copy_object(
     catalog: BucketCatalog, source_bucket: str, source_key: str,
     destination_bucket: str, destination_key: str, *, now: int | None = None,
     expected_source_id: str | None = None,
+    replacement_tags: list[tuple[str, str]] | None = None,
 ) -> CopiedObject:
     """Publish a snapshot copy with one SQL transaction.
 
@@ -71,9 +72,12 @@ def copy_object(
         db.connection.execute(insert(object_aliases).values(
             object_id=identifier, source_object_id=base_id,
         ))
-        # S3 COPY tagging directive: tag set is snapshotted at copy time.
-        # Aliased content remains immutable, tags belong to the new version.
-        tagging.copy_tags(source.id, identifier)
+        # COPY snapshots the source's tag set; REPLACE attaches only the
+        # caller's validated tags. Both happen before the head-pointer commit.
+        if replacement_tags is None:
+            tagging.copy_tags(source.id, identifier)
+        else:
+            tagging.attach_uncommitted(identifier, replacement_tags)
         if original_tag != source.sha256:
             db.connection.execute(insert(multipart_etags).values(
                 object_id=identifier, etag=original_tag,
