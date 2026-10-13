@@ -301,16 +301,20 @@ def _page(catalog: BucketCatalog, bucket: str, prefix: str,
 
 def _list_xml(bucket: str, keys: list, common: list[str], prefix: str,
               limit: int, after: str, delimiter: str,
-              more: bool, next_token: str | None, etag_for=None) -> bytes:
+              more: bool, next_token: str | None, etag_for=None, *,
+              version_one: bool = False, next_marker: str | None = None) -> bytes:
     root = ET.Element("ListBucketResult", xmlns=NAMESPACE)
-    for field, val in (
-        ("Name", bucket), ("Prefix", prefix), ("KeyCount", len(keys) + len(common)),
-        ("MaxKeys", limit), ("IsTruncated", "true" if more else "false"),
-    ):
+    fields = [("Name", bucket), ("Prefix", prefix),
+              ("MaxKeys", limit), ("IsTruncated", "true" if more else "false")]
+    if not version_one:
+        fields.append(("KeyCount", len(keys) + len(common)))
+    for field, val in fields:
         ET.SubElement(root, field).text = str(val)
     if delimiter:
         ET.SubElement(root, "Delimiter").text = delimiter
-    if after:
+    if version_one:
+        ET.SubElement(root, "Marker").text = after
+    elif after:
         ET.SubElement(root, "StartAfter").text = after
     for item in keys:
         c = ET.SubElement(root, "Contents")
@@ -326,6 +330,8 @@ def _list_xml(bucket: str, keys: list, common: list[str], prefix: str,
         ET.SubElement(ET.SubElement(root, "CommonPrefixes"), "Prefix").text = name
     if next_token:
         ET.SubElement(root, "NextContinuationToken").text = next_token
+    if version_one and next_marker:
+        ET.SubElement(root, "NextMarker").text = next_marker
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
@@ -541,18 +547,31 @@ async def _handle(request: Request):
                         ET.SubElement(item, label).text = str(value)
                 return Response(ET.tostring(root, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml")
-            if request.query_params.get("list-type") not in (None, "2"):
-                return _error("NotImplemented", "Only ListObjectsV2 is supported", 501)
+            list_type = request.query_params.get("list-type")
+            if list_type not in (None, "2"):
+                return _error("NotImplemented", "Only ListObjectsV1/V2 are supported", 501)
+            version_one = list_type is None
             prefix = request.query_params.get("prefix", "")
             delimiter = request.query_params.get("delimiter", "")
             if len(prefix.encode("utf-8")) > 1024 or len(delimiter.encode("utf-8")) > 16:
                 return _error("InvalidArgument", "Prefix or delimiter is too large", 400)
-            token = request.query_params.get("continuation-token")
-            if token:
-                after, skip_prefix = _cursor_decode(token, master, bucket, prefix, delimiter)
+            if version_one:
+                if any(p in request.query_params for p in ("continuation-token", "start-after")):
+                    return _error("InvalidArgument", "V2 cursor is not a V1 marker", 400)
+                after = request.query_params.get("marker", "")
+                # V1 NextMarker may denote a CommonPrefix. Skip every
+                # descendant of that prefix instead of returning it again.
+                skip_prefix = after if delimiter and after.endswith(delimiter) else ""
+                token = None
             else:
-                after = request.query_params.get("start-after", "")
-                skip_prefix = ""
+                if "marker" in request.query_params:
+                    return _error("InvalidArgument", "V1 marker cannot be used with V2", 400)
+                token = request.query_params.get("continuation-token")
+                if token:
+                    after, skip_prefix = _cursor_decode(token, master, bucket, prefix, delimiter)
+                else:
+                    after = request.query_params.get("start-after", "")
+                    skip_prefix = ""
             try:
                 limit = int(request.query_params.get("max-keys", "1000"))
             except ValueError:
@@ -562,11 +581,16 @@ async def _handle(request: Request):
             keys, common, last, skipped, more = _page(
                 catalog, bucket, prefix, delimiter, after, limit, skip_prefix
             )
-            next_token = _cursor_encode(master, bucket, prefix, delimiter, last, skipped) if more else None
+            next_token = (_cursor_encode(master, bucket, prefix, delimiter, last, skipped)
+                          if more and not version_one else None)
+            next_marker = (max([item.item.key for item in keys] + common)
+                           if more and version_one and (keys or common) else None)
             tags = MultipartStore(catalog)
             return Response(_list_xml(bucket, keys, common, prefix, limit,
-                                      after if not token else "", delimiter, more,
-                                      next_token, lambda obj: tags.object_etag(obj.id, obj.sha256)),
+                                      after if version_one or not token else "",
+                                      delimiter, more, next_token,
+                                      lambda obj: tags.object_etag(obj.id, obj.sha256),
+                                      version_one=version_one, next_marker=next_marker),
                             media_type="application/xml")
 
         if bucket not in catalog.list_buckets():
