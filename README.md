@@ -636,6 +636,34 @@ s3.put_object(
 multipart operations remain explicitly unsupported until their atomic
 semantics can be proven.
 
+### Real S3 client acceptance tests
+
+`Storage API Integration CI` installs the real `aws` and `rclone`
+executables, launches TeleDrive's S3 ASGI gateway, and verifies exact binary
+round trips. The CI uses a fake Telegram I/O layer with real SQL metadata;
+the separate Telegram E2E workflows test real remote transfers. No extra
+GitHub Actions secret is needed to run the AWS CLI/rclone protocol tests.
+
+For a locally provisioned bucket, configure rclone with
+`type=s3`, `provider=Other`, `force_path_style=true`, the TeleDrive
+S3 endpoint, and an issued S3 access/secret pair. Avoid
+`disable_checksum=true`: the gateway requires upload integrity checks.
+When using `no_check_bucket=true`, create buckets in TeleDrive or through
+AWS CLI before syncing; rclone may skip implicit bucket creation.
+
+`GetObjectAttributes` is available to separately scoped credentials:
+
+~~~python
+attrs = s3.get_object_attributes(
+    Bucket="backup-bucket", Key="test.txt",
+    ObjectAttributes=["ETag", "ObjectSize"],
+)
+print(attrs["ETag"], attrs["ObjectSize"])
+~~~
+
+The `Checksum`, `StorageClass` and `ObjectParts` attribute modes are
+currently rejected as unsupported instead of inventing AWS-like values.
+
 ### Kalan riskler ve yapılması gerekenler (S3 denetimi)
 
 - **Stale multipart completions (recovery implemented):** Each in-progress
@@ -653,6 +681,11 @@ semantics can be proven.
   but **physical deletion remains disabled**. Future mark-and-sweep GC must
   preserve all copied-object source aliases, obey immutable history/version
   retention, and verify the actual Telegram message before deletion.
+- **GetObjectAttributes (limited P1 subset implemented):** Signed
+  GetObjectAttributes supports only `ETag` and `ObjectSize`, using the
+  independent `s3:GetObjectAttributes` permission. It does not retrieve
+  Telegram bytes. Unsupported `Checksum`, `ObjectParts` and `StorageClass`
+  attributes explicitly fail rather than returning fabricated metadata.
 - **Physical lifecycle/versioning:** DeleteObject currently unlinks the
   current pointer; historical data remains and is not yet exposed through
   complete S3 ListObjectVersions / restore APIs.
@@ -665,12 +698,22 @@ semantics can be proven.
   failed CAS publication; no unsafe automatic cleanup. Still pending:
   conditional multipart Complete, presigned multipart POST, version-ID
   tagging, advanced S3 checksum variants, SSE, virtual-host-style requests,
-  bucket policies and lifecycle.
-- **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
-  Cyberduck), restart during upload/complete, rate limits, account revocation,
-  multiple simultaneous workers, and opt-in live Telegram multipart
+  bucket policies and lifecycle. Standard SigV4 `UNSIGNED-PAYLOAD` PUTs
+  are accepted **only when a signed Content-MD5 or SHA-256 checksum is verified**
+  against the actual received bytes. The gateway recognizes only `private`
+  canned ACL and `STANDARD` storage-tier hints: public access and archive
+  or alternate durability classes remain unsupported.
+- **Operational tests (real AWS CLI and rclone now exercised):** The CI
+  launches real `aws` and `rclone` executables against a live local ASGI
+  S3 gateway with a deterministic fake Telegram transport and real SQL.
+  Coverage includes AWS `s3api` PUT/GET/HEAD/list/delete, high-level
+  `aws s3 sync --delete`, rclone list/copy/overwrite/delete and forced
+  5 MiB multipart transfer with SHA-256 round-trip comparison. These are
+  SDK/client-compatibility tests; they do **not** replace real Telegram E2E.
+  Cyberduck, service restart during upload/complete, rate limits, account
+  revocation across concurrent live requests and opt-in real Telegram multipart
   execution still need full acceptance. The manual **Telegram Bot Storage E2E**
-  workflow now has a `run_multipart` input; enable it explicitly to upload
+  workflow has a `run_multipart` input; enable it explicitly to upload
   a 5 MiB+ test object to the dedicated private Telegram channel, verify
   SQL chunk reparenting, download it, and remove only that test's messages.
   It reuses `TELEDRIVE_E2E_BOT_TOKEN` and `TELEDRIVE_E2E_BOT_CHAT_ID`;
