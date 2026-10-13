@@ -30,12 +30,15 @@ claim of production readiness. Recheck every workflow at the release SHA.
 - [ ] **P0.3 Credentials/security matrix:** independent revoked/expired/
   read-only credentials on REST, S3, presigned URLs, tagging, copy, and
   multipart; negative SigV4, metadata mutation and protocol abuse tests.
-- [ ] **P0.4 Real multipart:** run Telegram Bot Storage E2E with
+- [x] **P0.4 Real multipart:** run Telegram Bot Storage E2E with
   `run_multipart=true`, or a reviewed feature-branch merge commit
   containing `[p0-live-multipart]`. Verify 5 MiB+ Telegram data,
   restart-persisted bot file IDs, reparented chunks, checksum,
   idempotent completion and test-only message cleanup. Mark complete
   only after a successful *non-skipped* live execution.
+  **Verified:** commit `32bb3e850f2c5841cbcb2fa2525340ee25b6667b`,
+  Telegram Bot Storage E2E job 115423376758: `TELEDRIVE_E2E_MULTIPART=1`,
+  **2 passed in 29.98s**, no skips.
 - [ ] **P0.5 Client interoperability:** real AWS CLI and rclone required;
   investigate Cyberduck and large Range/multipart edge cases.
 
@@ -67,3 +70,16 @@ Desktop, both standard Telegram E2E, and release verification (not an
 actual release publication). The 5 MiB+ real multipart test remains an
 explicit opt-in *until a non-skipped live run is recorded*.
 Production physical GC and full AWS S3 compliance are not implemented.
+
+## P0 safety merge
+
+- CopyObject now requires `x-amz-metadata-directive` in SigV4 SignedHeaders,
+  blocking unsigned metadata replacement.
+- Added post-Telegram-ACK SQL journal failure, cross-connection writer fence,
+  and expired/revoked/read-only credential regression tests.
+- Extended PostgreSQL/MySQL CI to cover storage engine and recovery tests,
+  with Storage API CI explicitly running the new credential matrix.
+- Live Telegram 5 MiB+ multipart **passed** at `32bb3e8` with restart
+  persistence, checksum verification and test-only message cleanup.
+- P0.2, P0.3 and P0.5 require their remaining acceptance checks before
+  they can be declared fully closed.

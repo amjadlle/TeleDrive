@@ -285,3 +285,47 @@ def test_changed_copy_source_header_invalidates_sigv4_signature(service):
     assert result.status_code == 403
     assert b"SignatureDoesNotMatch" in result.content
     assert signed(service, "GET", "/backup-bucket/target").status_code == 404
+
+
+def test_copy_metadata_directive_cannot_be_injected_into_signed_request(service):
+    """An intermediary must not strip or replace immutable copy metadata."""
+    from botocore.auth import S3SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    source = signed(
+        service, "PUT", "/backup-bucket/source-copy-metadata", b"persistent",
+        extra_headers={"x-amz-meta-retain": "yes"},
+    )
+    assert source.status_code == 200, source.text
+    path = "/backup-bucket/unsigned-directive"
+    request = AWSRequest(
+        method="PUT", url="http://localhost:9000" + path, data=b"",
+        headers={
+            "x-amz-content-sha256": hashlib.sha256(b"").hexdigest(),
+            "x-amz-copy-source": "/backup-bucket/source-copy-metadata",
+        },
+    )
+    request.context["payload_signing_enabled"] = True
+    issued = service[1]
+    S3SigV4Auth(
+        Credentials(issued.access_key, issued.secret_key),
+        "s3", "us-east-1",
+    ).add_auth(request)
+    injected = dict(request.headers)
+    assert "x-amz-metadata-directive" not in injected
+    injected["x-amz-metadata-directive"] = "REPLACE"
+    denied = service[0].put(path, content=b"", headers=injected)
+    assert denied.status_code == 403, denied.text
+    assert b"AccessDenied" in denied.content
+    assert signed(service, "GET", path).status_code == 404
+
+    original = copy(
+        service, "/backup-bucket/source-copy-metadata",
+        "/backup-bucket/signed-metadata-copy",
+    )
+    assert original.status_code == 200, original.text
+    head = signed(service, "HEAD", "/backup-bucket/signed-metadata-copy")
+    assert head.headers["x-amz-meta-retain"] == "yes"
+    assert service[2].uploads == 1  # copy never reuploads Telegram bytes

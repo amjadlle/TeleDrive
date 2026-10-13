@@ -125,6 +125,8 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
     db = workflow("database-ci.yml")["jobs"]["database"]
     assert {"mysql", "postgres"} <= set(db["services"])
     assert any("tests/test_database_live.py" in s.get("run", "")
+               and "tests/test_storage_engine.py" in s.get("run", "")
+               and "tests/test_storage_recovery.py" in s.get("run", "")
                for s in db["steps"])
 
     desktop = workflow("desktop-ci.yml")["jobs"]["desktop"]
@@ -133,11 +135,23 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
     }
     steps = "\n".join(s.get("run", "") for s in desktop["steps"])
     assert "tests/test_desktop_ui.py" in steps
+    assert "tests/test_storage_engine.py" in workflow("desktop-ci.yml")["on"]["push"]["paths"]
     assert "scripts/build-linux.sh" in steps
     assert "scripts/build.ps1" in steps
 
     api = workflow("storage-api-ci.yml")["jobs"]["storage-api"]
     commands = "\n".join(s.get("run", "") for s in api["steps"])
     for path in ("tests/test_rest_api.py", "tests/test_rest_transfer.py",
-                 "tests/test_storage_catalog.py", "tests/test_bot_storage.py"):
+                 "tests/test_storage_catalog.py", "tests/test_bot_storage.py",
+                 "tests/test_p0_security_matrix.py"):
         assert path in commands
+
+
+def test_live_multipart_push_is_explicitly_opted_in():
+    bot = workflow("telegram-bot-e2e.yml")
+    job = bot["jobs"]["telegram-bot-roundtrip"]
+    expression = job["env"]["TELEDRIVE_E2E_MULTIPART"]
+    assert "inputs.run_multipart" in expression
+    assert "[p0-live-multipart]" in expression
+    assert "github.event_name == 'push'" in expression
+    assert job["timeout-minutes"] == "15"

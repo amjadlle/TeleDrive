@@ -281,3 +281,63 @@ def test_process_killed_after_telegram_send_cannot_publish_later(store, tmp_path
     assert store.interrupted()[0][1] == "failed"
     with pytest.raises(FileNotFoundError):
         store.get(store.interrupted()[0][0])
+
+
+def test_sql_journal_failure_after_telegram_ack_preserves_orphan_and_hides_object(
+    store, tmp_path, monkeypatch
+):
+    """A Telegram ACK is not a commit; never publish an unjournaled chunk."""
+    remote = MemoryTelegram()
+    source = tmp_path / "source-after-ack.bin"
+    source.write_bytes(b"test-transient-sql-commit-outage")
+    engine = TelegramObjectStorage(store, remote, chunk_size=128)
+
+    def fail_append(*args, **kwargs):
+        raise OSError("simulated SQL journal outage")
+
+    monkeypatch.setattr(store, "append", fail_append)
+    with pytest.raises(OSError, match="SQL journal outage"):
+        execute(engine.put_file("backup", "after-ack", source))
+
+    assert remote.uploads == 1
+    assert len(remote.data) == 1, "Telegram orphan must not be deleted without ownership audit"
+    interrupted = store.interrupted()
+    assert len(interrupted) == 1
+    ident, state = interrupted[0]
+    assert state == "failed"
+    assert store.recovery_parts(ident) == []
+    with pytest.raises(FileNotFoundError):
+        store.get(ident)
+    # A new worker sees exactly the same failed manifest after a DB restart.
+    reopened = connect_database(str(tmp_path / "state.db"))
+    try:
+        fresh = ManifestStore(reopened)
+        assert fresh.interrupted() == [(ident, "failed")]
+        with pytest.raises(FileNotFoundError):
+            fresh.get(ident)
+    finally:
+        reopened.close()
+
+
+def test_abandoned_writer_cannot_commit_after_database_restart(store, tmp_path):
+    """An interrupted worker's token stays fenced across separate SQL sessions."""
+    now = 1700000000
+    ident = store.begin("backup", "crash-fence", 0, now)
+    store.start_writer(ident, "original-worker", now, ttl=60)
+    after_crash = connect_database(str(tmp_path / "state.db"))
+    try:
+        challenger = ManifestStore(after_crash)
+        assert challenger.abandon_stale_pending(
+            now=now + 3601, min_age_seconds=60
+        ) == [ident]
+    finally:
+        after_crash.close()
+    assert not store.heartbeat_writer(
+        ident, "original-worker", now + 3602, ttl=120
+    )
+    with pytest.raises(ManifestError):
+        store.finish(
+            ident, hashlib.sha256(b"").hexdigest(),
+            now + 3602, writer_token="original-worker",
+        )
+    assert store.interrupted() == [(ident, "failed")]

@@ -12,6 +12,8 @@ on:
       - "teledrive/s3/**"
       - "teledrive/uploader.py"
       - "tests/test_database_live.py"
+      - "tests/test_storage_engine.py"
+      - "tests/test_storage_recovery.py"
       - ".github/workflows/database-ci.yml"
   pull_request:
     paths:
@@ -20,6 +22,8 @@ on:
       - "teledrive/s3/**"
       - "teledrive/uploader.py"
       - "tests/test_database_live.py"
+      - "tests/test_storage_engine.py"
+      - "tests/test_storage_recovery.py"
       - ".github/workflows/database-ci.yml"
 
 permissions:
@@ -77,4 +81,4 @@ jobs:
           python -m pip install pytest "psycopg[binary]>=3.2,<4" "PyMySQL>=1.1,<2" "defusedxml==0.7.1"
           python -m pip check
       - name: Run live PostgreSQL/MySQL integration tests
-        run: python -m pytest -vv tests/test_database_live.py
+        run: python -m pytest -vv tests/test_database_live.py tests/test_storage_engine.py tests/test_storage_recovery.py
