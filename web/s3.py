@@ -631,6 +631,13 @@ async def _handle(request: Request):
             post_key = verify_post_policy(
                 post_fields, payload, bucket, store.resolve, max_bytes=form_limit,
             )
+            # A form's Content-Type is independently signed by its policy,
+            # validated like ordinary S3 object metadata and persisted in
+            # the same SQL transaction that publishes the HEAD pointer.
+            post_metadata = parse_object_metadata(
+                {"content-type": post_fields["Content-Type"]},
+                {"content-type"},
+            ) if "Content-Type" in post_fields else {}
             post_catalog = BucketCatalog(ManifestStore(db))
             if bucket not in post_catalog.list_buckets():
                 return _error("NoSuchBucket", "Upload bucket does not exist", 404)
@@ -650,6 +657,9 @@ async def _handle(request: Request):
                     chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
                     scratch_directory=directory,
                 ).put_file(bucket, post_key, staged)
+                ObjectMetadataStore(post_catalog).attach_uncommitted(
+                    obj.id, post_metadata,
+                )
                 post_catalog.publish(obj.id, now=int(time.time()))
                 etag = '"' + obj.sha256 + '"'
                 response_headers = {"ETag": etag, "x-amz-version-id": obj.id}
