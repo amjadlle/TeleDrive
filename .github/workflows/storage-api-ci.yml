@@ -83,6 +83,7 @@ jobs:
             tests/test_s3_bucket_location.py \
             tests/test_s3_listing_v1.py \
             tests/test_s3_conditions.py \
+            tests/test_s3_conditional_writes.py \
             tests/test_s3_cors.py \
             tests/test_storage_gc_audit.py \
             tests/test_storage_gc_admin.py
