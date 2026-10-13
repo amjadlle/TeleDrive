@@ -30,6 +30,7 @@ from teledrive.db import redact_database_url
 from teledrive.api_keys import ApiKeyStore
 from teledrive.s3.credentials import S3CredentialStore, load_master_key, DEFAULT_PERMISSIONS
 from teledrive.s3.multipart import MultipartStore
+from teledrive.storage.gc import StorageGCInventory
 from teledrive.storage.manifest import ManifestStore
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.engine import TelegramObjectStorage
@@ -796,6 +797,41 @@ def rotate_api_key(identifier: str, request: Request, _: None = Depends(require_
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"id": key.id, "token": key.value, "prefix": key.prefix, "scopes": key.scopes}
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/admin/storage/gc-audit", tags=["API keys"],
+         summary="Audit Telegram object references before any physical cleanup")
+def get_storage_gc_audit(
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: None = Depends(require_auth),
+):
+    """Root-admin-only, non-destructive inventory; never authorizes remote deletion."""
+    from dataclasses import asdict
+
+    conn = db_connect()
+    try:
+        # Also ensure the bucket/head metadata tables exist on a new DB.
+        catalog = BucketCatalog(ManifestStore(conn))
+        try:
+            inventory = StorageGCInventory(catalog.manifests).inspect()
+        except RuntimeError as exc:
+            raise HTTPException(409, "Reference graph is inconsistent; GC blocked") from exc
+        return {
+            "total_manifests": inventory.total_manifests,
+            "total_telegram_messages": inventory.total_telegram_messages,
+            "live_object_heads": inventory.live_object_heads,
+            "copy_aliases": inventory.copy_aliases,
+            "multipart_parts": inventory.multipart_parts,
+            "eligible_for_deletion": 0,
+            "dry_run": True,
+            "physical_deletion_enabled": False,
+            "protected_chunks": [
+                asdict(row) for row in inventory.protected_chunks[:limit]
+            ],
+            "truncated": len(inventory.protected_chunks) > limit,
+        }
     finally:
         conn.close()
 
