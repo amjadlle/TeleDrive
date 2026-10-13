@@ -19,7 +19,7 @@ REQUIRED_FIELDS = frozenset(("key", "policy", "x-amz-algorithm",
 OPTIONAL_FIELDS = frozenset((
     "success_action_status", "success_action_redirect", "Content-Type",
     "Cache-Control", "Content-Disposition", "Content-Encoding",
-    "Content-Language", "Expires",
+    "Content-Language", "Expires", "x-amz-tagging",
 ))
 FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 CONDITIONS = (REQUIRED_FIELDS - {"policy", "x-amz-signature"}) | {"bucket"}
