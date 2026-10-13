@@ -1,0 +1,66 @@
+name: Storage API Integration CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/docker-webui-multiaccount
+    paths:
+      - "teledrive/api_keys.py"
+      - "teledrive/storage/**"
+      - "web/**"
+      - "tests/test_api_keys.py"
+      - "tests/test_rest_*.py"
+      - "tests/test_storage_*.py"
+      - "tests/test_bot_storage.py"
+      - ".github/workflows/storage-api-ci.yml"
+  pull_request:
+    paths:
+      - "teledrive/api_keys.py"
+      - "teledrive/storage/**"
+      - "web/**"
+      - "tests/test_api_keys.py"
+      - "tests/test_rest_*.py"
+      - "tests/test_storage_*.py"
+      - "tests/test_bot_storage.py"
+      - ".github/workflows/storage-api-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storage-api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  storage-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install API and test runtime
+        run: |
+          python -m pip install -r requirements-web.txt
+          python -m pip install pytest httpx
+          python -m pip check
+      - name: Compile API and storage
+        run: python -m compileall -q teledrive web tests
+      - name: Real SQL and HTTP contract tests with fake Telegram I/O
+        run: |
+          python -m pytest -q \
+            tests/test_api_keys.py \
+            tests/test_rest_api.py \
+            tests/test_rest_transfer.py \
+            tests/test_storage_engine.py \
+            tests/test_storage_recovery.py \
+            tests/test_storage_catalog.py \
+            tests/test_bot_storage.py
