@@ -52,6 +52,7 @@ def test_never_serves_ready_unpublished_objects_as_s3_versions(service):
     assert unavailable.status_code == 404
     assert b"NoSuchVersion" in unavailable.content
     cannot_delete = signed(service, "DELETE", f"/backup-bucket/hidden.bin?versionId={staged_id}")
-    assert cannot_delete.status_code == 501
+    assert cannot_delete.status_code == 404
+    assert b"NoSuchVersion" in cannot_delete.content
     missing = signed(service, "GET", "/backup-bucket/hidden.bin?versionId=unknown")
     assert missing.status_code == 404
