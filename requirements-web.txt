@@ -5,3 +5,4 @@ Telethon==1.45.0
 SQLAlchemy==2.1.2
 psycopg[binary]==3.3.6
 PyMySQL==1.2.3
+cryptography==46.0.4
