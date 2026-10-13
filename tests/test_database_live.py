@@ -268,3 +268,45 @@ def test_s3_multipart_atomic_chunk_reparent_on_live_sql(env_name, tmp_path):
     finally:
         db.close()
         second.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_multipart_recovery_fences_prior_worker_across_live_sql_connections(env_name):
+    """A worker killed during Telegram verification may not commit after reclaim.
+
+    This uses separate DB connections on real Postgres/MySQL to prove
+    the lease token is invalidated atomically and a new writer can claim.
+    """
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from uuid import uuid4
+    from teledrive.storage.manifest import ManifestStore
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.s3.multipart import MultipartStore, completion_leases
+    from sqlalchemy import select
+
+    a, b = connect_database(url), connect_database(url)
+    try:
+        left = MultipartStore(BucketCatalog(ManifestStore(a)))
+        right = MultipartStore(BucketCatalog(ManifestStore(b)))
+        now = int(time.time())
+        bucket = "ci-" + uuid4().hex[:20]
+        left.catalog.create_bucket(bucket, now)
+        uid = left.initiate(bucket, "crashed/multipart.bin", "ci-owner")
+        old_token = left._claim_completion(uid, now - 7200, 120)
+        assert right.recover_stale_completion(uid, dry_run=True, now=now)
+        assert right.recover_stale_completion(uid, dry_run=False, now=now)
+        assert not left._renew_completion(uid, old_token, now, 120)
+        assert not left._reset_owned_completion(uid, old_token)
+        new_token = right._claim_completion(uid, now, 120)
+        assert new_token != old_token
+        assert not left._reset_owned_completion(uid, old_token)
+        assert right._renew_completion(uid, new_token, now, 120)
+        assert right._reset_owned_completion(uid, new_token)
+        assert right.require(uid, bucket, "crashed/multipart.bin", "ci-owner")["state"] == "active"
+        assert not b.connection.execute(select(completion_leases.c.upload_id)
+                                         .where(completion_leases.c.upload_id == uid)).first()
+    finally:
+        a.close()
+        b.close()
