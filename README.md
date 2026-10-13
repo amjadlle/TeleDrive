@@ -386,9 +386,15 @@ wrong checksums, abandoned uploads, and live PostgreSQL/MySQL chunk moves.
   lifecycle are separate acceptance-tested phases.
 - **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
   Cyberduck), restart during upload/complete, rate limits, account revocation,
-  multiple simultaneous workers, and real-Telegram multipart E2E still need
-  dedicated CI coverage. Regular storage E2E green does not prove multipart
-  against a real Telegram account.
+  multiple simultaneous workers, and opt-in live Telegram multipart
+  execution still need full acceptance. The manual **Telegram Bot Storage E2E**
+  workflow now has a `run_multipart` input; enable it explicitly to upload
+  a 5 MiB+ test object to the dedicated private Telegram channel, verify
+  SQL chunk reparenting, download it, and remove only that test's messages.
+  It reuses `TELEDRIVE_E2E_BOT_TOKEN` and `TELEDRIVE_E2E_BOT_CHAT_ID`;
+  no additional secret is needed. Automatic push runs skip this costly case.
+  A green regular storage E2E does not prove multipart has been exercised
+  against the live Telegram API.
 
 No primary payload storage or fallback is added outside Telegram. SQL
 holds metadata and temporary upload state only; scratch files are ephemeral.
