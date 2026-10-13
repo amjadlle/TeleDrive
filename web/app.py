@@ -32,6 +32,7 @@ from teledrive.s3.credentials import S3CredentialStore, load_master_key, DEFAULT
 from teledrive.s3.multipart import MultipartStore
 from teledrive.storage.gc import StorageGCInventory
 from teledrive.storage.manifest import ManifestStore
+from teledrive.storage.jobs import StorageUploadJobs, UploadJobError
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.bot_api_adapter import (
@@ -544,6 +545,12 @@ class PendingUploadRecoveryRequest(BaseModel):
     min_age_seconds: int = Field(default=3600, ge=60, le=30 * 86400)
 
 
+class StorageUploadJobRequest(BaseModel):
+    bucket: str = Field(min_length=3, max_length=63)
+    key: str = Field(min_length=1, max_length=1024)
+    source_path: str = Field(min_length=1, max_length=4096)
+
+
 class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
@@ -837,6 +844,102 @@ def get_storage_gc_audit(
             ],
             "truncated": len(inventory.protected_chunks) > limit,
         }
+    finally:
+        conn.close()
+
+
+def _storage_job_root() -> Path:
+    """Durable jobs may read only an operator-configured local source root."""
+    raw = os.environ.get("TELEDRIVE_JOB_SOURCE_ROOT", "").strip()
+    if not raw:
+        raise HTTPException(503, "Configure TELEDRIVE_JOB_SOURCE_ROOT for local upload jobs")
+    try:
+        root = Path(raw).resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(503, "Upload source root does not exist") from exc
+    if not root.is_dir():
+        raise HTTPException(503, "Upload source root must be a directory")
+    return root
+
+
+@app.get("/api/v1/admin/storage/jobs", tags=["Storage jobs"],
+         summary="Inspect durable local-source upload jobs (no worker tokens)")
+def list_storage_upload_jobs(
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: None = Depends(require_auth),
+):
+    conn = db_connect()
+    try:
+        return {"jobs": StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+                .list_jobs(limit=limit)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/storage/jobs", tags=["Storage jobs"],
+          status_code=201, summary="Queue an allowed-root file for Telegram upload")
+def create_storage_upload_job(
+    request: Request, payload: StorageUploadJobRequest,
+    _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    root = _storage_job_root()
+    conn = db_connect()
+    try:
+        manager = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+        try:
+            job_id = manager.enqueue(
+                payload.bucket, payload.key, Path(payload.source_path),
+                allowed_root=root,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except (UploadJobError, ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"id": job_id, "state": "queued"}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/storage/jobs/run-next", tags=["Storage jobs"],
+          summary="Process one queued upload with SQL lease, checksums and CAS")
+async def run_next_storage_upload_job(
+    request: Request, _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    root = _storage_job_root()
+    conn = db_connect()
+    try:
+        manager = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+        transport = storage_bot_transport(conn)
+        scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+        _secure_mkdir(scratch)
+        try:
+            result = await manager.run_next(
+                transport, allowed_root=root, scratch_directory=scratch,
+                chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+            )
+        except (UploadJobError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, "Telegram upload failed; job retained for retry") from exc
+        return {"job": result}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/storage/jobs/{job_id}/retry", tags=["Storage jobs"],
+          summary="Explicitly retry a failed job; never remove Telegram messages")
+def retry_storage_upload_job(
+    job_id: str, request: Request, _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        manager = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+        if not manager.retry(job_id):
+            raise HTTPException(409, "Job is not failed or does not exist")
+        return {"id": job_id, "state": "queued"}
     finally:
         conn.close()
 

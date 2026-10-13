@@ -125,3 +125,17 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
 
 - WebUI API Management includes a dry-run-first stale PENDING inventory
   and single-object explicit writer-fencing action; no background cleanup.
+
+## P1.2 durable operator upload queue (initial)
+
+- SQL-persistent job state for files restricted to an explicit
+  `TELEDRIVE_JOB_SOURCE_ROOT` path; root-admin POST enqueues, GET lists,
+  POST `/run-next` executes one and POST `/{id}/retry` requeues failures.
+- Per-job TTL/lease token prevents two workers from completing a job.
+  Each Telegram object has its own independent writer heartbeat/fence.
+- The source inode/mtime/size is checked before and after Telegram I/O,
+  and final HEAD uses an expected generation + object ID CAS. Completed
+  manifests are reused when their staged job survives a process crash.
+- This initial queue **retries unsaved uploads from the beginning** and
+  retains orphans for verified GC. It does not yet resume unjournaled
+  Telegram data byte-by-byte; an always-on worker scheduler is future work.
