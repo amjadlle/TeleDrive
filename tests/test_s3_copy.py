@@ -143,14 +143,19 @@ def test_copy_does_not_ignore_unsupported_metadata_changes(service):
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
     assert signed(service, "PUT", "/backup-bucket/source", b"payload").status_code == 200
     before = service[2].uploads
+    unsupported_directive = copy(service, "/backup-bucket/source", "/backup-bucket/out",
+                                 **{"x-amz-metadata-directive": "INVALID"})
+    assert unsupported_directive.status_code == 400
     replacement = copy(service, "/backup-bucket/source", "/backup-bucket/out",
-                       **{"x-amz-metadata-directive": "REPLACE"})
-    assert replacement.status_code == 501
+                       **{"x-amz-metadata-directive": "REPLACE",
+                          "Content-Type": "text/plain", "x-amz-meta-purpose": "copy"})
+    assert replacement.status_code == 200
+    assert signed(service, "HEAD", "/backup-bucket/out").headers["x-amz-meta-purpose"] == "copy"
     ignored_range = copy(service, "/backup-bucket/source", "/backup-bucket/out",
                          **{"x-amz-copy-source-range": "bytes=0-2"})
     assert ignored_range.status_code == 501
     assert service[2].uploads == before
-    assert signed(service, "GET", "/backup-bucket/out").status_code == 404
+    assert signed(service, "GET", "/backup-bucket/out").content == b"payload"
 
 
 @pytest.mark.parametrize("key", ["folder/a%20space.txt", "caf%C3%A9.bin", "percent%2525.txt"])
