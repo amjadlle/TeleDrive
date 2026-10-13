@@ -14,11 +14,19 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 
-from teledrive.storage.catalog import BucketCatalog, heads
+from teledrive.storage.catalog import BucketCatalog, heads, catalog_metadata
 from teledrive.storage.manifest import metadata as _meta
 object_tags = Table(
     "storage_object_tags", _meta,
     Column("object_id", String(36), ForeignKey("storage_objects.id"), primary_key=True),
+    Column("tag_key", String(512), primary_key=True),
+    Column("tag_value", String(1024), nullable=False),
+)
+
+
+bucket_tags = Table(
+    "storage_bucket_tags", catalog_metadata,
+    Column("bucket", String(63), ForeignKey("storage_buckets.name"), primary_key=True),
     Column("tag_key", String(512), primary_key=True),
     Column("tag_value", String(1024), nullable=False),
 )
@@ -102,3 +110,50 @@ class ObjectTagStore:
             self.db.connection.execute(insert(object_tags).values(
                 object_id=destination_id, tag_key=tag_key, tag_value=tag_value
             ))
+
+
+class BucketTagStore:
+    """Bucket tags are distinct metadata from object version tags."""
+
+    def __init__(self, catalog: BucketCatalog):
+        self.catalog = catalog
+        self.db = catalog.db
+        catalog_metadata.create_all(self.db.engine, tables=[bucket_tags])
+
+    def _ensure_bucket(self, bucket: str) -> None:
+        from teledrive.storage.catalog import buckets
+        present = self.db.connection.execute(
+            select(buckets.c.name).where(buckets.c.name == bucket)
+        ).first()
+        if present is None:
+            raise FileNotFoundError("Bucket not found")
+
+    def get(self, bucket: str) -> list[tuple[str, str]]:
+        self._ensure_bucket(bucket)
+        return list(self.db.connection.execute(
+            select(bucket_tags.c.tag_key, bucket_tags.c.tag_value)
+            .where(bucket_tags.c.bucket == bucket)
+            .order_by(bucket_tags.c.tag_key)
+        ).all())
+
+    def replace(self, bucket: str, tags: list[tuple[str, str]]) -> None:
+        from teledrive.storage.catalog import buckets
+        tags = validate_tags(tags)
+        try:
+            # Serialize concurrent bucket deletion/tag mutation.
+            guarded = self.db.connection.execute(update(buckets).where(
+                buckets.c.name == bucket
+            ).values(created_at=buckets.c.created_at))
+            if guarded.rowcount != 1:
+                raise FileNotFoundError("Bucket not found")
+            self.db.connection.execute(delete(bucket_tags).where(
+                bucket_tags.c.bucket == bucket
+            ))
+            for key, value in tags:
+                self.db.connection.execute(insert(bucket_tags).values(
+                    bucket=bucket, tag_key=key, tag_value=value
+                ))
+            self.db.commit()
+        except BaseException:
+            self.db.connection.rollback()
+            raise
