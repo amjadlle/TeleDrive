@@ -252,14 +252,12 @@ class MultipartStore:
         """Never reset a lease that another worker has recovered or taken."""
         now = int(time.time())
         try:
-            owned = self.db.connection.execute(select(
-                completion_leases.c.upload_id
-            ).where(
+            owned = self.db.connection.execute(update(completion_leases).where(
                 completion_leases.c.upload_id == identifier,
                 completion_leases.c.token == token,
                 completion_leases.c.lease_until >= now,
-            )).first()
-            if owned is None:
+            ).values(heartbeat_at=now))
+            if owned.rowcount != 1:
                 self.db.connection.rollback()
                 return False
             changed = self.db.connection.execute(update(uploads).where(
