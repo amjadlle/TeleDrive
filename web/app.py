@@ -484,7 +484,7 @@ async def security_middleware(request: Request, call_next):
             "form-action 'self'; object-src 'none'; connect-src 'self'; img-src 'self' data:; "
             "style-src 'self' 'unsafe-inline'; script-src 'self'"
         )
-    if request.url.path == "/" or request.url.path.startswith("/api/"):
+    if request.url.path in {"/", "/docs", "/redoc", "/openapi.json"} or request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     return response
 
