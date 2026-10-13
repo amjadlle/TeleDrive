@@ -176,7 +176,10 @@ def test_unsigned_payload_and_unsupported_operations_fail_closed(service):
     initiated = signed(service, "POST", "/backup-bucket/object?uploads")
     assert initiated.status_code == 200
     assert b"UploadId" in initiated.content
-    unsupported = signed(service, "GET", "/backup-bucket?uploads")
+    listed = signed(service, "GET", "/backup-bucket?uploads")
+    assert listed.status_code == 200
+    assert b"ListMultipartUploadsResult" in listed.content
+    unsupported = signed(service, "GET", "/backup-bucket?policy")
     assert unsupported.status_code == 501
     assert b"NotImplemented" in unsupported.content
 
