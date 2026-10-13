@@ -9,6 +9,7 @@ on:
     paths:
       - "teledrive/db.py"
       - "teledrive/storage/**"
+      - "teledrive/s3/**"
       - "teledrive/uploader.py"
       - "tests/test_database_live.py"
       - ".github/workflows/database-ci.yml"
@@ -16,6 +17,7 @@ on:
     paths:
       - "teledrive/db.py"
       - "teledrive/storage/**"
+      - "teledrive/s3/**"
       - "teledrive/uploader.py"
       - "tests/test_database_live.py"
       - ".github/workflows/database-ci.yml"
