@@ -18,7 +18,9 @@ import time
 from pathlib import Path
 from typing import AsyncIterator, Protocol
 
-from .manifest import ChunkReference, ManifestStore, StoredObject, ManifestError
+from sqlalchemy import select
+
+from .manifest import ChunkReference, ManifestStore, StoredObject, ManifestError, objects
 
 
 class IntegrityError(RuntimeError):
@@ -90,7 +92,8 @@ class TelegramObjectStorage:
                 lost.set()
                 return
 
-    async def put_file(self, bucket: str, key: str, source: Path) -> StoredObject:
+    async def put_file(self, bucket: str, key: str, source: Path, *,
+                       on_begin=None) -> StoredObject:
         source = Path(source)
         with _regular_source(source) as handle:
             before = os.fstat(handle.fileno())
@@ -104,6 +107,8 @@ class TelegramObjectStorage:
             offset = 0
             ordinal = 0
             try:
+                if on_begin is not None:
+                    on_begin(identifier)
                 with tempfile.TemporaryDirectory(
                     prefix="teledrive-chunks-", dir=self.scratch_directory
                 ) as scratch:
@@ -127,7 +132,7 @@ class TelegramObjectStorage:
                         self.manifests.append(identifier, ChunkReference(
                             ordinal=ordinal, offset=offset, size=len(data), sha256=digest,
                             account=account, chat_id=int(chat_id), message_id=int(message_id),
-                        ), int(time.time()))
+                        ), int(time.time()), writer_token=token)
                         part.unlink()
                         offset += len(data)
                         ordinal += 1
@@ -150,6 +155,116 @@ class TelegramObjectStorage:
                 try:
                     self.manifests.fail(identifier, type(exc).__name__, int(time.time()),
                                         writer_token=token)
+                except Exception:
+                    pass
+                raise
+            finally:
+                stop.set()
+                await renewal
+
+    async def resume_file(self, bucket: str, key: str, source: Path,
+                          identifier: str) -> StoredObject:
+        """Resume journaled chunks after reclaiming an expired SQL writer.
+
+        All saved Telegram messages and the corresponding source ranges are
+        independently read/verified before uploading any missing tail bytes.
+        A partial remote ACK absent from SQL may be retransmitted and leaves
+        an orphan for the separately approved collector. No deletion occurs.
+        """
+        source = Path(source)
+        with _regular_source(source) as handle:
+            before = os.fstat(handle.fileno())
+            row = self.manifests.db.connection.execute(
+                select(objects.c.bucket, objects.c.object_key, objects.c.size,
+                       objects.c.status).where(objects.c.id == identifier)
+            ).one_or_none()
+            if (row is None or row[0] != bucket or row[1] != key
+                    or int(row[2]) != before.st_size or row[3] != "pending"):
+                raise ManifestError("Resumable manifest identity is invalid")
+            token = secrets.token_hex(24)
+            if not self.manifests.reclaim_writer(
+                identifier, token, int(time.time()), self.writer_ttl_seconds
+            ):
+                raise ManifestError("Cannot reclaim an active or non-pending writer")
+            stop, lost = asyncio.Event(), asyncio.Event()
+            renewal = asyncio.create_task(
+                self._keep_writer_alive(identifier, token, stop, lost)
+            )
+            full_sha = hashlib.sha256()
+            offset, ordinal = 0, 0
+            try:
+                with tempfile.TemporaryDirectory(
+                    prefix="teledrive-resume-", dir=self.scratch_directory
+                ) as scratch:
+                    root = Path(scratch)
+                    for ref in self.manifests.recovery_parts(identifier):
+                        if (ref.ordinal != ordinal or ref.offset != offset
+                                or ref.size <= 0 or offset + ref.size > before.st_size):
+                            raise ManifestError("Noncontiguous resumable chunk journal")
+                        existing = root / f"saved-{ordinal:08d}"
+                        await self.transport.download(ref, existing)
+                        if not existing.is_file() or existing.stat().st_size != ref.size:
+                            raise IntegrityError("Saved Telegram chunk missing or truncated")
+                        section_sha = hashlib.sha256()
+                        with existing.open("rb") as remote:
+                            remaining = ref.size
+                            while remaining:
+                                amount = min(1024 * 1024, remaining)
+                                local = handle.read(amount)
+                                saved = remote.read(amount)
+                                if len(local) != amount or saved != local:
+                                    raise IntegrityError("Resumable Telegram bytes differ from source")
+                                section_sha.update(local)
+                                full_sha.update(local)
+                                remaining -= amount
+                        if section_sha.hexdigest() != ref.sha256:
+                            raise IntegrityError("Resumable journal checksum mismatch")
+                        existing.unlink()
+                        offset += ref.size
+                        ordinal += 1
+                    while data := handle.read(self.chunk_size):
+                        checksum = hashlib.sha256(data).hexdigest()
+                        full_sha.update(data)
+                        part = root / f"part-{ordinal:08d}"
+                        with part.open("xb") as output:
+                            output.write(data)
+                        part.chmod(0o600)
+                        account, chat_id, message_id = await self.transport.upload(
+                            part, object_id=identifier, ordinal=ordinal,
+                            checksum=checksum,
+                        )
+                        if lost.is_set() or not self.manifests.heartbeat_writer(
+                            identifier, token, int(time.time()), self.writer_ttl_seconds
+                        ):
+                            raise ManifestError("Resumed writer ownership lost")
+                        self.manifests.append(
+                            identifier, ChunkReference(
+                                ordinal=ordinal, offset=offset, size=len(data),
+                                sha256=checksum, account=account,
+                                chat_id=int(chat_id), message_id=int(message_id),
+                            ), int(time.time()), writer_token=token,
+                        )
+                        part.unlink()
+                        offset += len(data)
+                        ordinal += 1
+                after = os.fstat(handle.fileno())
+                if (offset != before.st_size or before.st_dev != after.st_dev
+                        or before.st_ino != after.st_ino
+                        or before.st_mtime_ns != after.st_mtime_ns
+                        or before.st_size != after.st_size):
+                    raise IntegrityError("Resumed source changed during upload")
+                if lost.is_set() or not self.manifests.heartbeat_writer(
+                    identifier, token, int(time.time()), self.writer_ttl_seconds
+                ):
+                    raise ManifestError("Resumed writer ownership lost before publication")
+                return self.manifests.finish(
+                    identifier, full_sha.hexdigest(), int(time.time()),
+                    writer_token=token,
+                )
+            except BaseException as exc:
+                try:
+                    self.manifests.fail(identifier, type(exc).__name__,
+                                        int(time.time()), writer_token=token)
                 except Exception:
                     pass
                 raise
