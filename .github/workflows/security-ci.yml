@@ -53,7 +53,9 @@ jobs:
       - name: Docker Compose config
         env:
           TELEDRIVE_WEB_PASSWORD: ci-only-not-a-real-secret
-        run: docker compose config --quiet
+        run: |
+          docker compose config --quiet
+          docker compose --profile s3 config --quiet
 
       - name: Docker build
         run: docker build --pull -t teledrive-security-ci .
@@ -95,6 +97,31 @@ jobs:
             echo "Unauthenticated API access unexpectedly succeeded" >&2
             exit 1
           fi
+      - name: S3 gateway Docker container smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker run -d --rm \
+            -p 127.0.0.1:19000:9000 \
+            teledrive-security-ci \
+            uvicorn web.s3:app --host 0.0.0.0 --port 9000 --workers 1)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          ready=0
+          for i in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:19000/__health > /tmp/s3-health.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          python - <<'PY'
+          import json
+          with open("/tmp/s3-health.json", encoding="utf-8") as f:
+              assert json.load(f) == {"ok": True}
+          PY
+
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
