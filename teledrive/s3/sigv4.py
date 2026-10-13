@@ -200,8 +200,15 @@ def verify_header_signature(request: Request, lookup_secret, permission: str, *,
         raise SigV4Error("RequestTimeTooSkewed", "Request timestamp outside 15-minute window")
     payload = request.headers.get("x-amz-content-sha256", "")
     if not re.fullmatch(r"[0-9a-f]{64}", payload):
-        if request.method not in {"GET", "HEAD", "DELETE"} or payload != "UNSIGNED-PAYLOAD":
+        if payload != "UNSIGNED-PAYLOAD":
             raise SigV4Error("XAmzContentSHA256Mismatch", "Signed SHA-256 payload required")
+        if request.method in {"PUT", "POST"} and not (
+            "content-md5" in signed or "x-amz-checksum-sha256" in signed
+        ):
+            raise SigV4Error(
+                "XAmzContentSHA256Mismatch",
+                "Unsigned upload requires a signed Content-MD5 or SHA-256 checksum",
+            )
     canonical = (
         f"{request.method}\n{_canonical_path(request)}\n"
         f"{_canonical_query(request.scope.get('query_string', b''))}\n"
