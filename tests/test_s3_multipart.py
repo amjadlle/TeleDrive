@@ -334,3 +334,17 @@ def test_list_multipart_uploads_is_owner_scoped_and_paginated(service):
     assert [e.findtext(NS+"Key") for e in ET.fromstring(after_abort.content).findall(NS+"Upload")] == [
         "a.bin", "c.bin"
     ]
+
+
+def test_bucket_delete_rejects_uncommitted_multipart_history(service):
+    setup(service)
+    uid = begin(service)
+    before = signed(service, "DELETE", "/backup-bucket")
+    assert before.status_code == 409
+    assert xml_text(before, "Code") == "BucketNotEmpty"
+    # Upload remains usable after failed bucket deletion.
+    assert signed(service, "GET", "/backup-bucket?uploads").status_code == 200
+    assert signed(service, "DELETE", f"/backup-bucket/asset.bin?uploadId={uid}").status_code == 204
+    # Abort retains orphan-cleanup audit metadata; still not safe to delete.
+    after = signed(service, "DELETE", "/backup-bucket")
+    assert after.status_code == 409 and xml_text(after, "Code") == "BucketNotEmpty"
