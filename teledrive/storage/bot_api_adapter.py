@@ -73,6 +73,24 @@ class BotFileIndex:
         self.db.commit()
 
 
+class _TelegramHTTPSRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow an untrusted or plaintext redirect containing bot credentials."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlsplit(newurl)
+        if (parsed.scheme.lower() != "https"
+                or parsed.hostname != "api.telegram.org"
+                or parsed.port not in (None, 443)
+                or parsed.username is not None or parsed.password is not None):
+            raise BotApiError("Telegram redirected to a disallowed destination")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _telegram_https_opener():
+    # Use a private opener, rather than modifying urllib's global handlers.
+    return urllib.request.build_opener(_TelegramHTTPSRedirects())
+
+
 class BotApiClient:
     """Small stdlib HTTPS gateway. Token never enters exceptions or logs."""
 
@@ -111,7 +129,7 @@ class BotApiClient:
             url, data=body, headers={"Content-Type": content_type}, method="POST"
         )
         try:
-            with urllib.request.urlopen(request, timeout=90) as response:
+            with _telegram_https_opener().open(request, timeout=90) as response:
                 raw = response.read(2 * 1024 * 1024 + 1)
             if len(raw) > 2 * 1024 * 1024:
                 raise BotApiError(f"Bot API {method} response exceeded size limit")
