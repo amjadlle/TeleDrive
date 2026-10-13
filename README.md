@@ -421,6 +421,27 @@ Do not embed the master encryption key or S3 secret key in a shared URL.
 Presigned URLs themselves grant temporary access and must not be logged,
 pasted in issues or sent over insecure transport.
 
+### Inspect Telegram references before any physical GC
+
+WebUI **API Management → Telegram storage reference audit** now exposes a
+root-admin-only, read-only inventory. It includes current object heads,
+immutable CopyObject aliases, historical manifests and staged multipart
+parts. It makes **no deletion decisions** and cannot remove Telegram media.
+
+The same inventory is accessible as JSON:
+
+~~~bash
+curl -u "ADMIN_USER:ADMIN_PASSWORD" \
+  "http://127.0.0.1:8080/api/v1/admin/storage/gc-audit?limit=100"
+~~~
+
+The response deliberately reports `physical_deletion_enabled: false`
+and `eligible_for_deletion: 0`. Historical manifests and CopyObject
+aliases remain protected until a retention-aware, version-aware GC planner
+and live Telegram message ownership verifier can prove deletion safe.
+Do not treat an unreferenced current object head as disposable media:
+CopyObject may still depend on its original Telegram messages.
+
 ### Recover a stale S3 multipart completion (root admin only)
 
 An interrupted `CompleteMultipartUpload` can be retried after reclaiming
@@ -458,13 +479,12 @@ operation. Use HTTPS or a trusted VPN for any remote admin traffic.
   default. Staged Telegram messages are never deleted during recovery.
   Pre-fencing legacy `completing` rows that have no lease remain blocked
   for manual investigation (never guessed safe to recover).
-- **Orphan/obsolete Telegram parts and CopyObject aliases:** Abort, part
-  replacement, unselected parts and object overwrites retain immutable chunk
-  journals. CopyObject also shares existing Telegram messages through an
-  immutable alias mapping. Future mark-and-sweep GC MUST preserve every
-  source referenced by a live alias, check historical manifests and apply
-  retention before verifying and deleting remote messages. GC is intentionally
-  disabled rather than risk losing copied data.
+- **Orphan/obsolete Telegram parts and CopyObject aliases:** The
+  non-destructive GC reference audit is implemented in the WebUI and admin
+  API. It accounts for CopyObject, historical manifests and multipart parts,
+  but **physical deletion remains disabled**. Future mark-and-sweep GC must
+  preserve all copied-object source aliases, obey immutable history/version
+  retention, and verify the actual Telegram message before deletion.
 - **Physical lifecycle/versioning:** DeleteObject currently unlinks the
   current pointer; historical data remains and is not yet exposed through
   complete S3 ListObjectVersions / restore APIs.
