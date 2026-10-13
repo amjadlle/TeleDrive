@@ -78,6 +78,37 @@ def _headers(item, etag: str | None = None,
     return headers
 
 
+def _reject_unimplemented_write_options(request: Request) -> None:
+    """Fail closed for dangerous S3 semantics we cannot yet guarantee.
+
+    In particular, acknowledging encryption, retention, ACL or a storage
+    class without implementing its semantics would mislead backup clients.
+    Do not stage bytes or contact Telegram when any option is present.
+    """
+    rejected = {
+        "x-amz-acl", "x-amz-grant-read", "x-amz-grant-write",
+        "x-amz-grant-full-control", "x-amz-grant-read-acp",
+        "x-amz-grant-write-acp",
+        "x-amz-server-side-encryption",
+        "x-amz-server-side-encryption-aws-kms-key-id",
+        "x-amz-server-side-encryption-context",
+        "x-amz-server-side-encryption-customer-algorithm",
+        "x-amz-server-side-encryption-customer-key",
+        "x-amz-server-side-encryption-customer-key-md5",
+        "x-amz-bucket-key-enabled", "x-amz-storage-class",
+        "x-amz-website-redirect-location", "x-amz-object-lock-mode",
+        "x-amz-object-lock-retain-until-date", "x-amz-object-lock-legal-hold",
+        "x-amz-request-payer", "x-amz-trailer",
+        "x-amz-decoded-content-length",
+    }
+    if (any(name in request.headers for name in rejected)
+            or request.headers.get("content-encoding", "").lower() == "aws-chunked"):
+        raise SigV4Error(
+            "NotImplemented",
+            "S3 encryption, retention, ACL, storage class or aws-chunked semantics unsupported",
+        )
+
+
 def _verify_upload_sha256(request: Request, digest: bytes) -> None:
     """Verify actual bytes against checksum committed to the signed request.
 
@@ -387,6 +418,8 @@ async def _handle(request: Request):
         db = db_connect()
         store = S3CredentialStore(db, master)
         owner = verify_header_signature(request, store.resolve, action)
+        if request.method in {"PUT", "POST"}:
+            _reject_unimplemented_write_options(request)
         inline_tags = _initial_tags(request, owner, store) if (
             separator and request.method == "PUT" and not is_object_tagging
         ) else None
