@@ -28,6 +28,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from teledrive import uploader
 from teledrive.db import redact_database_url
 from teledrive.api_keys import ApiKeyStore
+from teledrive.s3.credentials import S3CredentialStore, load_master_key, DEFAULT_PERMISSIONS
 from teledrive.storage.manifest import ManifestStore
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.engine import TelegramObjectStorage
@@ -525,6 +526,12 @@ class KeyCreateRequest(BaseModel):
     expires_at: int | None = Field(default=None, description="Optional Unix expiry time")
 
 
+class S3KeyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    permissions: list[str] = Field(default_factory=lambda: list(DEFAULT_PERMISSIONS))
+    expires_at: int | None = None
+
+
 class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
@@ -783,6 +790,58 @@ def rotate_api_key(identifier: str, request: Request, _: None = Depends(require_
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"id": key.id, "token": key.value, "prefix": key.prefix, "scopes": key.scopes}
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/admin/s3-credentials", tags=["API keys"],
+         summary="List S3 access key metadata (secrets never returned)")
+def list_s3_credentials(_: None = Depends(require_auth)):
+    conn = db_connect()
+    try:
+        try:
+            return {"credentials": S3CredentialStore(conn, load_master_key()).list()}
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/s3-credentials", tags=["API keys"], status_code=201,
+          summary="Issue encrypted S3 access credentials (secret displayed once)")
+def issue_s3_credentials(request: Request, payload: S3KeyCreateRequest,
+                         _: None = Depends(require_auth)):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        try:
+            key = S3CredentialStore(conn, load_master_key()).create(
+                payload.name, payload.permissions, expires_at=payload.expires_at
+            )
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"id": key.id, "access_key": key.access_key,
+                "secret_key": key.secret_key, "permissions": key.permissions}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/v1/admin/s3-credentials/{identifier}", tags=["API keys"],
+            summary="Revoke an S3 access key immediately")
+def revoke_s3_credentials(request: Request, identifier: str,
+                          _: None = Depends(require_auth)):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        try:
+            changed = S3CredentialStore(conn, load_master_key()).revoke(identifier)
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if not changed:
+            raise HTTPException(404, "S3 key not found or already revoked")
+        return {"ok": True}
     finally:
         conn.close()
 
