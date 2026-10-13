@@ -629,10 +629,10 @@ operation. Use HTTPS or a trusted VPN for any remote admin traffic.
   current pointer; historical data remains and is not yet exposed through
   complete S3 ListObjectVersions / restore APIs.
 - **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT,
-  CopyObject, scoped DeleteObjects, conditional GET/HEAD and object/bucket
-  tagging now work. Still pending: atomic conditional writes/deletes,
+  CopyObject, scoped DeleteObjects, conditional GET/HEAD, object/bucket
+  tagging, signed user metadata and bucket CORS now work. Still pending: atomic conditional writes/deletes,
   presigned multipart POST, version-ID tagging, advanced S3 checksum variants,
-  SSE and user metadata, virtual-host-style requests, bucket policies
+  SSE, virtual-host-style requests, bucket policies
   and lifecycle.
 - **Operational tests:** S3 client compatibility matrix (AWS CLI, rclone,
   Cyberduck), restart during upload/complete, rate limits, account revocation,
@@ -672,7 +672,7 @@ transport, bucket/current-object catalog, and the initial separate SigV4 S3
 gateway with S3 credential management in both user interfaces.
 
 **Still not implemented:** automatic recovery of still-pending uploads,
-full S3 multipart and advanced S3 operations, real version listing,
+advanced multipart/S3 operations, real version listing,
 physical garbage collection of superseded live objects, full resume/job
 orchestration, and migration of legacy `files` records. The legacy folder
 uploader remains a separate workflow until it is migrated into the common
