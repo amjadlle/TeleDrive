@@ -22,8 +22,13 @@ def admin(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp, "WEB_USER", "testadmin")
     monkeypatch.setattr(webapp, "WEB_PASSWORD", "secure-auth-password")
     webapp.AUTH_FAILURES.clear()
-    with TestClient(webapp.app, base_url="http://localhost") as client:
+    # No ASGI lifespan: endpoint authorization contract is isolated from
+    # Docker startup paths (/config, /data) and Telegram scheduler.
+    client = TestClient(webapp.app, base_url="http://localhost")
+    try:
         yield client, url, key
+    finally:
+        client.close()
 
 
 def test_issuance_requires_basic_auth_csrf_and_one_time_secret(admin):
