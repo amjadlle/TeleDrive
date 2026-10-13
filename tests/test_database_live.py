@@ -78,3 +78,49 @@ def test_storage_manifest_round_trip_on_real_database(env_name):
         assert len(manifests.parts(ident)) == 1
     finally:
         connection.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_failed_chunk_cleanup_transaction_is_durable(env_name):
+    """Real DB: recovery transitions failed -> cleaned and cannot alter READY data."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    import asyncio
+    from hashlib import sha256
+    from uuid import uuid4
+    from teledrive.storage.manifest import ManifestStore, ChunkReference
+    from teledrive.storage.recovery import Discovery, RecoveryManager, UnsafeCleanup
+
+    class MissingRemote:
+        async def discover(self, identifier, *, scan_limit):
+            return Discovery((), True, 0)
+
+        async def probe(self, part, *, object_id):
+            return "missing"
+
+        async def delete_verified(self, part, *, object_id):
+            raise AssertionError("Deleted missing remote media")
+
+    older = int(time.time()) - 7200
+    connection = connect_database(url)
+    try:
+        manifests = ManifestStore(connection)
+        unique = uuid4().hex
+        object_id = manifests.begin("ci", f"cleanup/{unique}", 4, older)
+        part = ChunkReference(
+            ordinal=0, offset=0, size=4, sha256=sha256(b"data").hexdigest(),
+            account="ci", chat_id=123456, message_id=(int(unique[:8], 16) % 2000000000) + 1,
+        )
+        manifests.append(object_id, part, older)
+        manifests.fail(object_id, "simulated timeout", older)
+        service = RecoveryManager(manifests, MissingRemote(), min_age_seconds=3600)
+        preview = asyncio.run(service.cleanup(object_id))
+        assert preview.missing == 1 and preview.deleted == 0 and preview.dry_run
+        result = asyncio.run(service.cleanup(object_id, dry_run=False))
+        assert result.cleaned and result.deleted == 0
+        assert object_id not in [row[0] for row in manifests.interrupted()]
+        with pytest.raises(UnsafeCleanup):
+            asyncio.run(service.cleanup(object_id, dry_run=False))
+    finally:
+        connection.close()
