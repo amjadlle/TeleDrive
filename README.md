@@ -279,7 +279,7 @@ p = Path("config/s3-master.key")
 if p.exists():
     raise SystemExit("Refusing to overwrite existing master key")
 with p.open("xb") as stream:
-    stream.write(Fernet.generate_key() + b"\\n")
+    stream.write(Fernet.generate_key() + b"\n")
 p.chmod(0o600)
 PY
 ~~~
@@ -299,9 +299,15 @@ The gateway binds **127.0.0.1:9000** by default. For remote clients, put
 it behind an HTTPS reverse proxy or private VPN. Do not expose plaintext
 HTTP or the Telegram bot token to the internet.
 
-4. Open **WebUI → API Management → S3-compatible gateway**. Issue an S3
-Access Key ID and Secret Access Key, selecting only the required permissions.
-The secret is displayed once, encrypted in the DB and revocable immediately.
+4. Open **WebUI → API Management → S3-compatible gateway** or the Desktop
+**S3 Management** page. Issue an S3 Access Key ID and Secret Access Key,
+selecting only the required permissions. The secret is displayed once,
+encrypted in the DB and revocable immediately.
+
+On Desktop, set `TELEDRIVE_S3_MASTER_KEY_FILE` to the path of the **same**
+master key used by the Docker instance when sharing the same database.
+The app will refuse S3 key creation if the master key is missing. Desktop
+does not silently generate a different encryption key.
 
 Example using boto3 (simple path-style, signed-payload requests):
 
@@ -329,15 +335,15 @@ assert s3.get_object(Bucket="backup-bucket", Key="test.txt")["Body"].read() == b
 
 **Implemented now:** SigV4 header authentication (15-minute timestamp window),
 individually scoped and encrypted access keys, ListBuckets, CreateBucket,
-HeadBucket, ListObjectsV2 without delimiter, PutObject, GetObject, HeadObject,
+HeadBucket, ListObjectsV2 with delimiter/CommonPrefixes and signed pagination, PutObject, GetObject, HeadObject,
 DeleteObject (logical unlink), DeleteBucket (only physically empty),
 and single byte-range GET. Object writes are acknowledged only after Telegram
 upload and manifest commit.
 
 **Not yet supported:** multipart UploadPart/Complete/Abort, presigned URLs,
 virtual-host-style buckets, AWS chunked/unsigned PUT bodies, ACL/policy APIs,
-version listing, lifecycle, object lock, notifications, delimiter/common-prefix
-listing, replication, and full SDK interoperability. Unsupported operations
+version listing, lifecycle, object lock, notifications,
+replication, and full SDK interoperability. Unsupported operations
 return explicit S3 XML `NotImplemented`, not simulated success. S3 compatibility
 tests include botocore-signed HTTP requests and boto3 loopback integration.
 
@@ -358,12 +364,17 @@ Implemented in this phase:
 - Deterministic tests for corruption, missing chunks, interrupted upload, source mutation,
   chunk boundaries, empty files and SQLite restart; live PostgreSQL/MySQL tests.
 
-**Not yet implemented:** REST upload endpoints, the S3 gateway, API key
-management, automatic recovery of still-pending uploads, S3 multipart semantics,
-object deletion/versioning, or an automated migration of legacy `files`
-entries. This module is a foundation, not a production-ready S3 service.
-The legacy folder uploader continues to work independently until migration
-and shared job orchestration are added.
+**Implemented after Phase 1:** REST raw binary upload/download and HEAD,
+scoped REST API credentials, API Management in WebUI/Desktop, Telegram Bot
+transport, bucket/current-object catalog, and the initial separate SigV4 S3
+gateway with S3 credential management in both user interfaces.
+
+**Still not implemented:** automatic recovery of still-pending uploads,
+full S3 multipart and advanced S3 operations, real version listing,
+physical garbage collection of superseded live objects, full resume/job
+orchestration, and migration of legacy `files` records. The legacy folder
+uploader remains a separate workflow until it is migrated into the common
+object-service pipeline.
 
 ### Phase 2: conservative failure recovery and orphan cleanup
 
