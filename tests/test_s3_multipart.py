@@ -184,3 +184,94 @@ def test_list_parts_cursor_is_bounded_and_ordered(service):
     second = signed(service, "GET", f"/backup-bucket/asset.bin?uploadId={uid}&max-parts=1&part-number-marker=1")
     assert second.status_code == 200
     assert [p.findtext(NS+"PartNumber") for p in ET.fromstring(second.content).findall(NS+"Part")] == ["2"]
+
+
+def test_rejects_entity_expansion_in_s3_completion(service):
+    setup(service)
+    uid = begin(service)
+    etag = part(service, uid, 1, b"legitimate")
+    xml = (
+        b'<!DOCTYPE CompleteMultipartUpload [<!ENTITY x "bad">]>'
+        b'<CompleteMultipartUpload><Part><PartNumber>1</PartNumber>'
+        b'<ETag>&x;</ETag></Part></CompleteMultipartUpload>'
+    )
+    attempts_before = service[2].downloads
+    denied = signed(service, "POST", f"/backup-bucket/asset.bin?uploadId={uid}", xml)
+    assert denied.status_code == 400
+    assert xml_text(denied, "Code") == "MalformedXML"
+    assert service[2].downloads == attempts_before
+    # No state change: still completable with the valid part.
+    assert complete(service, uid, [(1, etag)]).status_code == 200
+
+
+def test_boto3_multipart_real_http_transport(service):
+    """The real boto3 API must parse S3 multipart XML and recover exact bytes."""
+    import socket
+    import threading
+    import time
+    import boto3
+    import uvicorn
+    from botocore.config import Config
+    import web.s3 as gateway
+
+    _, credential, remote, _, _ = service
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.listen(16)
+    server = uvicorn.Server(uvicorn.Config(
+        gateway.app, host="127.0.0.1", port=port, lifespan="off", log_level="error"
+    ))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        assert server.started
+        client = boto3.client("s3",
+            endpoint_url=f"http://127.0.0.1:{port}",
+            aws_access_key_id=credential.access_key,
+            aws_secret_access_key=credential.secret_key,
+            region_name="us-east-1",
+            config=Config(signature_version="s3v4",
+                s3={"addressing_style": "path", "payload_signing_enabled": True},
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+                retries={"max_attempts": 0}),
+        )
+        client.create_bucket(Bucket="sdk-multipart")
+        created = client.create_multipart_upload(Bucket="sdk-multipart", Key="large.bin")
+        uid = created["UploadId"]
+        payload1 = os.urandom(5*1024*1024)
+        payload2 = b"last-part" * 61
+        uploaded1 = client.upload_part(
+            Bucket="sdk-multipart", Key="large.bin", UploadId=uid,
+            PartNumber=1, Body=payload1,
+        )
+        uploaded2 = client.upload_part(
+            Bucket="sdk-multipart", Key="large.bin", UploadId=uid,
+            PartNumber=2, Body=payload2,
+        )
+        assert len(client.list_parts(
+            Bucket="sdk-multipart", Key="large.bin", UploadId=uid
+        )["Parts"]) == 2
+        before = remote.uploads
+        done = client.complete_multipart_upload(
+            Bucket="sdk-multipart", Key="large.bin", UploadId=uid,
+            MultipartUpload={"Parts": [
+                {"PartNumber": 1, "ETag": uploaded1["ETag"]},
+                {"PartNumber": 2, "ETag": uploaded2["ETag"]},
+            ]},
+        )
+        assert done["ETag"].endswith('-2"')
+        assert remote.uploads == before
+        response = client.get_object(Bucket="sdk-multipart", Key="large.bin")
+        assert response["Body"].read() == payload1 + payload2
+        assert client.head_object(Bucket="sdk-multipart", Key="large.bin")["ETag"] == done["ETag"]
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        sock.close()
+        assert not thread.is_alive()
