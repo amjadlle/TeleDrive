@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, parse_qs
 from xml.etree import ElementTree as ET
 
 import pytest
@@ -15,7 +15,7 @@ from teledrive.s3.credentials import S3CredentialStore
 
 def make_form(service, data, *, key="browser/upload.bin", seconds=300,
               missing=None, clauses=None, issued=None, key_prefix=None,
-              status=None):
+              status=None, redirect=None):
     credential = issued or service[1]
     current = datetime.now(timezone.utc).replace(microsecond=0)
     day = current.strftime("%Y%m%d")
@@ -28,6 +28,8 @@ def make_form(service, data, *, key="browser/upload.bin", seconds=300,
     }
     if status is not None:
         form["success_action_status"] = status
+    if redirect is not None:
+        form["success_action_redirect"] = redirect
     conditions = [{"bucket": "backup-bucket"}]
     conditions.extend(
         ["starts-with", "$key", key_prefix] if k == "key" and key_prefix is not None
@@ -54,6 +56,7 @@ def post(service, data, fields, *, bucket="backup-bucket"):
     return service[0].post(
         f"/{bucket}", data=fields,
         files={"file": ("blob.bin", data, "application/octet-stream")},
+        follow_redirects=False,
     )
 
 
@@ -292,6 +295,118 @@ def test_real_boto3_presigned_post_status_201_xml(service):
     assert response.status_code == 201, response.text
     assert ET.fromstring(response.content).findtext("{*}Key") == "sdk/status-201.bin"
     assert signed(service, "GET", "/backup-bucket/sdk/status-201.bin").content == data
+    assert service[2].uploads == 1
+
+
+
+@pytest.mark.parametrize("size", [0, 1, 65537])
+def test_browser_post_exact_signed_https_redirect_persists_before_303(service, size):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = hashlib.shake_256(str(size).encode()).digest(size)
+    key = f"browser/callback/{size}.bin"
+    callback = "https://callbacks.example.test/upload/done?tracking=abc%2F123"
+    response = post(service, data, make_form(
+        service, data, key=key, redirect=callback,
+    ))
+    assert response.status_code == 303, response.text
+    assert response.content == b""
+    etag = '"' + hashlib.sha256(data).hexdigest() + '"'
+    assert response.headers["etag"] == etag
+    url = urlsplit(response.headers["location"])
+    assert url.scheme == "https" and url.hostname == "callbacks.example.test"
+    assert url.path == "/upload/done"
+    assert parse_qs(url.query) == {
+        "tracking": ["abc/123"], "bucket": ["backup-bucket"],
+        "key": [key], "etag": [etag],
+    }
+    assert signed(service, "GET", "/backup-bucket/" + key).content == data
+    assert service[2].uploads == (0 if size == 0 else 1)
+
+
+def test_browser_post_https_callback_percent_encodes_non_ascii_key(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"redirect-unicode" * 313
+    key = "browser/callback/İstanbul & 東京?.bin"
+    response = post(service, data, make_form(
+        service, data, key=key, redirect="https://callbacks.example.test/complete",
+    ))
+    assert response.status_code == 303
+    assert parse_qs(urlsplit(response.headers["location"]).query)["key"] == [key]
+    assert "%C4%B0stanbul" in response.headers["location"]
+    assert "%26" in response.headers["location"]
+    assert service[2].uploads == 1
+
+
+@pytest.mark.parametrize("unsafe_url", [
+    "", "http://callbacks.example.test/done",
+    "//callbacks.example.test/done",
+    "javascript:alert(1)",
+    "https://user:secret@callbacks.example.test/done",
+    "https://callbacks.example.test/done#fragment",
+    "https://callbacks.example.test:badport/done",
+    "https://callbacks.example.test/done\\evil",
+    "https://callbacks.example.test/done\\r\\nSet-Cookie:bad=1",
+    "https://",
+])
+def test_browser_post_unsafe_signed_redirect_cannot_upload(service, unsafe_url):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"reject-unsafe-redirect"
+    response = post(service, data, make_form(
+        service, data, redirect=unsafe_url,
+    ))
+    assert response.status_code in (400, 403), response.text
+    assert service[2].uploads == 0
+
+
+def test_browser_post_callback_requires_exact_signed_url_not_status_override(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = b"authenticated-callback"
+    base = "https://callbacks.example.test/complete"
+    correct = make_form(service, data, redirect=base)
+    other = make_form(service, data)
+    altered = [
+        {**correct, "success_action_redirect": base + "?changed=1"},
+        {**other, "success_action_redirect": base},
+        {k: v for k, v in correct.items() if k != "success_action_redirect"},
+        make_form(service, data, redirect=base, status="201"),
+        {**correct, "success_action_status": "200"},
+    ]
+    for fields in altered:
+        response = post(service, data, fields)
+        assert response.status_code in (400, 403), response.text
+    assert service[2].uploads == 0
+
+
+def test_real_boto3_presigned_post_https_callback_and_payload_integrity(service):
+    import boto3
+    from botocore.config import Config
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = hashlib.shake_256(b"boto3-redirect").digest(128 * 1024 + 7)
+    checksum = base64.b64encode(hashlib.sha256(payload).digest()).decode()
+    callback = "https://callbacks.example.test/complete?request=43"
+    creds = service[1]
+    client = boto3.client(
+        "s3", endpoint_url="http://localhost:9000",
+        aws_access_key_id=creds.access_key, aws_secret_access_key=creds.secret_key,
+        region_name="us-east-1", config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+        ),
+    )
+    signed_form = client.generate_presigned_post(
+        Bucket="backup-bucket", Key="sdk/callback.bin",
+        Fields={"x-amz-checksum-sha256": checksum, "success_action_redirect": callback},
+        Conditions=[
+            {"x-amz-checksum-sha256": checksum},
+            {"success_action_redirect": callback},
+            ["content-length-range", 0, 8 * 1024 * 1024],
+        ],
+        ExpiresIn=120,
+    )
+    result = post(service, payload, signed_form["fields"])
+    assert result.status_code == 303, result.text
+    assert parse_qs(urlsplit(result.headers["location"]).query)["key"] == ["sdk/callback.bin"]
+    assert signed(service, "GET", "/backup-bucket/sdk/callback.bin").content == payload
     assert service[2].uploads == 1
 
 
