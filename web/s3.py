@@ -27,6 +27,7 @@ from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
 from teledrive.storage.catalog import BucketCatalog
+from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.manifest import ManifestStore
 from teledrive.storage.bot_api_adapter import BOT_RECOMMENDED_CHUNK_SIZE
@@ -471,6 +472,72 @@ async def _handle(request: Request):
                 return Response(status_code=200, headers={"ETag": '"' + tag + '"'})
             finally:
                 stage.unlink(missing_ok=True)
+
+        if request.method == "PUT" and request.headers.get("x-amz-copy-source") is not None:
+            # The source path must be signed. Otherwise a valid PUT signature
+            # could be replayed to copy a different private source object.
+            if "X-Amz-Algorithm" in request.query_params:
+                raise SigV4Error("NotImplemented", "Presigned CopyObject unsupported")
+            authorization = request.headers.get("authorization", "")
+            signed_headers = authorization.partition("SignedHeaders=")[2].split(",", 1)[0].split(";")
+            source_header = request.headers["x-amz-copy-source"]
+            if ("x-amz-copy-source" not in signed_headers
+                    or store.resolve(owner, "s3:GetObject") is None):
+                raise SigV4Error("AccessDenied", "Signed source and GetObject scope required")
+            qualifiers = (
+                "x-amz-copy-source-if-match", "x-amz-copy-source-if-none-match",
+            )
+            for condition in qualifiers:
+                if request.headers.get(condition) is not None and condition not in signed_headers:
+                    raise SigV4Error("AccessDenied", "Copy precondition must be signed")
+            unsupported_headers = (
+                "x-amz-copy-source-if-modified-since",
+                "x-amz-copy-source-if-unmodified-since",
+                "x-amz-copy-source-range", "x-amz-tagging",
+                "x-amz-server-side-encryption", "x-amz-storage-class",
+            )
+            if any(request.headers.get(name) is not None for name in unsupported_headers):
+                return _error("NotImplemented", "CopyObject option is unsupported", 501)
+            if request.headers.get("x-amz-metadata-directive", "COPY") != "COPY":
+                return _error("NotImplemented", "Metadata replacement is unsupported", 501)
+            if (request.headers.get("x-amz-metadata-directive") is not None
+                    and "x-amz-metadata-directive" not in signed_headers):
+                raise SigV4Error("AccessDenied", "Metadata directive must be signed")
+            if not source_header.startswith("/") or "?" in source_header:
+                return _error("InvalidArgument", "Copy source must be an object path without version selector", 400)
+            original_path = unquote(source_header[1:])
+            src_bucket, slash, src_key = original_path.partition("/")
+            if not slash or not src_bucket or not src_key:
+                return _error("InvalidArgument", "Invalid CopySource bucket/object key", 400)
+            if src_bucket not in catalog.list_buckets():
+                return _error("NoSuchBucket", "CopySource bucket does not exist", 404)
+            try:
+                source_item = catalog.get(src_bucket, src_key).item
+            except FileNotFoundError:
+                return _error("NoSuchKey", "CopySource object does not exist", 404)
+            existing_tag = MultipartStore(catalog).object_etag(source_item.id, source_item.sha256)
+            if_match = request.headers.get("x-amz-copy-source-if-match")
+            if_none_match = request.headers.get("x-amz-copy-source-if-none-match")
+            quoted_tag = '"' + existing_tag + '"'
+            if (if_match is not None and if_match not in (quoted_tag, "*")
+                    or if_none_match is not None and if_none_match in (quoted_tag, "*")):
+                return _error("PreconditionFailed", "CopySource ETag precondition failed", 412)
+            # CopyObject is a metadata-only operation and has no upload body.
+            # Consume streaming requests safely rather than trusting Content-Length.
+            async for block in request.stream():
+                if block:
+                    return _error("InvalidRequest", "CopyObject request must have no body", 400)
+            try:
+                result = copy_object(catalog, src_bucket, src_key, bucket, key)
+            except CopyConflict:
+                return _error("OperationAborted", "Concurrent destination mutation", 409)
+            copied = ET.Element("CopyObjectResult", xmlns=NAMESPACE)
+            ET.SubElement(copied, "LastModified").text = time.strftime(
+                "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
+            )
+            ET.SubElement(copied, "ETag").text = '"' + result.etag + '"'
+            return Response(ET.tostring(copied, encoding="utf-8", xml_declaration=True),
+                            media_type="application/xml", status_code=200)
 
         if request.method == "DELETE":
             catalog.remove_current(bucket, key)
