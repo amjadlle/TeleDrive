@@ -148,6 +148,7 @@ def test_real_telegram_unindexed_chunk_cleanup():
     pytest.param(65537, 32768, id="64KiB-plus-one"),
     pytest.param(1048593, 524288, id="1MiB-plus-17"),
     pytest.param(2 * 1024 * 1024 + 17, 1024 * 1024, id="2MiB-plus-17"),
+    pytest.param(3 * 1024 * 1024 + 31, 1024 * 1024, id="3MiB-plus-31"),
 ])
 def test_real_telethon_varied_payload_lengths_with_remote_readback(size, chunk_size):
     """Live user-account Telegram: SHA of every remote part and crossed ranges.
@@ -165,7 +166,9 @@ def test_real_telethon_varied_payload_lengths_with_remote_readback(size, chunk_s
         with tempfile.TemporaryDirectory(prefix="teledrive-user-size-matrix-") as folder:
             root = Path(folder)
             source = root / "source.bin"
-            expected = os.urandom(size)
+            # Binary 0x00/0xFF alternation supplements random payloads.
+            expected = ((bytes((0, 255)) * ((size + 1) // 2))[:size]
+                        if size == 65537 else os.urandom(size))
             source.write_bytes(expected)
             db_path = root / "manifest.db"
             conn = connect_database(str(db_path))
