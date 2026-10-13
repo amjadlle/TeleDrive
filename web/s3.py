@@ -29,6 +29,7 @@ from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.multipart import MultipartStore, MultipartError, MAX_PARTS
 from teledrive.s3.batch_delete import BatchDeleteError, MAX_XML_BYTES, parse_batch, verify_body
 from teledrive.s3.conditions import http_last_modified, read_precondition
+from teledrive.s3.write_conditions import check_write_precondition, WritePreconditionError
 from teledrive.s3.tagging import ObjectTagStore, BucketTagStore, TaggingError, validate_tags
 from teledrive.s3.cors import (BucketCORSStore, CORSError, MAX_CORS_XML_BYTES,
     parse_cors_xml, cors_xml, matching_rule, response_cors_headers)
@@ -368,13 +369,14 @@ async def _handle(request: Request):
                             and "delete" in request.query_params)
         if "delete" in request.query_params and not multi_delete:
             return _error("NotImplemented", "Unsupported DeleteObjects route", 501)
-        if request.method in ("PUT", "DELETE") and any(
-            name in request.headers for name in (
-                "if-match", "if-none-match", "if-modified-since", "if-unmodified-since"
-            )
-        ):
-            return _error("NotImplemented",
-                          "Conditional writes require atomic precondition support", 501)
+        if request.method in ("PUT", "DELETE"):
+            if any(name in request.headers for name in ("if-modified-since", "if-unmodified-since")):
+                return _error("NotImplemented", "Conditional write dates are unsupported", 501)
+            has_write_cond = any(name in request.headers for name in ("if-match", "if-none-match"))
+            simple_object = bool(separator and not request.query_params
+                                 and not request.headers.get("x-amz-copy-source"))
+            if has_write_cond and not simple_object:
+                return _error("NotImplemented", "Conditions are supported only for object PUT/DELETE", 501)
         mpu_bucket_list = bool(bucket and not separator and "uploads" in request.query_params
                                and request.method == "GET")
         mpu_start = bool(separator and "uploads" in request.query_params and request.method == "POST")
@@ -799,6 +801,12 @@ async def _handle(request: Request):
             finally:
                 stage.unlink(missing_ok=True)
 
+        expected_head = None
+        if request.method in ("PUT", "DELETE") and not request.headers.get("x-amz-copy-source"):
+            expected_head = check_write_precondition(
+                request, catalog, bucket, key, delete=request.method == "DELETE"
+            )
+
         if request.method == "PUT" and request.headers.get("x-amz-copy-source") is not None:
             # The source path must be signed. Otherwise a valid PUT signature
             # could be replayed to copy a different private source object.
@@ -905,7 +913,22 @@ async def _handle(request: Request):
                             media_type="application/xml", status_code=200)
 
         if request.method == "DELETE":
-            catalog.remove_current(bucket, key)
+            try:
+                removed = catalog.remove_current(
+                    bucket, key,
+                    expected_generation=expected_head.generation if expected_head else None,
+                    expected_object_id=expected_head.object_id if expected_head else None,
+                )
+            except ValueError as exc:
+                if expected_head is not None:
+                    raise WritePreconditionError(
+                        "PreconditionFailed", "Object changed during conditional DELETE", 412
+                    ) from exc
+                raise
+            if expected_head is not None and not removed:
+                raise WritePreconditionError(
+                    "PreconditionFailed", "Object changed during conditional DELETE", 412
+                )
             return Response(status_code=204)
 
         if request.method == "PUT":
@@ -950,7 +973,18 @@ async def _handle(request: Request):
                 http_store.attach_uncommitted(item.id, http_properties)
                 if tag_store is not None:
                     tag_store.attach_uncommitted(item.id, inline_tags)
-                catalog.publish(item.id, now=int(time.time()))
+                try:
+                    catalog.publish(
+                        item.id, now=int(time.time()),
+                        expected_generation=expected_head.generation if expected_head else None,
+                        expected_object_id=expected_head.object_id if expected_head else None,
+                    )
+                except ValueError as exc:
+                    if expected_head is not None:
+                        raise WritePreconditionError(
+                            "PreconditionFailed", "Object changed during conditional PUT", 412
+                        ) from exc
+                    raise
                 return Response(status_code=200, headers={"ETag": '"' + item.sha256 + '"'})
             finally:
                 stage.unlink(missing_ok=True)
@@ -993,6 +1027,8 @@ async def _handle(request: Request):
         if partial:
             headers["Content-Range"] = f"bytes {start}-{end-1}/{item.size}"
         return StreamingResponse(stream(), status_code=206 if partial else 200, headers=headers)
+    except WritePreconditionError as exc:
+        return _error(exc.code, str(exc), exc.status)
     except BatchDeleteError as exc:
         return _error(exc.code, str(exc), exc.status)
     except CORSError as exc:
