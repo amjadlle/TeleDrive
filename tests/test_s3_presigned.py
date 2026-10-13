@@ -209,3 +209,31 @@ def test_presigned_unicode_key_and_mutated_expiration_fail_closed(service):
     invalid = client.get(forged)
     assert invalid.status_code == 403
     assert b"SignatureDoesNotMatch" in invalid.content
+
+
+def test_checksum_bound_presigned_create_once_rejects_replay(service):
+    """Signed If-None-Match prevents reuse of a valid presigned PUT URL.
+
+    A leaked still-valid URL must not silently overwrite the object after
+    its first successful, checksum-verified Telegram upload.
+    """
+    client, _, remote, _, _ = service
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"one-time-presigned-create"
+    checksum = base64.b64encode(hashlib.sha256(body).digest()).decode("ascii")
+    url = sdk(service).generate_presigned_url(
+        "put_object",
+        Params={"Bucket": "backup-bucket", "Key": "create-once.bin",
+                "ChecksumSHA256": checksum, "IfNoneMatch": "*"},
+        ExpiresIn=120,
+        HttpMethod="PUT",
+    )
+    headers = {"x-amz-checksum-sha256": checksum, "If-None-Match": "*"}
+    first = request_url(client, "PUT", url, content=body, headers=headers)
+    assert first.status_code == 200, first.text
+    count = remote.uploads
+    replay = request_url(client, "PUT", url, content=body, headers=headers)
+    assert replay.status_code == 412
+    assert b"PreconditionFailed" in replay.content
+    assert remote.uploads == count
+    assert signed(service, "GET", "/backup-bucket/create-once.bin").content == body
