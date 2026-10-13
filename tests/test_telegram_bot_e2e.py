@@ -1191,7 +1191,7 @@ def test_live_bot_accepted_upload_lost_ack_is_fenced_until_proven():
                 db.close()
                 db = connect_database(str(db_path))
                 transport = BotApiChunkTransport(
-                    real, BotFileIndex(db), chat_id=int(chat),
+                    WithholdOneAck(), BotFileIndex(db), chat_id=int(chat),
                     account="bot-live-lost-ack", min_upload_interval=1.1,
                 )
                 index = transport.index
@@ -1247,6 +1247,7 @@ def test_live_bot_accepted_upload_lost_ack_is_fenced_until_proven():
                 ).download_to_path(object_id, restored)
                 assert restored.read_bytes() == payload
                 assert len(db.connection.execute(select(_bot_files.c.message_id)).all()) == 2
+                assert len(sends) == 2
             finally:
                 try:
                     # Only this invocation's two positively known Telegram IDs.
@@ -1332,6 +1333,10 @@ def test_live_bot_bounded_mixed_binary_soak_sql_reopens_and_range_integrity():
                         db.close()
                         db = connect_database(str(db_path))
                         transport, engine = setup(db)
+                        # New transport instances do not share per-chat clocks.
+                        # Give the previously accepted channel post time to
+                        # settle rather than manufacturing a real flood limit.
+                        await asyncio.sleep(1.2)
                     content = (bytes((0, 255)) * ((size + 1) // 2))[:size] if n % 3 == 0 else os.urandom(size)
                     key = f"soak/İstanbul-{n}-{size}.bin"
                     source = root / f"source-{n}.bin"
