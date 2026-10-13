@@ -368,12 +368,43 @@ and full SDK interoperability. Unsupported operations return explicit S3 XML
 HTTP, a real boto3 client, multipart/no-reupload, ACL/owner isolation,
 wrong checksums, abandoned uploads, and live PostgreSQL/MySQL chunk moves.
 
+### Recover a stale S3 multipart completion (root admin only)
+
+An interrupted `CompleteMultipartUpload` can be retried after reclaiming
+an expired ownership lease. Check eligibility first:
+
+~~~bash
+curl -u "ADMIN_USER:ADMIN_PASSWORD" \
+  "http://127.0.0.1:8080/api/v1/admin/s3-multipart/stale?min_age_seconds=3600"
+~~~
+
+Then request a **non-destructive preview** of one upload:
+
+~~~bash
+curl -u "ADMIN_USER:ADMIN_PASSWORD" -H "X-TeleDrive-CSRF: 1" \
+  -H "Content-Type: application/json" \
+  -d '{"execute":false,"min_age_seconds":3600}' \
+  "http://127.0.0.1:8080/api/v1/admin/s3-multipart/UPLOAD_ID/recover"
+~~~
+
+Only if the preview reports `eligible: true`, repeat with
+`"execute":true` to return the upload to `active` so the original S3
+client can explicitly retry Complete or Abort. Recovery cannot run while
+the lease is fresh and never deletes Telegram messages or publishes data.
+The S3 credential holder is not allowed to bypass this root-admin-only
+operation. Use HTTPS or a trusted VPN for any remote admin traffic.
+
 ### Kalan riskler ve yapılması gerekenler (S3 denetimi)
 
-- **Stale multipart completions:** A process killed during validation can
-  leave an upload in `completing`. Parts remain durably stored in Telegram,
-  but operator-controlled recovery with writer fencing is needed before
-  re-enabling or aborting that upload. Do not automatically delete its chunks.
+- **Stale multipart completions (recovery implemented):** Each in-progress
+  Complete has a renewable SQL lease with an unguessable ownership token.
+  Publishing the final object and moving Telegram chunk references requires
+  renewing that same token in the SQL transaction. An expired worker cannot
+  reset an upload claimed by another worker. Operator recovery is **dry-run
+  by default**, and requires the lease to be expired for at least 1 hour by
+  default. Staged Telegram messages are never deleted during recovery.
+  Pre-fencing legacy `completing` rows that have no lease remain blocked
+  for manual investigation (never guessed safe to recover).
 - **Orphan/obsolete Telegram parts:** Abort, part replacement, unselected
   parts, and object overwrite can leave unreferenced Telegram messages.
   Verified mark-and-sweep GC with retention, a dry-run preview and explicit
