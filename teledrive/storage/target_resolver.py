@@ -25,6 +25,7 @@ async def resolve_telegram_target(
         matches = []
         async for dialog in client.iter_dialogs():
             if (dialog.is_channel and not dialog.is_group
+                    and not getattr(dialog.entity, "username", None)
                     and dialog.name.casefold() == name.casefold()):
                 matches.append(dialog.entity)
                 if len(matches) > 1:
