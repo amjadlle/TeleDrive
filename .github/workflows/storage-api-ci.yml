@@ -8,6 +8,10 @@ on:
       - feature/docker-webui-multiaccount
     paths:
       - "teledrive/api_keys.py"
+      - "teledrive/db.py"
+      - "teledrive/uploader.py"
+      - "tests/test_legacy_bridge.py"
+      - "tests/test_legacy_import_admin.py"
       - "teledrive/storage/**"
       - "teledrive/s3/**"
       - "web/**"
@@ -22,6 +26,10 @@ on:
   pull_request:
     paths:
       - "teledrive/api_keys.py"
+      - "teledrive/db.py"
+      - "teledrive/uploader.py"
+      - "tests/test_legacy_bridge.py"
+      - "tests/test_legacy_import_admin.py"
       - "teledrive/storage/**"
       - "teledrive/s3/**"
       - "web/**"

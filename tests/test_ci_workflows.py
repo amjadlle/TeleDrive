@@ -182,3 +182,22 @@ def test_status_audit_rechecks_every_filtered_release_workflow():
         for event in ("push", "pull_request"):
             assert "docs/IMPLEMENTATION_STATUS.md" in triggers[event]["paths"]
     assert "docs/IMPLEMENTATION_STATUS.md" in workflow("release.yml")["on"]["push"]["paths"]
+
+
+def test_storage_ci_retriggers_when_legacy_migration_or_db_lease_contract_changes():
+    # A green CI for a different SHA must not be mistaken for passing the
+    # updated legacy migration tests or the SQL lease implementation.
+    events = workflow("storage-api-ci.yml")["on"]
+    for event in ("push", "pull_request"):
+        paths = set(events[event]["paths"])
+        assert {
+            "teledrive/db.py",
+            "teledrive/uploader.py",
+            "tests/test_legacy_bridge.py",
+            "tests/test_legacy_import_admin.py",
+        } <= paths
+    command = "\\n".join(
+        x.get("run", "") for x in workflow("storage-api-ci.yml")["jobs"]["storage-api"]["steps"]
+    )
+    assert "tests/test_legacy_bridge.py" in command
+    assert "tests/test_legacy_import_admin.py" in command
