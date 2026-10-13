@@ -1,0 +1,51 @@
+name: Telegram Bot Storage E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/docker-webui-multiaccount
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-bot-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  telegram-bot-roundtrip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TELEDRIVE_E2E_BOT_TOKEN: ${{ secrets.TELEDRIVE_E2E_BOT_TOKEN }}
+      TELEDRIVE_E2E_BOT_CHAT_ID: ${{ vars.TELEDRIVE_E2E_BOT_CHAT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Check Bot E2E configuration
+        shell: bash
+        id: configured
+        run: |
+          if [[ -z "$TELEDRIVE_E2E_BOT_TOKEN" || -z "$TELEDRIVE_E2E_BOT_CHAT_ID" ]]; then
+            echo "::notice::Bot E2E not configured; add TELEDRIVE_E2E_BOT_TOKEN secret and TELEDRIVE_E2E_BOT_CHAT_ID variable."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up Python
+        if: steps.configured.outputs.enabled == 'true'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install storage dependencies
+        if: steps.configured.outputs.enabled == 'true'
+        run: |
+          python -m pip install -e .
+          python -m pip install pytest
+      - name: Real bot upload retrieval checksum range and cleanup
+        if: steps.configured.outputs.enabled == 'true'
+        run: python -m pytest -q tests/test_telegram_bot_e2e.py
