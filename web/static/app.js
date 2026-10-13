@@ -136,6 +136,23 @@ async function loadS3Recovery(){
 }
 $('#refreshS3Recovery').onclick=loadS3Recovery;
 
+$('#runGCAudit').onclick=async()=>{
+  const target=$('#gcAuditSummary');
+  target.textContent='Auditing references…';
+  try{
+    const d=await api('/api/v1/admin/storage/gc-audit?limit=100');
+    target.textContent=[
+      'Telegram messages: '+d.total_telegram_messages,
+      'Stored manifests: '+d.total_manifests,
+      'Current object heads: '+d.live_object_heads,
+      'CopyObject aliases: '+d.copy_aliases,
+      'Multipart part references: '+d.multipart_parts,
+      'Deletion-eligible: '+d.eligible_for_deletion,
+      'Protected chunk owners shown: '+d.protected_chunks.length+(d.truncated?' (list truncated)':''),
+      'Physical deletion disabled: '+(!d.physical_deletion_enabled?'yes':'NO')
+    ].join('\n');
+  }catch(e){target.textContent='Audit failed: '+e.message;toast(e.message,true)}
+};
 function hideS3Secret(){
   $('#s3NewSecret').value='';$('#s3NewAccess').value='';$('#createdS3Card').style.display='none';
 }
