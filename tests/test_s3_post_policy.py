@@ -115,9 +115,14 @@ def test_browser_post_rejects_unsigned_extra_and_duplicate_fields(service):
     form = make_form(service, body)
     assert post(service, body, {**form, "x-amz-meta-hijack": "yes"}).status_code == 400
     assert post(service, body, {**form, "key": "prefix/"+"$"+"{filename}"}).status_code == 400
-    duplicate = list(form.items()) + [("key", form["key"])]
-    response = service[0].post("/backup-bucket", data=duplicate,
-                               files={"file": ("payload.bin", body)})
+    duplicate = [(name, (None, value)) for name, value in form.items()]
+    duplicate += [
+        ("key", (None, form["key"])),
+        ("file", ("payload.bin", body, "application/octet-stream")),
+    ]
+    # HTTPX only accepts multi-valued *files* for duplicate multipart keys;
+    # passing a list as data creates an invalid stream, not an HTTP request.
+    response = service[0].post("/backup-bucket", files=duplicate)
     assert response.status_code == 400
     assert service[2].uploads == 0
 
