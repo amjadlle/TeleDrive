@@ -86,17 +86,17 @@ class BotApiClient:
         boundary = "teledrive-" + secrets.token_hex(12)
         output = bytearray()
         for key, value in fields.items():
-            output.extend(
-                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n"
-                f"{value}\r\n".encode("utf-8")
-            )
-        output.extend(
-            f"--{boundary}\r\nContent-Disposition: form-data; "
-            'name="document"; filename="chunk.bin"\r\n'
-            "Content-Type: application/octet-stream\r\n\r\n".encode("ascii")
-        )
+            output.extend((
+                f"--{boundary}\\r\\nContent-Disposition: form-data; name=\\"{key}\\"\\r\\n\\r\\n"
+                f"{value}\\r\\n"
+            ).encode("utf-8"))
+        output.extend((
+            f"--{boundary}\\r\\nContent-Disposition: form-data; "
+            'name="document"; filename="chunk.bin"\\r\\n'
+            "Content-Type: application/octet-stream\\r\\n\\r\\n"
+        ).encode("ascii"))
         output.extend(source.read_bytes())
-        output.extend(f"\r\n--{boundary}--\r\n".encode("ascii"))
+        output.extend(f"\\r\\n--{boundary}--\\r\\n".encode("ascii"))
         return bytes(output), f"multipart/form-data; boundary={boundary}"
 
     def _call_sync(self, method: str, fields: dict[str, Any],
