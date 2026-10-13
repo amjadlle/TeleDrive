@@ -5,7 +5,7 @@ function toast(msg,bad=false){const e=$('#toast');e.textContent=msg;e.className=
 function fmtTs(v){return v?new Date(v*1000).toLocaleString():'-'}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 
-$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.page).classList.add('active');if(b.dataset.page==='queue')loadFiles('queue');if(b.dataset.page==='history')loadFiles('history');if(b.dataset.page==='settings')loadSettings();if(b.dataset.page==='api-management')loadKeys();if(b.dataset.page==='logs')loadLogs()});
+$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.page).classList.add('active');if(b.dataset.page==='queue')loadFiles('queue');if(b.dataset.page==='history')loadFiles('history');if(b.dataset.page==='settings')loadSettings();if(b.dataset.page==='api-management'){loadKeys();loadS3Keys();}if(b.dataset.page==='logs')loadLogs()});
 
 async function refreshDashboard(){
 try{
@@ -93,5 +93,46 @@ $('#keyScopes input[type=checkbox]').forEach(field=>field.onchange=()=>{
   if(field===admin&&admin.checked){$('#keyScopes input[type=checkbox]').forEach(x=>{if(x!==admin)x.checked=false})}
   else if(field.checked){admin.checked=false}
 });
+
+
+async function loadS3Keys(){
+  try {
+    const data=await api('/api/v1/admin/s3-credentials');
+    $('#s3KeysRows').innerHTML=(data.credentials||[]).map(k=>{
+      const state=k.revoked?'Revoked':(k.expires_at&&k.expires_at<=Date.now()/1000?'Expired':'Active');
+      return '<tr><td>'+esc(k.name)+'</td><td><code>'+esc(k.access_key)+'</code></td><td>'+esc((k.permissions||[]).join(', '))+'</td><td>'+fmtTs(k.created_at)+'</td><td>'+state+'</td><td><button class="btn danger compact s3-revoke" data-id="'+esc(k.id)+'" '+(state==='Revoked'?'disabled':'')+'>Revoke</button></td></tr>';
+    }).join('');
+    $('.s3-revoke').forEach(b=>b.onclick=async()=>{
+      if(!confirm('Revoke this S3 credential immediately? Connected clients will be denied.'))return;
+      try{await api('/api/v1/admin/s3-credentials/'+encodeURIComponent(b.dataset.id),{method:'DELETE'});toast('S3 key revoked');await loadS3Keys()}catch(e){toast(e.message,true)}
+    });
+  }catch(e){$('#s3KeysRows').textContent='S3 key storage unavailable: '+e.message}
+}
+function hideS3Secret(){
+  $('#s3NewSecret').value='';$('#s3NewAccess').value='';$('#createdS3Card').style.display='none';
+}
+$('#createS3Key').onclick=async()=>{
+  hideS3Secret();
+  const permissions=$('#s3Permissions input[type=checkbox]:checked').map(x=>x.value);
+  const expiry=$('#s3KeyExpiry').value;
+  try{
+    const k=await api('/api/v1/admin/s3-credentials',{method:'POST',body:JSON.stringify({
+      name:$('#s3KeyName').value.trim(),permissions,
+      expires_at:expiry?Math.floor(new Date(expiry).getTime()/1000):null
+    })});
+    $('#s3NewAccess').value=k.access_key;
+    $('#s3NewSecret').value=k.secret_key;
+    $('#createdS3Card').style.display='block';
+    $('#s3KeyName').value='';
+    toast('S3 credential created; copy the secret now');
+    await loadS3Keys();
+  }catch(e){toast(e.message,true)}
+};
+$('#refreshS3Keys').onclick=loadS3Keys;
+$('#hideS3Credentials').onclick=hideS3Secret;
+$('#copyS3Credentials').onclick=async()=>{
+  const text='AWS_ACCESS_KEY_ID='+$('#s3NewAccess').value+'\nAWS_SECRET_ACCESS_KEY='+$('#s3NewSecret').value;
+  try{await navigator.clipboard.writeText(text);toast('S3 keys copied')}catch(e){toast('Clipboard unavailable; select and copy manually',true)}
+};
 
 refreshDashboard();setInterval(refreshDashboard,3000);
