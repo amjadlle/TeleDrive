@@ -1090,9 +1090,17 @@ def storage_operations_health(_: None = Depends(require_auth)):
         completing = MultipartStore(catalog).stale_completions(now=now, limit=1000)
         gc = StorageGCInventory(catalog.manifests).inspect()
         from teledrive.storage.bot_api_adapter import BotFileIndex
-        unjournaled_bot_acks = BotFileIndex(conn).unjournaled_count()
+        bot_index = BotFileIndex(conn)
+        unjournaled_bot_acks = bot_index.unjournaled_count()
+        unresolved_bot_sends = bot_index.unresolved_count()
         states = {state: int(count) for state, count in counts}
         alerts = []
+        if unresolved_bot_sends:
+            alerts.append({
+                "code": "unresolved_bot_sends", "severity": "critical",
+                "count": unresolved_bot_sends,
+                "message": "Bot sends have unknown acceptance; do not retry until owner-verified reconciliation",
+            })
         if unjournaled_bot_acks:
             alerts.append({
                 "code": "unjournaled_bot_acks", "severity": "warning",
@@ -1131,6 +1139,7 @@ def storage_operations_health(_: None = Depends(require_auth)):
             "stale_pending_sample_count": len(pending),
             "stale_multipart_sample_count": len(completing),
             "unjournaled_bot_ack_count": unjournaled_bot_acks,
+            "unresolved_bot_send_count": unresolved_bot_sends,
             "samples_truncated": truncated,
             "telegram_messages_retained": gc.total_telegram_messages,
             "live_object_heads": gc.live_object_heads,
