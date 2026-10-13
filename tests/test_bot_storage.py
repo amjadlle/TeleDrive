@@ -240,3 +240,41 @@ def test_missing_telegram_document_and_missing_file_path_fail_closed(storage, tm
 
     with pytest.raises(BotApiError, match="no download path"):
         run(transport.download(part, tmp_path / "no-file"))
+
+
+def test_bot_uploads_are_paced_per_channel(tmp_path):
+    import time
+
+    class TimedBot(FakeBotApi):
+        def __init__(self):
+            super().__init__()
+            self.sent_at = []
+
+        async def call(self, method, fields, source=None):
+            if method == "sendDocument":
+                self.sent_at.append(time.monotonic())
+            return await super().call(method, fields, source)
+
+    database = connect_database(str(tmp_path / "rate-index.db"))
+    api = TimedBot()
+    transport = BotApiChunkTransport(
+        api, BotFileIndex(database), chat_id=api.chat_id,
+        min_upload_interval=0.03,
+    )
+    chunk = tmp_path / "chunk.bin"
+    chunk.write_bytes(b"tiny")
+    try:
+        run(transport.upload(chunk, object_id="rate-test", ordinal=0, checksum="a" * 64))
+        run(transport.upload(chunk, object_id="rate-test", ordinal=1, checksum="b" * 64))
+        assert len(api.sent_at) == 2
+        assert api.sent_at[1] - api.sent_at[0] >= 0.025
+    finally:
+        database.close()
+
+
+def test_bot_upload_interval_validation(storage):
+    database, api, _, _ = storage
+    with pytest.raises(ValueError, match="interval"):
+        BotApiChunkTransport(
+            api, BotFileIndex(database), chat_id=api.chat_id, min_upload_interval=-1,
+        )
