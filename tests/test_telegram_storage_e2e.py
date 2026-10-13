@@ -43,7 +43,11 @@ def test_real_telegram_upload_download_and_range():
             try:
                 if not await client.is_user_authorized():
                     raise RuntimeError("E2E StringSession is expired or not authorized")
-                target = await resolve_telegram_target(client, os.getenv("TELEDRIVE_E2E_TARGET"))
+                target = await resolve_telegram_target(
+                    client,
+                    os.getenv("TELEDRIVE_E2E_TARGET"),
+                    os.getenv("TELEDRIVE_E2E_CHANNEL_NAME"),
+                )
                 backend = TelegramObjectStorage(
                     store, TelethonChunkTransport({"ci": (client, target)}),
                     chunk_size=2048,
