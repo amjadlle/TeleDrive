@@ -130,7 +130,6 @@ def test_real_rclone_sync_and_integrity(live_s3, tmp_path):
         "RCLONE_CONFIG_TD_REGION": "us-east-1",
         "RCLONE_CONFIG_TD_FORCE_PATH_STYLE": "true",
         "RCLONE_CONFIG_TD_NO_CHECK_BUCKET": "true",
-        "RCLONE_CONFIG_TD_DISABLE_CHECKSUM": "true",
         "RCLONE_CONFIG": str(tmp_path / "rclone.conf"),
     })
     (tmp_path / "rclone.conf").write_text("", encoding="utf-8")
