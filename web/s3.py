@@ -344,6 +344,7 @@ async def _handle(request: Request):
     except SigV4Error as exc:
         return _error(exc.code, exc.message, {
             "RequestTimeTooSkewed": 403, "NotImplemented": 501,
+            "InvalidArgument": 400,
             "XAmzContentSHA256Mismatch": 400, "InvalidRange": 416,
         }.get(exc.code, 403))
     except FileNotFoundError:
