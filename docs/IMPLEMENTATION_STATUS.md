@@ -52,14 +52,19 @@ every workflow at the release SHA.
 
 ## P1 — completeness after P0
 
-- [ ] **P1.1:** Heartbeats, fencing and explicit abandonment of stale
-  PENDING uploads with dry-run-first Telegram evidence checks.
-- [ ] **P1.2:** Persistent upload queue/job resume; reconcile the legacy
-  folder uploader with the Telegram-only immutable object pipeline.
-- [ ] **P1.3:** Version listing/restore, conditional multipart Complete,
-  advanced checksums and presigned multipart workflows (fail closed until safe).
-- [ ] **P1.4:** Operator recovery controls, metrics, alerts, migrations,
-  backup/restore runbooks and mandatory branch protection checks.
+- [x] **P1.1 SQL metadata safety:** heartbeat, fencing, stale PENDING
+  preview and explicit abandonment are implemented; remote orphan
+  identification remains separately open.
+- [ ] **P1.2 Legacy integration:** durable job queue, verified chunk resume
+  and worker restart are implemented; integrating the legacy folder
+  uploader with this pipeline remains outstanding.
+- [ ] **P1.3 Advanced S3 parity:** published-only version listing/restore,
+  conditional and presigned checksum-bound Complete, version tagging,
+  historical CopySource and common checksums are implemented; S3 delete
+  markers, CRC32C/CRC64 and generic presigned POST remain outstanding.
+- [ ] **P1.4 Operations:** operator controls, metrics/alerts, SQLite
+  backup/verification and runbooks are implemented; repository protection,
+  cross-platform migrations and live-remote DR drills remain outstanding.
 
 ## P2 — advanced functionality
 
@@ -206,8 +211,8 @@ verification and explicit retention approvals are implemented.
   verified Telegram transport. Deleted current pointers do not hide
   previous published versions.
 - Unpublished READY staging manifests and unknown IDs fail with
-  NoSuchVersion. Version-specific DELETE, tagging, CopySource and AWS
-  `ListObjectVersions` remain unsupported until full safe semantics exist.
+  NoSuchVersion. Version-specific tagging, CopySource and limited
+  ListObjectVersions now work; delete markers and version DELETE remain open.
 
 
 ## Consolidated remaining work — after the current P1/P2 implementation
@@ -225,15 +230,13 @@ verification and explicit retention approvals are implemented.
   candidate planner and explicit current-HEAD migration preview.
 
 ### Still open — do not claim these are implemented
-- **P1:** True chunk-level resumable uploads, automatic Telegram orphan
-  reconciliation for Bot API, legacy folder uploader integration, durable
-  cross-worker source ownership/soak, full S3 ListObjectVersions/delete
-  markers, version-ID tagging, advanced checksums/presigned multipart POST,
-  comprehensive operator alerts/migration/backup-restore runbooks.
-- **P2:** Retention-approved physical mark/sweep GC with complete remote
-  ownership verification, S3 SSE/policies/lifecycle/virtual-host compatibility,
-  legacy record/data rebuild from Telegram, disaster-recovery rehearsals,
-  rate-limit/fault benchmarks and full installer staging acceptance.
+- **P1 remaining:** Telegram ACK-without-journal reconciliation for Bot
+  API, legacy folder uploader merge, multi-worker soak, S3 delete markers,
+  CRC32C/CRC64NVME, generic presigned multipart forms, migration and
+  real Telegram restoration exercises.
+- **P2 remaining:** audited retention-approved physical GC, S3 SSE/policy/
+  lifecycle semantics, DNS/TLS and external virtual-host/Cyberduck acceptance,
+  Telegram rebuild, live full DR/fault/rate-limit benchmarks and installers.
 - **Release:** Integration into `main` and a real version-tagged
   Linux/Windows release were not performed by this feature-branch CI.
 
@@ -243,7 +246,8 @@ verification and explicit retention approvals are implemented.
   `StorageUploadJobs.cancel(id)`; active, staged, publishing or completed
   jobs cannot be cancelled, protecting in-flight Telegram ownership and
   staged immutable manifests. Cancellation is metadata-only and persists
-  through SQL restart. Operator-facing cancellation API is still pending.
+  through SQL restart. Root-admin Basic/CSRF cancellation API and WebUI
+  action are implemented.
 
 ## P1.3 S3 ListObjectVersions (published-only subset)
 
@@ -279,7 +283,8 @@ verification and explicit retention approvals are implemented.
 - Native PostgreSQL/MySQL backup considerations, secrets and Telegram
   session coordination, and staging-only restore verification are in
   `docs/BACKUP_RESTORE.md`. Automated database restore rehearsal is still
-  **open**; this snapshot is not a substitute for Telegram payload access.
+  **open for live Telegram**; read-only metadata restore checks are implemented
+  but do not prove actual payload recovery.
 
 ## P1.3 independently verified SHA-1 / SHA-256 / MD5 checksums
 

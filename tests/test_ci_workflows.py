@@ -174,3 +174,11 @@ def test_final_release_acceptance_report_triggers_all_three_filtered_ci_jobs():
         events = workflow(name)["on"]
         assert "docs/P0_ACCEPTANCE.md" in events["push"]["paths"]
         assert "docs/P0_ACCEPTANCE.md" in events["pull_request"]["paths"]
+
+
+def test_status_audit_rechecks_every_filtered_release_workflow():
+    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+        triggers = workflow(name)["on"]
+        for event in ("push", "pull_request"):
+            assert "docs/IMPLEMENTATION_STATUS.md" in triggers[event]["paths"]
+    assert "docs/IMPLEMENTATION_STATUS.md" in workflow("release.yml")["on"]["push"]["paths"]

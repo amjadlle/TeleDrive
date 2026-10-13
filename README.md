@@ -632,9 +632,8 @@ s3.put_object(
 )
 ~~~
 
-`If-Modified-Since`/`If-Unmodified-Since` on writes and conditional
-multipart operations remain explicitly unsupported until their atomic
-semantics can be proven.
+`If-Modified-Since`/`If-Unmodified-Since` on writes and date-based conditional multipart operations remain unsupported;
+signed If-Match/If-None-Match multipart Complete uses an atomic head CAS.
 
 ### Real S3 client acceptance tests
 
@@ -689,8 +688,8 @@ currently rejected as unsupported instead of inventing AWS-like values.
 - **Physical lifecycle/versioning:** DeleteObject unlinks the current
   pointer; historical Telegram manifests remain. New published versions
   are indexed for REST history/restore and signed S3 historical GET/HEAD
-  with `?versionId=`. Version-specific DELETE and full AWS
-  ListObjectVersions/delete-marker semantics remain unsupported.
+  with `?versionId=`. Published-only ListObjectVersions, historical tagging and CopySource are
+  implemented; version-specific DELETE and full AWS delete markers remain unsupported.
 - **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT,
   CopyObject, scoped DeleteObjects, conditional GET/HEAD, object/bucket
   tagging, signed user metadata, bucket CORS and signed conditional
@@ -699,10 +698,10 @@ currently rejected as unsupported instead of inventing AWS-like values.
   DELETE supports If-Match; signed multipart Complete also supports
   If-Match or If-None-Match: * with atomic head fencing. Historical
   Telegram data is retained after failed CAS publication; no unsafe
-  automatic cleanup. Still pending:
-  presigned multipart POST, version-ID
-  tagging, advanced S3 checksum variants, SSE, virtual-host-style requests,
-  bucket policies and lifecycle. Standard SigV4 `UNSIGNED-PAYLOAD` PUTs
+  automatic cleanup. Limited signed presigned multipart Complete POST,
+  version-ID tagging, SHA-1 integrity checks and opt-in virtual-host routing
+  are now available. Still pending: generic multipart POST/form, CRC32C,
+  CRC64NVME, SSE, bucket policies and lifecycle. Standard SigV4 `UNSIGNED-PAYLOAD` PUTs
   are accepted **only when a signed Content-MD5 or SHA-256 checksum is verified**
   against the actual received bytes. The gateway recognizes only `private`
   canned ACL and `STANDARD` storage-tier hints: public access and archive
@@ -714,9 +713,9 @@ currently rejected as unsupported instead of inventing AWS-like values.
   `aws s3 sync --delete`, rclone list/copy/overwrite/delete and forced
   5 MiB multipart transfer with SHA-256 round-trip comparison. These are
   SDK/client-compatibility tests; they do **not** replace real Telegram E2E.
-  Cyberduck, true process-SIGKILL/soak, long-duration rate limits and
-  concurrent live-session revocation still need dedicated staging
-  acceptance. Real 5 MiB+ Telegram Bot multipart **has** passed with
+  Cyberduck, live-Telegram process-SIGKILL/soak, long-duration rate limits
+  and concurrent session revocation still need dedicated staging acceptance.
+  A separate fake-Telegram/real-SQL upload worker is SIGKILL-tested. Real 5 MiB+ Telegram Bot multipart **has** passed with
   `TELEDRIVE_E2E_MULTIPART=1` and end-to-end SQL restart, reparenting,
   checksum and test-only cleanup on the feature branch. Manual
   `Telegram Bot Storage E2E` can repeat this with `run_multipart=true`;
@@ -747,10 +746,10 @@ scoped REST API credentials, API Management in WebUI/Desktop, Telegram Bot
 transport, bucket/current-object catalog, and the initial separate SigV4 S3
 gateway with S3 credential management in both user interfaces.
 
-**Still not implemented:** byte-level continuation of partially journaled
-uploads, migration of legacy `files` records into the new object service,
-complete S3 ListObjectVersions/delete markers, and physical garbage
-collection of superseded live objects. The legacy folder uploader is still
+**Still not implemented:** resuming Telegram ACKs without a saved SQL chunk
+journal, legacy `files` migration, full S3 delete markers and retention-approved
+physical GC. Verified journaled chunks now resume without retransmission after
+reclaiming an expired writer lease; source and Telegram hashes are checked. The legacy folder uploader is still
 separate from the durable SQL-persisted object job queue; its merger into
 the object-service pipeline remains necessary.
 

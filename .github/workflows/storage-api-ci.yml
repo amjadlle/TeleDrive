@@ -16,6 +16,7 @@ on:
       - "tests/test_storage_*.py"
       - "tests/test_bot_storage.py"
       - "tests/test_s3_*.py"
+      - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/P0_ACCEPTANCE.md"
       - ".github/workflows/storage-api-ci.yml"
   pull_request:
@@ -29,6 +30,7 @@ on:
       - "tests/test_storage_*.py"
       - "tests/test_bot_storage.py"
       - "tests/test_s3_*.py"
+      - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/P0_ACCEPTANCE.md"
       - ".github/workflows/storage-api-ci.yml"
 

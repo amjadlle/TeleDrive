@@ -16,6 +16,7 @@ on:
       - "installer/**"
       - "requirements.txt"
       - "pyproject.toml"
+      - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/P0_ACCEPTANCE.md"
       - ".github/workflows/desktop-ci.yml"
   pull_request:
@@ -29,6 +30,7 @@ on:
       - "installer/**"
       - "requirements.txt"
       - "pyproject.toml"
+      - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/P0_ACCEPTANCE.md"
       - ".github/workflows/desktop-ci.yml"
 
