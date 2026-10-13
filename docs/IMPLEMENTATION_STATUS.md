@@ -269,3 +269,14 @@ verification and explicit retention approvals are implemented.
   signed `x-amz-copy-source` header. Only versions proven published to
   the exact source bucket/key are readable; private data cannot be copied
   with a guessed staged ID. No Telegram data is reuploaded or deleted.
+
+## P1.4 / P2 disaster recovery: consistent SQLite metadata snapshots
+
+- `scripts/backup_metadata.py` takes transactional online SQLite backups,
+  validates `PRAGMA integrity_check`, produces a SHA-256 fingerprint,
+  sets owner-only file permissions, refuses pre-existing destinations and
+  never overwrites production DB files.
+- Native PostgreSQL/MySQL backup considerations, secrets and Telegram
+  session coordination, and staging-only restore verification are in
+  `docs/BACKUP_RESTORE.md`. Automated database restore rehearsal is still
+  **open**; this snapshot is not a substitute for Telegram payload access.
