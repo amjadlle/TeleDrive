@@ -29,6 +29,7 @@ from teledrive import uploader
 from teledrive.db import redact_database_url
 from teledrive.api_keys import ApiKeyStore
 from teledrive.s3.credentials import S3CredentialStore, load_master_key, DEFAULT_PERMISSIONS
+from teledrive.s3.multipart import MultipartStore
 from teledrive.storage.manifest import ManifestStore
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.engine import TelegramObjectStorage
@@ -532,6 +533,11 @@ class S3KeyCreateRequest(BaseModel):
     expires_at: int | None = None
 
 
+class S3CompletionRecoveryRequest(BaseModel):
+    execute: bool = False
+    min_age_seconds: int = Field(default=3600, ge=60, le=30 * 86400)
+
+
 class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
@@ -790,6 +796,44 @@ def rotate_api_key(identifier: str, request: Request, _: None = Depends(require_
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"id": key.id, "token": key.value, "prefix": key.prefix, "scopes": key.scopes}
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/admin/s3-multipart/stale", tags=["API keys"],
+         summary="Preview expired multipart completion leases (never deletes chunks)")
+def list_stale_s3_completions(
+    min_age_seconds: int = Query(default=3600, ge=60, le=30 * 86400),
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: None = Depends(require_auth),
+):
+    conn = db_connect()
+    try:
+        mpu = MultipartStore(BucketCatalog(ManifestStore(conn)))
+        return {"uploads": mpu.stale_completions(
+            min_age_seconds=min_age_seconds, limit=limit
+        )}
+    finally:
+        conn.close()
+
+
+@app.post("/api/v1/admin/s3-multipart/{upload_id}/recover", tags=["API keys"],
+          summary="Dry-run or explicitly recover an expired multipart completion lease")
+def recover_stale_s3_completion(
+    request: Request, upload_id: str, payload: S3CompletionRecoveryRequest,
+    _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        mpu = MultipartStore(BucketCatalog(ManifestStore(conn)))
+        eligible = mpu.recover_stale_completion(
+            upload_id, dry_run=not payload.execute,
+            min_age_seconds=payload.min_age_seconds,
+        )
+        return {"upload_id": upload_id, "eligible": eligible,
+                "recovered": bool(eligible and payload.execute),
+                "dry_run": not payload.execute}
     finally:
         conn.close()
 
