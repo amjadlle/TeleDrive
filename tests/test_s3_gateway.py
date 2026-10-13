@@ -283,3 +283,70 @@ def test_encoded_path_tampering_invalidates_signature(service):
                               content=payload)
     assert tampered.status_code == 403
     assert b"SignatureDoesNotMatch" in tampered.content
+
+
+def test_s3_delimiter_common_prefixes_and_safe_pagination(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    for key in ("dir-a/1", "dir-a/2", "dir-a/3", "dir-b/one", "root.txt"):
+        result = signed(service, "PUT", "/backup-bucket/" + key, key.encode())
+        assert result.status_code == 200, result.text
+    import xml.etree.ElementTree as ET
+    ns = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+    token = None
+    all_objects = []
+    all_prefixes = []
+    for _ in range(5):
+        query = "/backup-bucket?list-type=2&delimiter=%2F&max-keys=1"
+        if token:
+            query += "&continuation-token=" + quote(token)
+        response = signed(service, "GET", query)
+        assert response.status_code == 200, response.text
+        root = ET.fromstring(response.content)
+        all_objects.extend(c.findtext(ns+"Key") for c in root.findall(ns+"Contents"))
+        all_prefixes.extend(c.findtext(ns+"Prefix") for c in root.findall(ns+"CommonPrefixes"))
+        token = root.findtext(ns+"NextContinuationToken")
+        if root.findtext(ns+"IsTruncated") == "false":
+            break
+    else:
+        pytest.fail("S3 continuation token did not terminate")
+    assert all_prefixes == ["dir-a/", "dir-b/"]
+    assert all_objects == ["root.txt"]
+    assert token is None
+
+
+def test_s3_cursor_cannot_be_modified_or_reused_with_a_different_prefix(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    for key in ("a/one", "b/two", "c/three"):
+        assert signed(service, "PUT", "/backup-bucket/" + key, b"data").status_code == 200
+    import xml.etree.ElementTree as ET
+    ns = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+    first = signed(service, "GET", "/backup-bucket?list-type=2&max-keys=1")
+    token = ET.fromstring(first.content).findtext(ns+"NextContinuationToken")
+    assert token
+    corrupted = token[:-2] + ("aa" if token[-2:] != "aa" else "bb")
+    result = signed(service, "GET",
+                    "/backup-bucket?list-type=2&max-keys=1&continuation-token="+quote(corrupted))
+    assert result.status_code == 400
+    assert b"InvalidArgument" in result.content
+    second = signed(service, "GET",
+                    "/backup-bucket?list-type=2&prefix=a%2F&max-keys=1&continuation-token="+quote(token))
+    assert second.status_code == 400
+
+
+def test_s3_folder_larger_than_backend_page_is_not_repeated():
+    """A single CommonPrefixes entry spanning >1000 raw keys still counts once."""
+    from types import SimpleNamespace
+    from web.s3 import _page
+    names = [f"huge/{n:04d}" for n in range(1201)] + ["next/item", "root"]
+    class FakeCatalog:
+        def list_objects(self, bucket, *, prefix, after, limit):
+            selected = [name for name in names if name.startswith(prefix) and name > after][:limit]
+            return [SimpleNamespace(item=SimpleNamespace(key=key)) for key in selected]
+    catalog = FakeCatalog()
+    keys, common, after, skip, more = _page(catalog, "bucket", "", "/", "", 1, "")
+    assert keys == [] and common == ["huge/"] and more
+    keys2, common2, after2, skip2, more2 = _page(catalog, "bucket", "", "/", after, 1, skip)
+    assert common2 == ["next/"] and keys2 == []
+    keys3, common3, _, _, more3 = _page(catalog, "bucket", "", "/", after2, 1, skip2)
+    assert [x.item.key for x in keys3] == ["root"]
+    assert common3 == [] and not more3
