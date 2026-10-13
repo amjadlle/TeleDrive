@@ -194,3 +194,61 @@ def test_catalog_pagination_with_signed_s3_queries(service):
     assert second.status_code == 200
     keys = [item.findtext(tag+"Key") for item in ET.fromstring(second.content).findall(tag+"Contents")]
     assert keys == ["c.txt"]
+
+
+def test_real_boto3_sdk_over_http_loopback(service):
+    """Exercise an actual boto3 S3 client rather than only hand-built requests."""
+    import socket
+    import threading
+    import time
+    import boto3
+    import uvicorn
+    from botocore.config import Config
+
+    _, issued, bot, _, _ = service
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.listen(16)
+    settings = uvicorn.Config(gateway.app, host="127.0.0.1", port=port,
+                              log_level="error", lifespan="off")
+    server = uvicorn.Server(settings)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        assert server.started, "ASGI S3 server did not start"
+        sdk = boto3.client(
+            "s3", endpoint_url=f"http://127.0.0.1:{port}",
+            aws_access_key_id=issued.access_key, aws_secret_access_key=issued.secret_key,
+            region_name="us-east-1",
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path", "payload_signing_enabled": True},
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+                retries={"max_attempts": 0},
+            ),
+        )
+        assert sdk.create_bucket(Bucket="sdk-bucket")["ResponseMetadata"]["HTTPStatusCode"] == 200
+        assert any(b["Name"] == "sdk-bucket" for b in sdk.list_buckets()["Buckets"])
+        body = os.urandom(6003)
+        put_result = sdk.put_object(Bucket="sdk-bucket", Key="nested/data.bin", Body=body)
+        assert put_result["ResponseMetadata"]["HTTPStatusCode"] == 200
+        assert sdk.head_object(Bucket="sdk-bucket", Key="nested/data.bin")["ContentLength"] == len(body)
+        read = sdk.get_object(Bucket="sdk-bucket", Key="nested/data.bin")["Body"].read()
+        assert read == body
+        keys = [item["Key"] for item in sdk.list_objects_v2(
+            Bucket="sdk-bucket", Prefix="nested/"
+        )["Contents"]]
+        assert keys == ["nested/data.bin"]
+        sdk.delete_object(Bucket="sdk-bucket", Key="nested/data.bin")
+        assert bot.uploads >= 1 and bot.downloads >= 1
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        sock.close()
+        assert not thread.is_alive(), "ASGI S3 server did not stop"
