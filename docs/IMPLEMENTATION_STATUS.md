@@ -122,3 +122,6 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
   live heartbeat and READY objects cannot be abandoned. Journal kept for
   independent recovery; deletion remains disabled.
 - This is metadata reconciliation, **not** automatic retry or physical GC.
+
+- WebUI API Management includes a dry-run-first stale PENDING inventory
+  and single-object explicit writer-fencing action; no background cleanup.

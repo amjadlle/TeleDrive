@@ -5,7 +5,7 @@ function toast(msg,bad=false){const e=$('#toast');e.textContent=msg;e.className=
 function fmtTs(v){return v?new Date(v*1000).toLocaleString():'-'}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 
-$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.page).classList.add('active');if(b.dataset.page==='queue')loadFiles('queue');if(b.dataset.page==='history')loadFiles('history');if(b.dataset.page==='settings')loadSettings();if(b.dataset.page==='api-management'){loadKeys();loadS3Keys();}if(b.dataset.page==='logs')loadLogs()});
+$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.page).classList.add('active');if(b.dataset.page==='queue')loadFiles('queue');if(b.dataset.page==='history')loadFiles('history');if(b.dataset.page==='settings')loadSettings();if(b.dataset.page==='api-management'){loadKeys();loadS3Keys();loadPendingRecovery();}if(b.dataset.page==='logs')loadLogs()});
 
 async function refreshDashboard(){
 try{
@@ -135,6 +135,35 @@ async function loadS3Recovery(){
   }catch(e){target.textContent='Cannot scan stale multipart uploads: '+e.message}
 }
 $('#refreshS3Recovery').onclick=loadS3Recovery;
+
+async function loadPendingRecovery(){
+  const target=$('#pendingRecoveryRows');
+  try{
+    const response=await api('/api/v1/admin/storage/pending-stale?min_age_seconds=3600');
+    const uploads=response.uploads||[];
+    target.innerHTML=uploads.length?uploads.map(u=>
+      '<tr><td>'+esc(u.bucket)+'</td><td>'+esc(u.key)+'</td>'
+      +'<td><code>'+esc(u.id)+'</code></td><td>'+Number(u.journaled_chunks||0)+'</td>'
+      +'<td>'+fmtTs(u.lease_until)+'</td>'
+      +'<td><button class="btn compact pending-abandon" data-id="'+esc(u.id)+'">Preview / Fence</button></td></tr>'
+    ).join(''):'<tr><td colspan="6">No eligible stale PENDING uploads</td></tr>';
+    $('.pending-abandon').forEach(button=>button.onclick=async()=>{
+      const objectId=button.dataset.id;
+      const url='/api/v1/admin/storage/pending-stale/'+encodeURIComponent(objectId)+'/abandon';
+      button.disabled=true;
+      try{
+        const preview=await api(url,{method:'POST',body:JSON.stringify({execute:false,min_age_seconds:3600})});
+        if(!preview.eligible){toast('Writer heartbeat or state changed; no action taken',true);await loadPendingRecovery();return}
+        if(!confirm('Fence only this expired upload and mark its metadata FAILED? Telegram messages will NOT be deleted. It may need subsequent reconciliation.'))return;
+        const executed=await api(url,{method:'POST',body:JSON.stringify({execute:true,min_age_seconds:3600})});
+        toast(executed.abandoned?'Old writer fenced. Telegram journal preserved.':'Writer state changed; no action taken',!executed.abandoned);
+        await loadPendingRecovery();
+      }catch(e){toast(e.message,true)}
+      finally{button.disabled=false}
+    });
+  }catch(e){target.textContent='Cannot inspect PENDING uploads: '+e.message}
+}
+$('#refreshPendingRecovery').onclick=loadPendingRecovery;
 
 $('#runGCAudit').onclick=async()=>{
   const target=$('#gcAuditSummary');
