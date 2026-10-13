@@ -468,3 +468,53 @@ def test_s3_bucket_tags_persist_and_delete_cleanly_on_live_sql(env_name):
         assert bucket not in catalog.list_buckets()
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_s3_http_metadata_is_immutable_and_transactional_on_live_database(env_name):
+    """Cross-session: PUT/COPY metadata persists with version snapshot, not payload bytes."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    import hashlib
+    from uuid import uuid4
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
+    from teledrive.storage.copy import copy_object
+    from teledrive.s3.object_metadata import ObjectMetadataStore
+
+    bucket = "ci-" + uuid4().hex[:20]
+    original = {
+        "content-type": "application/vnd.teledrive.data",
+        "x-amz-meta-publisher": "bot-storage",
+        "cache-control": "private, max-age=70",
+    }
+    now = int(time.time())
+    db = connect_database(url)
+    try:
+        manifests = ManifestStore(db)
+        catalog = BucketCatalog(manifests)
+        catalog.create_bucket(bucket, now)
+        oid = manifests.begin(bucket, "original", 0, now)
+        manifests.finish(oid, hashlib.sha256(b"").hexdigest(), now)
+        ObjectMetadataStore(catalog).attach_uncommitted(oid, original)
+        catalog.publish(oid, now=now)
+        cloned = copy_object(catalog, bucket, "original", bucket, "copy")
+        assert cloned.source_object_id == oid
+    finally:
+        db.close()
+
+    reopened = connect_database(url)
+    try:
+        catalog = BucketCatalog(ManifestStore(reopened))
+        props = ObjectMetadataStore(catalog)
+        assert props.get(catalog.get(bucket, "copy").item.id) == original
+        updated = copy_object(
+            catalog, bucket, "original", bucket, "replaced",
+            replacement_metadata={"content-type": "text/plain", "x-amz-meta-publisher": "sdk"},
+        )
+        assert props.get(updated.object_id)["content-type"] == "text/plain"
+        assert props.get(oid) == original
+        assert props.get(cloned.object_id) == original
+    finally:
+        reopened.close()
