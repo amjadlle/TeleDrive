@@ -63,8 +63,9 @@ every workflow at the release SHA.
   DeleteMarker/VersionId DELETE, conditional writes, presigned multipart
   operations, historical CopySource, common checksums and checksum-pinned
   browser POST are implemented and tested. Browser POST also supports
-  exactly signed 200/201/204 success status and HTTPS-only 303 callbacks;
-  unsupported policy operators and S3 lifecycle remain open.
+  exactly signed 200/201/204 success status and HTTPS-only 303 callbacks,
+  signed user metadata/cache controls and bounded metadata-prefix operators.
+  Unsupported policy operators and S3 lifecycle remain open.
 - [ ] **P1.4 Operations:** operator metrics/alerts, SQLite online backup and
   verified real Telegram payload restore, Windows/Linux CI, PostgreSQL/MySQL
   integration, multi-process queue tests and **native PostgreSQL 17 + MySQL
@@ -813,3 +814,61 @@ verification and explicit retention approvals are implemented.
   cross-host distributed Telegram flood/revocation soak, production secrets
   restore, controlled live legacy cutover and unsupported advanced S3
   policy/lifecycle semantics. These must not be marked complete from CI.
+
+## P1.1 operator-only lost-ACK diagnostic and OS-kill DR coverage (2026-10-14)
+
+- Authenticated `GET /api/v1/admin/storage/bot-unresolved?limit=100`
+  lists at most 1,000 outstanding pre-send Bot fences with object ID,
+  ordinal, bot account alias, channel ID, expected size and chunk SHA-256.
+  The ordinary `storage/health` endpoint stays aggregate/redacted.
+  Inspecting the detailed list is **read-only**: it cannot upload, delete,
+  release a fence or fabricate a receipt; unauthorized callers are rejected.
+  Original Telegram message identity, ownership, document `file_id`, and
+  actual bytes still require **independent operator proof** before a
+  recorded ACK is trusted. Never use the list as proof of a remote send.
+- A real child subprocess now persists its send intent, writes a binary
+  payload to a disk-backed Telegram stand-in, and receives **SIGKILL** before
+  returning the ACK. Another SQL session proves the remote bytes exist,
+  shows that duplicate send attempts are fenced, and exercises explicit
+  proof-based receipt restoration. This test kills only its disposable
+  subprocess; it never touches production Telegram media.
+- Online SQLite snapshot/restore tests include both outstanding send
+  intents and committed Bot file-ID ACK receipts. Restored metadata retains
+  the "do not retransmit" guard, and only a known committed receipt can
+  become a recovery candidate.
+
+## P1.3 extended browser POST policy and immutable user metadata
+
+- SigV4 browser POST now admits **explicitly signed** `Cache-Control`,
+  `Content-Disposition`, `Content-Encoding`, `Content-Language`,
+  `Expires`, `Content-Type` and at most 12 `x-amz-meta-*` fields.
+  Each present field must have its own exact policy constraint. The narrow
+  `starts-with` operator is permitted only for the object key, MIME type
+  or an individually named user-metadata field.
+- Metadata is validated before any Telegram transfer: field names are
+  ASCII-limited, aggregate metadata at most 2 KiB, values at most 1 KiB
+  each, and HTTP-header-invalid/control-character inputs are rejected.
+  All accepted fields persist atomically with the new published object head
+  and are returned by signed GET/HEAD. Arbitrary S3 headers and unimplemented
+  write policies remain denied.
+- Boto3-generated presigned forms and custom SigV4 policies exercise
+  exact/prefix user metadata, varied real binary payload sizes, cache
+  headers, unauthorized changes, malformed names, checksum constraints,
+  Unicode input refusal and oversized metadata. Dedicated tests verify that
+  no Telegram call happens when form checks fail.
+
+## Same-SHA P1 acceptance
+
+- The earlier SHA `b1f2d4a` completed **7/7 GitHub Actions**; real Bot E2E
+  passed 20 tests with three size-opt-in skips, and user Telethon E2E
+  passed 13 tests with zero skips. This is a baseline, **not** evidence for
+  the changes in this section.
+- The final acceptance commit activates a bounded one-shot Bot multipart
+  5/16 MiB test, the 12-object live mixed-size soak and the user Telethon
+  5/16 MiB stress matrix. Real Telegram test operations must touch only
+  their own message IDs. These tests are **not** distributed multi-host
+  production/flood/revocation acceptance.
+- Full automatic recovery of a Bot ACK lost before the SQL receipt,
+  production representative secret-backed DR, operator-approved cutover,
+  sustained multi-host Telegram rate-limit load and full AWS lifecycle
+  remain **open**. No production data removal or `main` merge is implied.
