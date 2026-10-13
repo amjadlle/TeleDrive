@@ -249,3 +249,62 @@ def test_real_boto3_metadata_over_http_port(service):
         thread.join(timeout=10)
         sock.close()
         assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("unsupported_header", [
+    {"x-amz-acl": "public-read"},
+    {"x-amz-server-side-encryption": "AES256"},
+    {"x-amz-server-side-encryption": "aws:kms"},
+    {"x-amz-storage-class": "GLACIER"},
+    {"x-amz-object-lock-mode": "COMPLIANCE"},
+    {"x-amz-object-lock-legal-hold": "ON"},
+    {"x-amz-website-redirect-location": "/other/location"},
+    {"x-amz-trailer": "x-amz-checksum-crc32"},
+    {"Content-Encoding": "aws-chunked"},
+])
+def test_unimplemented_s3_write_contract_never_acknowledges_or_uploads(service, unsupported_header):
+    setup(service)
+    before = service[2].uploads
+    result = put(service, "unsafe-option", b"would-be-data", unsupported_header)
+    assert result.status_code == 501, result.text
+    assert b"NotImplemented" in result.content
+    assert service[2].uploads == before
+    assert signed(service, "HEAD", "/backup-bucket/unsafe-option").status_code == 404
+
+
+def test_aggregate_metadata_limit_rejects_before_telegram_transfer(service):
+    setup(service)
+    oversized = {f"x-amz-meta-k{i}": "m" * 740 for i in range(3)}
+    before = service[2].uploads
+    result = put(service, "over-limit", b"any", oversized)
+    assert result.status_code == 400, result.text
+    assert b"MetadataTooLarge" in result.content
+    assert service[2].uploads == before
+
+
+def test_metadata_sql_fault_rolls_back_head_not_old_object(service, monkeypatch):
+    """Upload can succeed remotely, but metadata failure must not publish a bad head."""
+    from teledrive.s3.object_metadata import ObjectMetadataStore
+
+    setup(service)
+    assert put(service, "transactional", b"previous-good",
+               {"Content-Type": "application/old"}).status_code == 200
+    previous_id = headers(service, "transactional")["x-amz-version-id"]
+    before = service[2].uploads
+    def fail_attachment(self, object_id, properties):
+        if properties.get("x-amz-meta-fail") == "yes":
+            raise RuntimeError("simulated SQL metadata commit fault")
+        return original(self, object_id, properties)
+    original = ObjectMetadataStore.attach_uncommitted
+    monkeypatch.setattr(ObjectMetadataStore, "attach_uncommitted", fail_attachment)
+    result = put(service, "transactional", b"new-uncommitted", {
+        "Content-Type": "application/new", "x-amz-meta-fail": "yes",
+    })
+    assert result.status_code == 503
+    # Telegram accepted the chunk, but the uncommitted object must stay
+    # invisible. Reconciliation/GC rather than immediate deletion handles it.
+    assert service[2].uploads == before + 1
+    assert signed(service, "GET", "/backup-bucket/transactional").content == b"previous-good"
+    head = headers(service, "transactional")
+    assert head["x-amz-version-id"] == previous_id
+    assert head["content-type"] == "application/old"
