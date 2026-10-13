@@ -39,6 +39,7 @@ def test_real_telegram_upload_download_and_range():
             client = TelegramClient(StringSession(session), int(api_id), api_hash)
             await client.connect()
             uploaded_refs = []
+            target = None
             try:
                 if not await client.is_user_authorized():
                     raise RuntimeError("E2E StringSession is expired or not authorized")
@@ -65,7 +66,8 @@ def test_real_telegram_upload_download_and_range():
                 # Cleanup is scoped to the test target and only messages
                 # uploaded by this test invocation.
                 for reference in uploaded_refs:
-                    await client.delete_messages(target, [reference.message_id])
+                    if target is not None:
+                        await client.delete_messages(target, [reference.message_id])
                 await client.disconnect()
                 conn.close()
 
