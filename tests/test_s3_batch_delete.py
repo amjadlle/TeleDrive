@@ -67,7 +67,7 @@ def deleted_keys(result):
 
 
 def error_code(result):
-    return ET.fromstring(result.content).findtext(NS+"Code")
+    return ET.fromstring(result.content).findtext("Code")
 
 
 def test_batch_delete_only_unlinks_heads_and_retains_remote_parts(service):
