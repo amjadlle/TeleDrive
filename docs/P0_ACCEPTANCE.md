@@ -66,3 +66,15 @@ not a claim of complete S3 protocol or Cyberduck compatibility.
 Proceed with safe stale-PENDING reconciliation, persistent resumable upload
 queue/job state and operator-facing recovery tooling, then optional S3
 client/protocol expansion and eventual audited physical GC.
+
+
+## Post-P0 feature development (2026-10-13)
+
+Following P0 signoff, the active feature branch added SQL-fenced stale-PENDING
+operator recovery, a root-confined persistent Telegram upload job queue,
+opt-in worker scheduling, conditional multipart Complete, an immutable
+published-version index, root-admin alias restore and signed historical
+VersionId GET/HEAD, plus dry-run-only retention GC planning. Each needs the
+latest feature commit's complete CI matrix before release. These are
+feature-subset implementations, not a claim of production-grade full AWS
+S3 parity, physical message GC or byte-accurate restart/resume.

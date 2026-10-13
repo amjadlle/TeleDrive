@@ -686,16 +686,20 @@ currently rejected as unsupported instead of inventing AWS-like values.
   independent `s3:GetObjectAttributes` permission. It does not retrieve
   Telegram bytes. Unsupported `Checksum`, `ObjectParts` and `StorageClass`
   attributes explicitly fail rather than returning fabricated metadata.
-- **Physical lifecycle/versioning:** DeleteObject currently unlinks the
-  current pointer; historical data remains and is not yet exposed through
-  complete S3 ListObjectVersions / restore APIs.
+- **Physical lifecycle/versioning:** DeleteObject unlinks the current
+  pointer; historical Telegram manifests remain. New published versions
+  are indexed for REST history/restore and signed S3 historical GET/HEAD
+  with `?versionId=`. Version-specific DELETE and full AWS
+  ListObjectVersions/delete-marker semantics remain unsupported.
 - **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT,
   CopyObject, scoped DeleteObjects, conditional GET/HEAD, object/bucket
   tagging, signed user metadata, bucket CORS and signed conditional
   PutObject/DeleteObject now work. Conditional PUT uses If-None-Match: *
   or If-Match with atomic SQL generation+object-ID fencing, and conditional
-  DELETE supports If-Match. Historical Telegram data is retained after
-  failed CAS publication; no unsafe automatic cleanup. Still pending:
+  DELETE supports If-Match; signed multipart Complete also supports
+  If-Match or If-None-Match: * with atomic head fencing. Historical
+  Telegram data is retained after failed CAS publication; no unsafe
+  automatic cleanup. Still pending:
   presigned multipart POST, version-ID
   tagging, advanced S3 checksum variants, SSE, virtual-host-style requests,
   bucket policies and lifecycle. Standard SigV4 `UNSIGNED-PAYLOAD` PUTs
@@ -710,16 +714,13 @@ currently rejected as unsupported instead of inventing AWS-like values.
   `aws s3 sync --delete`, rclone list/copy/overwrite/delete and forced
   5 MiB multipart transfer with SHA-256 round-trip comparison. These are
   SDK/client-compatibility tests; they do **not** replace real Telegram E2E.
-  Cyberduck, service restart during upload/complete, rate limits, account
-  revocation across concurrent live requests and opt-in real Telegram multipart
-  execution still need full acceptance. The manual **Telegram Bot Storage E2E**
-  workflow has a `run_multipart` input; enable it explicitly to upload
-  a 5 MiB+ test object to the dedicated private Telegram channel, verify
-  SQL chunk reparenting, download it, and remove only that test's messages.
-  It reuses `TELEDRIVE_E2E_BOT_TOKEN` and `TELEDRIVE_E2E_BOT_CHAT_ID`;
-  no additional secret is needed. Automatic push runs skip this costly case.
-  A green regular storage E2E does not prove multipart has been exercised
-  against the live Telegram API.
+  Cyberduck, true process-SIGKILL/soak, long-duration rate limits and
+  concurrent live-session revocation still need dedicated staging
+  acceptance. Real 5 MiB+ Telegram Bot multipart **has** passed with
+  `TELEDRIVE_E2E_MULTIPART=1` and end-to-end SQL restart, reparenting,
+  checksum and test-only cleanup on the feature branch. Manual
+  `Telegram Bot Storage E2E` can repeat this with `run_multipart=true`;
+  routine pushes do not enable the costly large-object case.
 
 No primary payload storage or fallback is added outside Telegram. SQL
 holds metadata and temporary upload state only; scratch files are ephemeral.
@@ -746,12 +747,12 @@ scoped REST API credentials, API Management in WebUI/Desktop, Telegram Bot
 transport, bucket/current-object catalog, and the initial separate SigV4 S3
 gateway with S3 credential management in both user interfaces.
 
-**Still not implemented:** automatic recovery of still-pending uploads,
-advanced multipart/S3 operations, real version listing,
-physical garbage collection of superseded live objects, full resume/job
-orchestration, and migration of legacy `files` records. The legacy folder
-uploader remains a separate workflow until it is migrated into the common
-object-service pipeline.
+**Still not implemented:** byte-level continuation of partially journaled
+uploads, migration of legacy `files` records into the new object service,
+complete S3 ListObjectVersions/delete markers, and physical garbage
+collection of superseded live objects. The legacy folder uploader is still
+separate from the durable SQL-persisted object job queue; its merger into
+the object-service pipeline remains necessary.
 
 ### Phase 2: conservative failure recovery and orphan cleanup
 
@@ -771,10 +772,12 @@ marker so unindexed messages can be discovered.
   serialize cleanup and interrupted deletion is safely retryable.
 - Cleaned objects retain their audit journal but cannot be read as live objects.
 
-**Important limits:** The recovery service is an internal component, not yet
-exposed through WebUI, Desktop or REST. Hard-killed workers can leave stale
-`pending` objects; writer heartbeats/fencing and explicit abandonment must be
-implemented before those become cleanup candidates. Changed Telegram targets,
+**Important limits:** Full Telegram orphan discovery and physical cleanup
+remain an internal, separately verified recovery component. Root-admin
+WebUI/REST now offer expired writer-fenced PENDING previews and explicit
+per-object abandonment; they retain all Telegram messages and do not
+implicitly authorize cleanup. A hard-killed worker can be reconciled safely
+at the metadata level without claiming the physical data is garbage. Changed Telegram targets,
 inaccessible history, or large histories beyond the scan limit prevent reliable
 orphan discovery, so cleanup refuses to claim success. Metadata DB rebuild
 from Telegram is also a later phase.
@@ -874,3 +877,43 @@ default branch; push-triggered runs can run directly on the feature branch.
 ## Credits and license
 
 Originally created by [Amjad P A](https://github.com/amjadlle/TeleDrive). This is the [babico/TeleDrive fork](https://github.com/babico/TeleDrive) with Docker and multi-account enhancements. Licensed under [MIT](LICENSE); see [CONTRIBUTING.md](CONTRIBUTING.md) for contributions.
+
+
+### P1 durable local upload jobs, history and recovery controls
+
+An authenticated root administrator can use **API Management** to enqueue
+a local file under a configured source root, process one job, inspect its
+SQL-persistent state, and explicitly retry failures:
+
+- `TELEDRIVE_JOB_SOURCE_ROOT=/data/uploads` confines all permitted source
+  files; files outside it and symlinks are rejected. A valid root is mandatory
+  for these operations; otherwise the API fails closed.
+- `TELEDRIVE_JOB_AUTO_RUN=1` opts into the service's SQL-fenced job worker.
+  It is **disabled by default**. Keep the original source file available
+  until the job is marked `done`.
+- Jobs verify the source inode, size and high-resolution modification time
+  before and after Telegram upload; a changed source fails rather than
+  publishing unexpected bytes. Generation and immutable ID conditions guard
+  against competing S3/REST writers.
+- Staged READY manifests survive SQL restart and can be published by a
+  replacement worker without sending Telegram chunks again. If a process
+  crashes before its stage record is saved, a retry may re-upload bytes
+  from the beginning; historical and unindexed messages remain retained
+  for independent, ownership-verified cleanup.
+- Root-admin `/api/v1/admin/storage/pending-stale` and
+  `/api/v1/admin/storage/health` expose safe recovery and health data.
+  Explicit PENDING abandonment requires Basic authentication, CSRF and
+  an expired SQL lease. No physical deletion is performed.
+- New published versions are indexed. Admin history/restore creates a
+  new immutable alias of existing Telegram chunks. A dry-run-first
+  `/api/v1/admin/storage/versions/index-current` can register current
+  pre-upgrade HEADs, but must not invent already superseded versions.
+  S3 GET/HEAD can read a proven published `versionId`, including Range.
+- `/api/v1/admin/storage/gc-candidates` is a retention-aware **preview** of
+  aged FAILED manifests only; it never approves deletion and always requires
+  later remote Telegram history verification.
+
+Full automatic chunk-by-chunk resume, S3 lifecycle/SSE/bucket policies,
+complete ListObjectVersions, Bot API historical orphan discovery,
+version-aware physical GC, legacy metadata migration, and production
+disaster-recovery acceptance remain separate workstreams.

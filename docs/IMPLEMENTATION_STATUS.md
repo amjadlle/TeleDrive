@@ -1,7 +1,7 @@
 # TeleDrive implementation status and acceptance backlog
 
 Audit date: **2026-10-13**. Snapshot: `feature/docker-webui-multiaccount`
-at `e88d4502cd2d` plus the final P0 signoff candidate. This is a
+through the current P1/P2 implementation branch (2026-10-13). This is a
 code/CI evidence inventory, not a claim of production readiness. Recheck
 every workflow at the release SHA.
 
@@ -208,3 +208,31 @@ verification and explicit retention approvals are implemented.
 - Unpublished READY staging manifests and unknown IDs fail with
   NoSuchVersion. Version-specific DELETE, tagging, CopySource and AWS
   `ListObjectVersions` remain unsupported until full safe semantics exist.
+
+
+## Consolidated remaining work — after the current P1/P2 implementation
+
+### Already implemented and covered by automated tests
+- P0 accepted safe subset, including real Telegram user/bot E2E and 5 MiB+
+  multipart; all seven checks passed on the P0 release candidate.
+- Root-admin expired PENDING lease inventory/explicit per-object fence, and
+  safe multipart completion recovery; physical messages retained.
+- Persistent local-file upload queue, per-job TTL/fencing, source fingerprint,
+  explicit retry, staged-manifest recovery, opt-in worker loop and WebUI controls.
+- Conditional multipart Complete head CAS; published-history-only version
+  index, root-admin alias restore, signed S3 historical GET/HEAD/Range.
+- Health counters, conservative alias/retention-based FAILED-journal GC
+  candidate planner and explicit current-HEAD migration preview.
+
+### Still open — do not claim these are implemented
+- **P1:** True chunk-level resumable uploads, automatic Telegram orphan
+  reconciliation for Bot API, legacy folder uploader integration, durable
+  cross-worker source ownership/soak, full S3 ListObjectVersions/delete
+  markers, version-ID tagging, advanced checksums/presigned multipart POST,
+  comprehensive operator alerts/migration/backup-restore runbooks.
+- **P2:** Retention-approved physical mark/sweep GC with complete remote
+  ownership verification, S3 SSE/policies/lifecycle/virtual-host compatibility,
+  legacy record/data rebuild from Telegram, disaster-recovery rehearsals,
+  rate-limit/fault benchmarks and full installer staging acceptance.
+- **Release:** Integration into `main` and a real version-tagged
+  Linux/Windows release were not performed by this feature-branch CI.
