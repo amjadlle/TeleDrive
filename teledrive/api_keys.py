@@ -90,7 +90,7 @@ class ApiKeyStore:
             select(api_keys.c.id, api_keys.c.prefix, api_keys.c.name,
                    api_keys.c.scopes, api_keys.c.created_at, api_keys.c.expires_at,
                    api_keys.c.last_used_at, api_keys.c.revoked)
-            .order_by(api_keys.c.created_at.desc(), api_keys.c.id)
+            .order_by(api_keys.c.revoked.asc(), api_keys.c.created_at.desc(), api_keys.c.id)
         ).mappings().all()
         return [{**dict(row), "scopes": json.loads(row["scopes"])} for row in rows]
 
