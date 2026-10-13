@@ -117,6 +117,47 @@ class BucketCatalog:
             committed_ns=time.time_ns(),
         ))
 
+    def index_legacy_current_heads(self, *, dry_run: bool = True,
+                                   limit: int = 100) -> list[str]:
+        """Backfill only proven current HEADs; unknown old versions stay hidden.
+
+        An old READY manifest can be a never-published upload and is NOT safe
+        to promote. This backfill only trusts pointers already in HEADs.
+        """
+        if not 1 <= limit <= 1000:
+            raise ValueError("Invalid history index limit")
+        missing = self.db.connection.execute(
+            select(heads.c.object_id, objects.c.bucket, objects.c.object_key)
+            .select_from(
+                heads.join(objects, heads.c.object_id == objects.c.id)
+                     .outerjoin(
+                         published_versions,
+                         heads.c.object_id == published_versions.c.object_id,
+                     )
+            )
+            .where(
+                published_versions.c.object_id.is_(None),
+                objects.c.status == "ready",
+            )
+            .order_by(heads.c.bucket, heads.c.key_hash).limit(limit)
+        ).all()
+        ids = []
+        for identifier, bucket, key in missing:
+            if self._keyhash(key) != self.db.connection.execute(
+                select(heads.c.key_hash).where(
+                    heads.c.bucket == bucket, heads.c.object_id == identifier,
+                )
+            ).scalar_one_or_none():
+                raise RuntimeError("Legacy HEAD references inconsistent key metadata")
+            ids.append(identifier)
+            if not dry_run:
+                self._record_published_uncommitted(
+                    self.manifests.get(identifier)
+                )
+        if not dry_run and ids:
+            self.db.commit()
+        return ids
+
     def list_versions(self, bucket: str, key: str, *,
                       limit: int = 100) -> list[dict]:
         """Read versions proven published, not all READY/staged manifests."""

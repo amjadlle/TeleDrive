@@ -171,3 +171,8 @@ stale-PENDING recovery with explicit fencing and dry-run approval.
 - Root-admin GET `/api/v1/admin/storage/versions` and WebUI
   API Management present proven published history, snapshot SHA-256,
   generation and authenticated/CSRF-protected alias-based restore.
+
+- Explicit dry-run-first admin version migration only indexes existing
+  current HEAD pointers, never guesses old unpublished READY manifests;
+  WebUI has an opt-in preview/index control. Earlier superseded versions
+  without publication records remain unavailable for safe automatic import.

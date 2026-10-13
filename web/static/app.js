@@ -200,6 +200,17 @@ async function loadObjectVersions(){
   }catch(e){target.textContent='History unavailable: '+e.message;summary.textContent=''}
 }
 $('#loadObjectVersions').onclick=loadObjectVersions;
+$('#indexCurrentVersions').onclick=async()=>{
+  const endpoint='/api/v1/admin/storage/versions/index-current';
+  try{
+    const preview=await api(endpoint,{method:'POST',body:JSON.stringify({execute:false,limit:100})});
+    if(!preview.count){toast('No existing published HEADs need indexing');return}
+    if(!confirm('Index '+preview.count+' pre-upgrade current HEAD(s) as known published versions? Unpublished old manifests will stay hidden; Telegram media is not touched.'))return;
+    const done=await api(endpoint,{method:'POST',body:JSON.stringify({execute:true,limit:100})});
+    toast('Indexed '+done.count+' existing HEAD(s)');
+    if($('#historyVersionBucket').value&&$('#historyVersionKey').value)await loadObjectVersions();
+  }catch(e){toast(e.message,true)}
+};
 
 async function loadStorageJobs(){
   const target=$('#storageJobsRows');

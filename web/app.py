@@ -558,6 +558,11 @@ class VersionRestoreRequest(BaseModel):
     expected_generation: int | None = Field(default=None, ge=0)
 
 
+class VersionIndexRequest(BaseModel):
+    execute: bool = False
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
 class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
@@ -867,6 +872,30 @@ def _storage_job_root() -> Path:
     if not root.is_dir():
         raise HTTPException(503, "Upload source root must be a directory")
     return root
+
+
+@app.post("/api/v1/admin/storage/versions/index-current",
+          tags=["Storage versions"],
+          summary="Dry-run or explicitly index only verified historical HEAD references")
+def index_legacy_current_versions(
+    request: Request, payload: VersionIndexRequest,
+    _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        catalog = BucketCatalog(ManifestStore(conn))
+        try:
+            registered = catalog.index_legacy_current_heads(
+                dry_run=not payload.execute, limit=payload.limit,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"ids": registered, "count": len(registered),
+                "dry_run": not payload.execute,
+                "indexed": bool(payload.execute and registered)}
+    finally:
+        conn.close()
 
 
 @app.get("/api/v1/admin/storage/versions", tags=["Storage versions"],

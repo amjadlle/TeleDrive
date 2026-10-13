@@ -108,3 +108,45 @@ def test_copy_and_multipart_publish_snapshot_ids_are_recorded(service):
         assert catalog.list_versions("backup-bucket", "multipart.bin")[0]["version_id"] == latest
     finally:
         db.close()
+
+
+def test_legacy_backfill_only_indexes_live_proven_heads(admin):
+    client, path, _ = admin
+    now = int(time.time())
+    db = connect_database(path)
+    try:
+        from sqlalchemy import delete
+        from teledrive.storage.catalog import published_versions
+        cat = BucketCatalog(ManifestStore(db))
+        cat.create_bucket("legacy-vers", now)
+        prior = cat.manifests.begin("legacy-vers", "current", 0, now)
+        cat.manifests.finish(prior, hashlib.sha256(b"").hexdigest(), now)
+        cat.publish(prior, now=now)
+        never_published = cat.manifests.begin("legacy-vers", "staged", 0, now)
+        cat.manifests.finish(never_published, hashlib.sha256(b"").hexdigest(), now)
+        db.connection.execute(delete(published_versions).where(
+            published_versions.c.object_id == prior
+        ))
+        db.commit()
+        assert cat.list_versions("legacy-vers", "current") == []
+    finally:
+        db.close()
+
+    endpoint = "/api/v1/admin/storage/versions/index-current"
+    auth = ("testadmin", "secure-auth-password")
+    headers = {"x-teledrive-csrf": "1"}
+    assert client.post(endpoint, auth=auth, json={"execute":True}).status_code == 403
+    preview = client.post(endpoint, auth=auth, headers=headers, json={})
+    assert preview.status_code == 200
+    assert preview.json()["dry_run"] and prior in preview.json()["ids"]
+    done = client.post(endpoint, auth=auth, headers=headers,
+                       json={"execute":True})
+    assert done.status_code == 200
+    assert done.json()["count"] == 1
+    db = connect_database(path)
+    try:
+        cat = BucketCatalog(ManifestStore(db))
+        assert cat.list_versions("legacy-vers", "current")[0]["version_id"] == prior
+        assert cat.list_versions("legacy-vers", "staged") == []
+    finally:
+        db.close()
