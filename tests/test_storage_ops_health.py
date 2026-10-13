@@ -224,6 +224,10 @@ def test_operator_unresolved_bot_inventory_requires_auth_and_has_no_side_effects
     try:
         idx = BotFileIndex(db)
         assert idx.unresolved_count() == 2
-        assert idx.unjournaled_count() == 0
+        # This minimal fixture deliberately has no storage_chunks table;
+        # assert directly that the read-only API fabricated no Bot ACK.
+        assert db.connection.exec_driver_sql(
+            "SELECT COUNT(*) FROM storage_bot_upload_receipts"
+        ).scalar_one() == 0
     finally:
         db.close()
