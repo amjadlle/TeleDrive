@@ -280,3 +280,13 @@ verification and explicit retention approvals are implemented.
   session coordination, and staging-only restore verification are in
   `docs/BACKUP_RESTORE.md`. Automated database restore rehearsal is still
   **open**; this snapshot is not a substitute for Telegram payload access.
+
+## P1.3 independently verified SHA-1 / SHA-256 / MD5 checksums
+
+- S3 object PUT and multipart UploadPart now reject contradictory SHA-1,
+  SHA-256 or Content-MD5 headers even if the primary signed payload digest
+  matches, before reaching Telegram. SHA-1 is used only for interoperability
+  integrity checks, never for authentication or access-key derivation.
+- Unsupported CRC32C and CRC64NVME checksum variants return an explicit
+  NotImplemented response rather than false success. CRC32 verification
+  remains supported; full AWS checksum family compatibility is still open.

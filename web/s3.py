@@ -137,30 +137,53 @@ def _reject_unimplemented_write_options(request: Request) -> None:
 
 def _verify_upload_sha256(
     request: Request, digest: bytes, *, md5_digest: bytes | None = None,
+    sha1_digest: bytes | None = None,
 ) -> None:
-    """Verify actual bytes against checksum committed to the signed request.
+    """Verify *every* supplied checksum, not only the first matching digest.
 
-    Presigned PUTs cannot use an unsigned mutable payload: the required
-    SHA-256 checksum must be included among the signed request headers.
+    Signature verification and upload checksum validation are independent.
+    A valid SHA-256 content digest must never permit a contradictory
+    Content-MD5, SHA-1 or x-amz-checksum-sha256 to go unreported.
     """
+    for unsupported in ("x-amz-checksum-crc32c", "x-amz-checksum-crc64nvme"):
+        if request.headers.get(unsupported) is not None:
+            raise SigV4Error("NotImplemented", "Unsupported checksum algorithm")
+    actual = base64.b64encode(digest).decode("ascii")
+    sha256_header = request.headers.get("x-amz-checksum-sha256")
+    if sha256_header is not None and not hmac.compare_digest(sha256_header, actual):
+        raise SigV4Error("BadDigest", "SHA-256 checksum mismatch")
+    md5_header = request.headers.get("content-md5")
+    if md5_header is not None:
+        if md5_digest is None or not hmac.compare_digest(
+            md5_header, base64.b64encode(md5_digest).decode("ascii")
+        ):
+            raise SigV4Error("BadDigest", "Content-MD5 checksum mismatch")
+    sha1_header = request.headers.get("x-amz-checksum-sha1")
+    if sha1_header is not None:
+        if sha1_digest is None or not hmac.compare_digest(
+            sha1_header, base64.b64encode(sha1_digest).decode("ascii")
+        ):
+            raise SigV4Error("BadDigest", "SHA-1 checksum mismatch")
+    declared = request.headers.get("x-amz-sdk-checksum-algorithm")
+    if declared is not None:
+        allowed = {"SHA1": "x-amz-checksum-sha1", "SHA256": "x-amz-checksum-sha256",
+                   "CRC32": "x-amz-checksum-crc32"}
+        if declared not in allowed:
+            raise SigV4Error("NotImplemented", "Unsupported SDK checksum algorithm")
+        if request.headers.get(allowed[declared]) is None:
+            raise SigV4Error("BadDigest", "Declared SDK checksum is missing")
+
     hexdigest = digest.hex()
     signed_content = request.headers.get("x-amz-content-sha256", "")
-    signed_checksum = request.headers.get("x-amz-checksum-sha256", "")
     presigned = "X-Amz-Algorithm" in request.query_params
     if signed_content == hexdigest:
         return
-    if signed_checksum and hmac.compare_digest(
-        signed_checksum, base64.b64encode(digest).decode("ascii"),
-    ):
+    if sha256_header is not None and hmac.compare_digest(sha256_header, actual):
         return
     if (not presigned and signed_content == "UNSIGNED-PAYLOAD"
-            and md5_digest is not None and request.headers.get("content-md5")):
-        # Header-mode SigV4 has already proven Content-MD5 was signed.
-        signed_names = signed_header_names(request)
-        if "content-md5" in signed_names and hmac.compare_digest(
-            request.headers["content-md5"],
-            base64.b64encode(md5_digest).decode("ascii"),
-        ):
+            and md5_header is not None and md5_digest is not None):
+        # Header-mode SigV4 has already authenticated the signed MD5 header.
+        if "content-md5" in signed_header_names(request):
             return
     raise SigV4Error("XAmzContentSHA256Mismatch", "Signed upload checksum mismatch")
 
@@ -944,6 +967,7 @@ async def _handle(request: Request):
             try:
                 sha = hashlib.sha256()
                 md5 = hashlib.md5(usedforsecurity=False)
+                sha1 = hashlib.sha1(usedforsecurity=False)
                 crc = 0
                 size = 0
                 with os.fdopen(fd, "wb") as output:
@@ -953,11 +977,13 @@ async def _handle(request: Request):
                             raise MultipartError("EntityTooLarge", "Part exceeds configured upload maximum", 413)
                         sha.update(block)
                         md5.update(block)
+                        sha1.update(block)
                         crc = zlib.crc32(block, crc)
                         output.write(block)
                     output.flush()
                     os.fsync(output.fileno())
-                _verify_upload_sha256(request, sha.digest(), md5_digest=md5.digest())
+                _verify_upload_sha256(request, sha.digest(), md5_digest=md5.digest(),
+                                      sha1_digest=sha1.digest())
                 checksum_crc = request.headers.get("x-amz-checksum-crc32")
                 if checksum_crc and checksum_crc != base64.b64encode(
                     (crc & 0xffffffff).to_bytes(4, "big")
@@ -1154,6 +1180,7 @@ async def _handle(request: Request):
             stage = Path(name)
             digest = hashlib.sha256()
             md5 = hashlib.md5(usedforsecurity=False)
+            sha1 = hashlib.sha1(usedforsecurity=False)
             crc = 0
             length = 0
             try:
@@ -1164,11 +1191,13 @@ async def _handle(request: Request):
                             return _error("EntityTooLarge", "Upload exceeds configured maximum", 413)
                         digest.update(block)
                         md5.update(block)
+                        sha1.update(block)
                         crc = zlib.crc32(block, crc)
                         dest.write(block)
                     dest.flush()
                     os.fsync(dest.fileno())
-                _verify_upload_sha256(request, digest.digest(), md5_digest=md5.digest())
+                _verify_upload_sha256(request, digest.digest(), md5_digest=md5.digest(),
+                                      sha1_digest=sha1.digest())
                 checksum_crc = request.headers.get("x-amz-checksum-crc32")
                 if checksum_crc and checksum_crc != base64.b64encode((crc & 0xffffffff).to_bytes(4, "big")).decode():
                     return _error("BadDigest", "CRC32 checksum mismatch", 400)
@@ -1306,7 +1335,8 @@ async def _handle(request: Request):
         return _error(exc.code, exc.message, {
             "RequestTimeTooSkewed": 403, "NotImplemented": 501,
             "InvalidArgument": 400,
-            "XAmzContentSHA256Mismatch": 400, "InvalidRange": 416,
+            "XAmzContentSHA256Mismatch": 400, "BadDigest": 400,
+            "InvalidRange": 416,
         }.get(exc.code, 403))
     except FileNotFoundError:
         return _error("NoSuchKey", "The requested resource does not exist", 404)
