@@ -14,8 +14,8 @@ import yaml
 
 from teledrive.db import connect_database
 from teledrive.storage.catalog import BucketCatalog
-from teledrive.storage.jobs import StorageUploadJobs, jobs
-from teledrive.storage.legacy_bridge import enqueue_legacy_folder
+from teledrive.storage.jobs import StorageUploadJobs, jobs, UploadJobError
+from teledrive.storage.legacy_bridge import enqueue_legacy_folder, run_legacy_cutover_cycle
 from teledrive.storage.manifest import ManifestStore
 from test_storage_engine import MemoryTelegram
 
@@ -146,3 +146,112 @@ def test_legacy_uploader_cli_bridge_never_connects_to_telegram(bridge, tmp_path)
                             capture_output=True, text=True, timeout=30)
     assert unsafe.returncode != 0
     assert len(queue.list_jobs()) == 1
+
+
+def _cutover(bridge, lease, *, bucket="bridge-ci", remote=None,
+             allowed_root=None):
+    root, _, queue, cfg = bridge
+    return asyncio.run(run_legacy_cutover_cycle(
+        cfg, queue, remote or MemoryTelegram(), lease_db=lease, bucket=bucket,
+        allowed_root=allowed_root or root, scratch_directory=root,
+        lease_name="uploader-global", lease_ttl=60, chunk_size=7,
+    ))
+
+
+def test_cutover_imports_once_and_uploads_exact_source_on_restart(bridge):
+    root, path, queue, _ = bridge
+    payload = b"verified-cutover-data" * 9
+    (root / "cutover.txt").write_bytes(payload)
+    remote = MemoryTelegram()
+    lease = connect_database(str(path))
+    try:
+        first, result = _cutover(bridge, lease, remote=remote)
+        assert first.queued == 1 and result["state"] == "done"
+        before = remote.uploads
+        second, again = _cutover(bridge, lease, remote=remote)
+        assert second.queued == 0 and second.already_queued == 1
+        assert again is None and remote.uploads == before
+        assert len(queue.list_jobs()) == 1
+        assert queue.catalog.get("bridge-ci", "cutover.txt").item.size == len(payload)
+        assert lease.acquire_lease("uploader-global", "old-uploader", int(time.time()), 60)
+        lease.release_lease("uploader-global", "old-uploader")
+    finally:
+        lease.close()
+
+
+def test_cutover_refuses_concurrent_legacy_uploader_before_import(bridge):
+    root, path, queue, _ = bridge
+    (root / "blocked.txt").write_bytes(b"blocked")
+    legacy = connect_database(str(path))
+    lease = connect_database(str(path))
+    try:
+        assert legacy.acquire_lease("uploader-global", "legacy-sender", int(time.time()), 60)
+        with pytest.raises(UploadJobError, match="holds"):
+            _cutover(bridge, lease)
+        assert queue.list_jobs() == []
+        legacy.release_lease("uploader-global", "legacy-sender")
+        imported, result = _cutover(bridge, lease)
+        assert imported.queued == 1 and result["state"] == "done"
+    finally:
+        lease.close()
+        legacy.close()
+
+
+def test_cutover_checks_root_database_and_bucket_before_telegram(bridge, tmp_path):
+    root, path, queue, _ = bridge
+    (root / "private.txt").write_bytes(b"never-send-on-error")
+    lease = connect_database(str(path))
+    unrelated = connect_database(str(tmp_path / "unrelated.db"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        with pytest.raises(UploadJobError, match="approved job root"):
+            _cutover(bridge, lease, allowed_root=outside)
+        with pytest.raises(UploadJobError, match="same database"):
+            _cutover(bridge, unrelated)
+        with pytest.raises(FileNotFoundError):
+            _cutover(bridge, lease, bucket="not-a-bucket")
+        assert queue.list_jobs() == []
+        assert lease.acquire_lease("uploader-global", "after-exception", int(time.time()), 60)
+        lease.release_lease("uploader-global", "after-exception")
+    finally:
+        lease.close()
+        unrelated.close()
+
+
+def test_cutover_holds_legacy_lease_during_telegram_send(bridge):
+    root, path, queue, _ = bridge
+    (root / "hold.txt").write_bytes(b"lease-fenced-send")
+    checker = connect_database(str(path))
+    lease = connect_database(str(path))
+    class FencedTelegram(MemoryTelegram):
+        async def upload(self, path, *, object_id, ordinal, checksum):
+            assert not checker.acquire_lease(
+                "uploader-global", "racing-uploader", int(time.time()), 60
+            )
+            return await super().upload(
+                path, object_id=object_id, ordinal=ordinal, checksum=checksum,
+            )
+    try:
+        _, result = _cutover(bridge, lease, remote=FencedTelegram())
+        assert result["state"] == "done"
+        assert queue.list_jobs()[0]["attempts"] == 1
+    finally:
+        lease.close()
+        checker.close()
+
+
+def test_cutover_can_publish_after_delete_marker_with_head_cas(bridge):
+    root, path, queue, _ = bridge
+    (root / "after.txt").write_bytes(b"version-after-delete")
+    marker = queue.catalog.delete_marker("bridge-ci", "after.txt")
+    lease = connect_database(str(path))
+    try:
+        _, done = _cutover(bridge, lease)
+        assert done["state"] == "done"
+        assert queue.catalog.get("bridge-ci", "after.txt").item.id != marker
+        versions, _ = queue.catalog.list_bucket_versions("bridge-ci")
+        assert any(entry["version_id"] == marker and entry["is_delete_marker"]
+                   for entry in versions)
+    finally:
+        lease.close()
