@@ -227,3 +227,37 @@ def test_admin_job_endpoints_require_root_auth_csrf_and_do_not_expose_tokens(
     retry = client.post(url + "/" + start.json()["id"] + "/retry",
                         auth=auth, headers={"x-teledrive-csrf": "1"})
     assert retry.status_code == 409
+
+
+def test_cancel_job_endpoint_requires_root_and_csrf_and_fences_active_jobs(
+    admin, monkeypatch, tmp_path
+):
+    client, db_path, _ = admin
+    root = tmp_path / "allowed-cancel"
+    root.mkdir()
+    source = root / "one.bin"
+    source.write_bytes(b"must-not-be-uploaded")
+    conn = connect_database(db_path)
+    try:
+        BucketCatalog(ManifestStore(conn)).create_bucket("cancel-admin", int(time.time()))
+    finally:
+        conn.close()
+    monkeypatch.setenv("TELEDRIVE_JOB_SOURCE_ROOT", str(root))
+    auth = ("testadmin", "secure-auth-password")
+    response = client.post("/api/v1/admin/storage/jobs",
+                           auth=auth, headers={"x-teledrive-csrf": "1"},
+                           json={"bucket": "cancel-admin", "key": "one.bin",
+                                 "source_path": str(source)})
+    assert response.status_code == 201, response.text
+    job_id = response.json()["id"]
+    url = f"/api/v1/admin/storage/jobs/{job_id}/cancel"
+    assert client.post(url).status_code in (401, 403)
+    assert client.post(url, auth=auth).status_code == 403
+    success = client.post(url, auth=auth, headers={"x-teledrive-csrf": "1"})
+    assert success.status_code == 200, success.text
+    assert success.json() == {"id": job_id, "state": "cancelled"}
+    assert client.post(url, auth=auth,
+                       headers={"x-teledrive-csrf": "1"}).status_code == 409
+    assert client.get("/api/v1/admin/storage/jobs", auth=auth).json()["jobs"][0]["state"] == "cancelled"
+    assert client.post("/api/v1/admin/storage/jobs/" + job_id + "/retry",
+                       auth=auth, headers={"x-teledrive-csrf": "1"}).status_code == 409

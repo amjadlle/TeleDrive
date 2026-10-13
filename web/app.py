@@ -1137,6 +1137,22 @@ def retry_storage_upload_job(
         conn.close()
 
 
+@app.post("/api/v1/admin/storage/jobs/{job_id}/cancel", tags=["Storage jobs"],
+          summary="Cancel only inactive jobs; preserve all Telegram media")
+def cancel_storage_upload_job(
+    job_id: str, request: Request, _: None = Depends(require_auth),
+):
+    _same_origin(request)
+    conn = db_connect()
+    try:
+        manager = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
+        if not manager.cancel(job_id):
+            raise HTTPException(409, "Job is active, completed, cancelled or does not exist")
+        return {"id": job_id, "state": "cancelled"}
+    finally:
+        conn.close()
+
+
 @app.get("/api/v1/admin/storage/pending-stale", tags=["Storage recovery"],
          summary="Preview aged PENDING upload leases; no Telegram deletion")
 def list_stale_pending_objects(
