@@ -677,7 +677,9 @@ def test_browser_post_metadata_duplicate_constraints_fail_closed(service):
         "x-amz-meta-ci": "signed",
     })
     constraints = json.loads(base64.b64decode(base["policy"]))["conditions"]
-    constraints[-2] = {"x-amz-meta-ci": "signed"}
+    # Duplicate the metadata clause and drop the key constraint, rather
+    # than accidentally retaining the original valid policy unchanged.
+    constraints[1] = {"x-amz-meta-ci": "signed"}
     response = post(service, body, make_form(
         service, body, extra_fields={"x-amz-meta-ci": "signed"},
         clauses=constraints,
