@@ -686,3 +686,21 @@ verification and explicit retention approvals are implemented.
 - Real Telethon E2E and Security CI on `6452c123` both successful.
   Successful isolated CI drills are not a full production secrets-recovery
   test, nor a sustained multiple-application-host load test.
+
+## P1.3 signed browser POST prefix and P1.4 real size extensions (2026-10-14)
+
+- Browser POST accepts SigV4 policy `["starts-with", "$key", "prefix/"]`
+  for the object key **only**, keeping bucket, signing scope, date, SHA-256,
+  mandatory size range and expiration constraints exact. Unexpanded
+  `${filename}` template values are still rejected as actual object keys.
+- HTTP integration tests cover a signed nested Unicode key, refusal of
+  out-of-prefix destinations, checksum mutation, other-bucket uploads,
+  unsupported wildcard fields and independently generated boto3
+  browser-prefix policies with a browser-expanded key.
+- Live Bot API and Telethon standard E2E matrices add random 2 MiB + 17 B
+  two-chunk uploads with real message IDs, exact readback, SQL restart,
+  per-chunk checksums, Range validation and scoped cleanup; Telethon also
+  adds 2047 B and Bot adds exact 8192 B.
+- **Acceptance is provisional until this SHA's GitHub Actions jobs finish.**
+  This does not close the remaining production multi-host Telegram soak,
+  lost-ACK-before-receipt gap, or full S3 browser policy parity.
