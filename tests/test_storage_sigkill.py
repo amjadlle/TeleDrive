@@ -145,3 +145,120 @@ def test_real_sigkill_recovers_only_missing_remote_chunks(tmp_path):
         assert (remote / "1.bin").read_bytes() == body[:5]
     finally:
         reopened.close()
+
+BOT_ACK_CRASH_CHILD = r'''
+import asyncio
+import hashlib
+import os
+import signal
+import sys
+from pathlib import Path
+
+from teledrive.db import connect_database
+from teledrive.storage.bot_api_adapter import BotApiChunkTransport, BotFileIndex
+
+class AcceptedThenKilled:
+    async def call(self, method, fields, source=None):
+        if method != "sendDocument":
+            raise AssertionError(method)
+        # Simulate a remote Telegram post that really accepted the bytes.
+        target = Path(sys.argv[3])
+        target.write_bytes(source.read_bytes())
+        os.kill(os.getpid(), signal.SIGKILL)
+        raise AssertionError("SIGKILL should prevent an ACK from returning")
+
+async def main():
+    db = connect_database(sys.argv[1])
+    try:
+        path = Path(sys.argv[2])
+        transport = BotApiChunkTransport(
+            AcceptedThenKilled(), BotFileIndex(db),
+            chat_id=-1001234, min_upload_interval=0,
+        )
+        await transport.upload(
+            path, object_id="sigkill-bot-ack", ordinal=0,
+            checksum=hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
+    finally:
+        db.close()
+
+asyncio.run(main())
+'''
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX SIGKILL required")
+def test_actual_sigkill_after_remote_bot_acceptance_never_blindly_retries(tmp_path):
+    """A real child dies after remote acceptance and before its HTTP ACK.
+
+    Recovery sees the previously committed send intent on a new SQL
+    connection and cannot retransmit that exact object chunk. An operator
+    may later record an independently proven ACK; no unproven message is
+    automatically inserted into the manifest or deleted.
+    """
+    import hashlib
+    from teledrive.storage.bot_api_adapter import (
+        BotApiChunkTransport, BotApiError, BotFileIndex,
+    )
+
+    path = tmp_path / "bot-intents.db"
+    chunk = tmp_path / "signed-binary.bin"
+    accepted = tmp_path / "telegram-accepted.bin"
+    data = bytes(range(256)) * 400 + bytes((0, 255)) * 170
+    chunk.write_bytes(data)
+    sha = hashlib.sha256(data).hexdigest()
+    seed = connect_database(str(path))
+    try:
+        BotFileIndex(seed)
+    finally:
+        seed.close()
+
+    result = subprocess.run(
+        [sys.executable, "-c", BOT_ACK_CRASH_CHILD,
+         str(path), str(chunk), str(accepted)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, timeout=30, check=False,
+    )
+    assert result.returncode == -signal.SIGKILL, result.stderr.decode(errors="replace")
+    assert accepted.read_bytes() == data  # remote post definitely occurred
+
+    reopened = connect_database(str(path))
+    try:
+        index = BotFileIndex(reopened)
+        assert index.unresolved_count() == 1
+        with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+            index.find_receipt(
+                "sigkill-bot-ack", 0, account="bot",
+                chat_id=-1001234, checksum=sha, size=len(data),
+            )
+
+        class UnexpectedResend:
+            calls = 0
+
+            async def call(self, method, fields, source=None):
+                self.calls += 1
+                raise AssertionError("Unknown-outcome chunk was resent")
+
+        fake = UnexpectedResend()
+        transport = BotApiChunkTransport(
+            fake, index, chat_id=-1001234, min_upload_interval=0,
+        )
+        with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+            asyncio.run(transport.upload(
+                chunk, object_id="sigkill-bot-ack", ordinal=0, checksum=sha,
+            ))
+        assert fake.calls == 0
+        # A separate owner-authorized proof of original message identity,
+        # file ID and byte-for-byte match is required before recovery.
+        assert hashlib.sha256(accepted.read_bytes()).hexdigest() == sha
+        index.put_receipt(
+            "bot", -1001234, 99, "owner-verified-original-message",
+            object_id="sigkill-bot-ack", ordinal=0, checksum=sha, size=len(data),
+        )
+        assert index.unresolved_count() == 0
+        original = index.find_receipt(
+            "sigkill-bot-ack", 0, account="bot",
+            chat_id=-1001234, checksum=sha, size=len(data),
+        )
+        assert original and original.message_id == 99
+    finally:
+        reopened.close()
