@@ -177,7 +177,11 @@ def test_live_bot_s3_multipart_moves_real_telegram_messages():
     asyncio.run(scenario())
 
 
-def test_live_bot_sqlite_snapshot_restores_remote_telegram_object():
+@pytest.mark.parametrize("payload_size,chunk_size", [
+    pytest.param(3071, 2048, id="3KiB-two-chunks"),
+    pytest.param(1024 * 1024 + 17, 256 * 1024, id="1MiB-plus-17-five-chunks"),
+])
+def test_live_bot_sqlite_snapshot_restores_remote_telegram_object(payload_size, chunk_size):
     """Real Bot API DR rehearsal: snapshot -> separate SQL restore -> download.
 
     Snapshot metadata is not itself a Telegram backup; restored Bot file IDs
@@ -199,7 +203,7 @@ def test_live_bot_sqlite_snapshot_restores_remote_telegram_object():
             root = Path(folder)
             live_path = root / "live.sqlite"
             snapshot_path = root / "restore.sqlite"
-            payload = os.urandom(3071)
+            payload = os.urandom(payload_size)
             source = root / "source.bin"
             source.write_bytes(payload)
             live_db = connect_database(str(live_path))
@@ -215,11 +219,11 @@ def test_live_bot_sqlite_snapshot_restores_remote_telegram_object():
                 )
                 await transport.verify_target()
                 uploaded = await TelegramObjectStorage(
-                    catalog.manifests, transport, chunk_size=2048,
+                    catalog.manifests, transport, chunk_size=chunk_size,
                     scratch_directory=root,
                 ).put_file("live-dr-ci", "snapshots/file.bin", source)
                 refs = catalog.manifests.parts(uploaded.id)
-                assert len(refs) == 2
+                assert len(refs) == (payload_size + chunk_size - 1) // chunk_size
                 catalog.publish(uploaded.id, now=int(time.time()))
                 checksum = backup_sqlite(live_path, snapshot_path)
                 validated = verify_snapshot(snapshot_path, checksum)
@@ -247,16 +251,16 @@ def test_live_bot_sqlite_snapshot_restores_remote_telegram_object():
                 restored_source = root / "restored.bin"
                 restored_engine = TelegramObjectStorage(
                     recovered_catalog.manifests, restored_transport,
-                    chunk_size=2048, scratch_directory=root,
+                    chunk_size=chunk_size, scratch_directory=root,
                 )
                 await restored_engine.download_to_path(uploaded.id, restored_source)
                 assert restored_source.read_bytes() == payload
                 received = bytearray()
                 async for block in restored_engine.iter_bytes(
-                    uploaded.id, start=2047, end=2051,
+                    uploaded.id, start=chunk_size - 2, end=chunk_size + 2,
                 ):
                     received.extend(block)
-                assert bytes(received) == payload[2047:2051]
+                assert bytes(received) == payload[chunk_size - 2:chunk_size + 2]
             finally:
                 # Cleanup must remain possible even if the restored snapshot
                 # cannot be opened. The original SQL ACK index is committed
