@@ -368,6 +368,21 @@ PUT mode, TeleDrive intentionally requires a **SHA-256 checksum included in
 the URL's SignedHeaders**: bare unsigned-payload PUT links are refused.
 Presigned multipart POST operations are not yet supported.
 
+**CopyObject implemented:** Metadata-only copy now creates a new immutable
+object ID that references the source's existing Telegram chunk journal,
+without duplicating Telegram messages or violating the unique-message DB
+constraint. Both source `s3:GetObject` and destination `s3:PutObject`
+permissions are checked; `x-amz-copy-source` and ETag conditions must be
+SigV4-signed. Copies remain accessible after the source key is deleted or
+replaced. Copying multipart objects preserves their original multipart
+ETag. CopySource supports `bucket/key` (boto3) and `/bucket/key`, and
+cross-bucket copies work within the same Telegram storage.
+
+**CopyObject limits:** Metadata REPLACE, versionId, byte-range copy and
+advanced copy headers are not yet supported and are rejected explicitly.
+Physical garbage collection MUST follow shared alias references; deleting
+source Telegram media while an alias exists would corrupt copied objects.
+
 **Not yet supported:** virtual-host-style buckets, AWS chunked or
 checksum-unbound PUT bodies, ACL/policy APIs, version listing, lifecycle,
 object lock, notifications, replication, advanced multipart checksum modes
@@ -443,10 +458,13 @@ operation. Use HTTPS or a trusted VPN for any remote admin traffic.
   default. Staged Telegram messages are never deleted during recovery.
   Pre-fencing legacy `completing` rows that have no lease remain blocked
   for manual investigation (never guessed safe to recover).
-- **Orphan/obsolete Telegram parts:** Abort, part replacement, unselected
-  parts, and object overwrite can leave unreferenced Telegram messages.
-  Verified mark-and-sweep GC with retention, a dry-run preview and explicit
-  deletion authorization is required. Immediate deletion is intentionally off.
+- **Orphan/obsolete Telegram parts and CopyObject aliases:** Abort, part
+  replacement, unselected parts and object overwrites retain immutable chunk
+  journals. CopyObject also shares existing Telegram messages through an
+  immutable alias mapping. Future mark-and-sweep GC MUST preserve every
+  source referenced by a live alias, check historical manifests and apply
+  retention before verifying and deleting remote messages. GC is intentionally
+  disabled rather than risk losing copied data.
 - **Physical lifecycle/versioning:** DeleteObject currently unlinks the
   current pointer; historical data remains and is not yet exposed through
   complete S3 ListObjectVersions / restore APIs.
