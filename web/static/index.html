@@ -117,6 +117,33 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 <h3>Existing keys</h3>
 <div class="scroll"><table><thead><tr><th>Name</th><th>Key prefix</th><th>Permissions</th><th>Created / last used</th><th>Status</th><th>Actions</th></tr></thead><tbody id="apiKeysRows"></tbody></table></div>
 </div>
+<div class="card section">
+<h3>S3-compatible gateway (initial core)</h3>
+<p class="muted">Telegram is the only payload backend. S3 credentials are encrypted at rest, scoped independently of REST keys, and displayed once. Configure the S3 master key before issuing credentials.</p>
+<div class="form-grid">
+<div><label>S3 access name</label><input class="input" id="s3KeyName" maxlength="120" placeholder="AWS CLI backup"></div>
+<div><label>Expiry (optional)</label><input class="input" id="s3KeyExpiry" type="datetime-local"></div>
+</div>
+<div class="section" id="s3Permissions"><label>Allowed S3 actions</label><div class="form-grid">
+<label><input type="checkbox" value="s3:ListAllMyBuckets" checked> List buckets</label>
+<label><input type="checkbox" value="s3:ListBucket" checked> List bucket contents</label>
+<label><input type="checkbox" value="s3:GetObject" checked> Get/Head object</label>
+<label><input type="checkbox" value="s3:PutObject"> Put object</label>
+<label><input type="checkbox" value="s3:DeleteObject"> Delete object pointer</label>
+<label><input type="checkbox" value="s3:CreateBucket"> Create bucket</label>
+<label><input type="checkbox" value="s3:DeleteBucket"> Delete bucket</label>
+</div></div>
+<div class="row section"><button class="btn primary compact" id="createS3Key">Create S3 credentials</button><button class="btn compact" id="refreshS3Keys">Refresh S3 list</button></div>
+<div class="section card" id="createdS3Card" style="display:none">
+<b>S3 credentials — copy now. Secret cannot be recovered.</b>
+<div class="form-grid"><div><label>Access Key ID</label><input id="s3NewAccess" class="input" readonly spellcheck="false"></div><div><label>Secret Access Key</label><input id="s3NewSecret" type="password" class="input" readonly spellcheck="false"></div></div>
+<div class="row section"><button class="btn compact" id="copyS3Credentials">Copy AWS credentials</button><button class="btn compact" id="hideS3Credentials">Hide secret</button></div>
+</div>
+</div>
+<div class="card section"><h3>Existing S3 credentials</h3>
+<div class="scroll"><table><thead><tr><th>Name</th><th>Access Key ID</th><th>Permissions</th><th>Created</th><th>Status</th><th>Actions</th></tr></thead><tbody id="s3KeysRows"></tbody></table></div>
+<p class="tiny">Local S3 endpoint: <code>http://127.0.0.1:9000</code> (enable with Docker Compose profile <code>s3</code>). This initial subset supports path-style SigV4 bucket/object operations; multipart and presigned URLs are not yet supported.</p>
+</div>
 <div class="card section"><h3>API endpoints</h3>
 <p><code>/api/v1/buckets</code> · <code>/api/v1/buckets/{bucket}/objects</code></p>
 <p class="tiny">Use <code>Authorization: Bearer &lt;token&gt;</code> for scoped endpoints. Administrative key management still requires the WebUI Basic login and CSRF header. The Telegram binary upload and S3 protocol endpoints are under development.</p>
