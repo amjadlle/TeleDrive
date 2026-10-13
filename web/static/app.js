@@ -222,13 +222,20 @@ async function loadStorageJobs(){
       +'<td><code>'+esc(j.source_path)+'</code></td>'
       +'<td>'+esc(j.state)+'</td><td>'+Number(j.attempts||0)+'</td>'
       +'<td>'+fmtTs(j.updated_at)+'</td>'
-      +'<td>'+(j.state==='failed'?'<button class="btn compact storage-job-retry" data-id="'+esc(j.id)+'">Retry</button>':(j.last_error?esc(j.last_error):'-'))+'</td></tr>'
+      +'<td>'+(j.state==='failed'?'<button class="btn compact storage-job-retry" data-id="'+esc(j.id)+'">Retry</button> ':'' )+(j.state==='queued'||j.state==='failed'?'<button class="btn compact storage-job-cancel" data-id="'+esc(j.id)+'">Cancel</button>':(j.last_error?esc(j.last_error):'-'))+'</td></tr>'
     ).join(''):'<tr><td colspan="6">No upload jobs</td></tr>';
     $('.storage-job-retry').forEach(button=>button.onclick=async()=>{
       if(!confirm('Requeue this failed job? The original source must still be unchanged. Existing Telegram media will not be deleted.'))return;
       try{
         await api('/api/v1/admin/storage/jobs/'+encodeURIComponent(button.dataset.id)+'/retry',{method:'POST'});
         toast('Job queued for retry');await loadStorageJobs();
+      }catch(e){toast(e.message,true)}
+    });
+    $('.storage-job-cancel').forEach(button=>button.onclick=async()=>{
+      if(!confirm('Cancel this idle upload job? No Telegram message will be deleted.'))return;
+      try{
+        await api('/api/v1/admin/storage/jobs/'+encodeURIComponent(button.dataset.id)+'/cancel',{method:'POST'});
+        toast('Idle job cancelled');await loadStorageJobs();
       }catch(e){toast(e.message,true)}
     });
   }catch(e){target.textContent='Cannot list upload jobs: '+e.message}
