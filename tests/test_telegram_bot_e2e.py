@@ -294,6 +294,7 @@ def test_live_bot_sqlite_snapshot_restores_remote_telegram_object(payload_size, 
     pytest.param(65537, 16384, id="64KiB-plus-one"),
     pytest.param(1048593, 262144, id="1MiB-plus-17"),
     pytest.param(2 * 1024 * 1024 + 17, 1024 * 1024, id="2MiB-plus-17"),
+    pytest.param(3 * 1024 * 1024 + 31, 1024 * 1024, id="3MiB-plus-31"),
 ])
 def test_live_bot_real_payload_size_matrix_and_sql_restart(size, chunk_size):
     """Independent real send/getFile/download for empty, boundaries and MiB data.
@@ -315,7 +316,10 @@ def test_live_bot_real_payload_size_matrix_and_sql_restart(size, chunk_size):
             root = Path(folder)
             db_path = root / "size-matrix.db"
             source = root / "original.bin"
-            expected = os.urandom(size)
+            # Alternating NUL/0xFF catches binary/text conversion bugs;
+            # the other size cases remain independent high-entropy data.
+            expected = ((bytes((0, 255)) * ((size + 1) // 2))[:size]
+                        if size == 65537 else os.urandom(size))
             source.write_bytes(expected)
             database = connect_database(str(db_path))
             api = BotApiClient(token)
