@@ -65,10 +65,11 @@ every workflow at the release SHA.
   browser POST are implemented and tested. Full AWS browser-policy operators,
   redirect/status variants and S3 lifecycle remain unsupported.
 - [ ] **P1.4 Operations:** operator metrics/alerts, SQLite online backup and
-  verified real Telegram payload restore, Windows/Linux and PostgreSQL/MySQL
-  CI, and multi-process queue tests are implemented. Native database DR,
-  sustained multi-host Telegram fault/429 soak, production cutover and final
-  repository/release protection still require operator acceptance.
+  verified real Telegram payload restore, Windows/Linux CI, PostgreSQL/MySQL
+  integration, multi-process queue tests and **native PostgreSQL 17 + MySQL
+  8.4 dump/isolated restore drills** are implemented and verified. Sustained
+  real multi-host Telegram fault/429 soak, production cutover and release
+  protection still require operator acceptance.
 
 ## P2 — advanced functionality
 
@@ -237,9 +238,11 @@ verification and explicit retention approvals are implemented.
 - **P1 remaining:** Bot API ACK lost before receipt persistence (Bot API
   cannot read arbitrary historical channel posts), additional browser POST
   wildcard/redirect policy variants, long-running multi-host Telegram 429
-  and revocation soak, native PostgreSQL/MySQL disaster restores, and
-  operator-controlled production legacy cutover. Receipt-persisted ACKs,
-  folder import, logical S3 delete markers and real SQLite/Bot restore pass.
+  and revocation soak, production-representative staging restore with real
+  secrets and Telegram retention, and operator-controlled production legacy
+  cutover. Native PostgreSQL/MySQL disposable CI restores, receipt-persisted
+  ACKs, bounded Bot 429 handling, folder import, S3 delete markers and
+  live SQLite/Bot restore now pass.
 - **P2 remaining:** audited retention-approved physical GC, S3 SSE/policy/
   lifecycle semantics, DNS/TLS and external virtual-host/Cyberduck acceptance,
   Telegram rebuild, live full DR/fault/rate-limit benchmarks and installers.
@@ -659,3 +662,27 @@ verification and explicit retention approvals are implemented.
 - Deterministic HTTP 429, repeat-429, >60-second cooldown, one-success-after-
   cooldown, and ambiguous-network-failure tests assert the exact number of
   actual Telegram sends/receipt writes without intentionally flooding CI.
+
+## P1.4 latest acceptance — native restore and bounded Telegram 429
+
+- Native DB CI run `38475604718` successful: PostgreSQL 17 `pg_dump -Fc`
+  and `pg_restore` plus MySQL 8.4 transaction-consistent `mysqldump` and
+  restore into separate empty `teledrive_dr_ci` databases. **70 live DB
+  tests passed** and both restored stores reproduced exact HEAD/generation,
+  two checksum-bound immutable chunk records, published/removed versions,
+  UTF-8 tags, unjournaled Bot ACK receipt, queued job and decryptable
+  independent **test** S3 credential. No production media was deleted.
+- Storage API run `38475357913` **384 passed**, AWS CLI/rclone **3 passed**,
+  including bounded 429 parsing/retry, 429 exhaustion and indefinite network
+  outcome fail-closed behavior. A known rejected send can be retried once
+  after retry_after, but an ambiguous failed response is never automatically
+  resent.
+- Real Bot E2E run `38476179404` **13 passed, 3 optional large tests
+  skipped**. A synthetic first Telegram 429 is followed by two genuinely
+  accepted channel chunks; exact two-record durable SQL receipt index,
+  independent restart/readback SHA-256 and cross-chunk ranged bytes pass.
+  Only test-owned message IDs are cleaned up. We do NOT intentionally
+  exceed Telegram flood limits to manufacture 429 responses.
+- Real Telethon E2E and Security CI on `6452c123` both successful.
+  Successful isolated CI drills are not a full production secrets-recovery
+  test, nor a sustained multiple-application-host load test.
