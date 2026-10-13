@@ -54,11 +54,11 @@ async function loadKeys(){
       return '<tr><td>'+esc(k.name)+'</td><td><code>'+esc(k.prefix)+'…</code></td><td>'+esc((k.scopes||[]).join(', '))+'</td><td>'+fmtTs(k.created_at)+'<br>'+fmtTs(k.last_used_at)+'</td><td>'+state+'</td><td><div class="row"><button class="btn compact key-rotate" data-id="'+esc(k.id)+'" '+(state!=='Active'?'disabled':'')+'>Rotate</button><button class="btn danger compact key-revoke" data-id="'+esc(k.id)+'" '+(state==='Revoked'?'disabled':'')+'>Revoke</button></div></td></tr>';
     }).join('');
     $('#apiKeysRows').innerHTML=rows;
-    $('.key-revoke').forEach(b=>b.onclick=async()=>{
+    $$('.key-revoke').forEach(b=>b.onclick=async()=>{
       if(!confirm('Revoke this API key immediately? Existing clients will lose access.'))return;
       try{await api('/api/v1/admin/keys/'+encodeURIComponent(b.dataset.id),{method:'DELETE'});toast('Key revoked');await loadKeys()}catch(e){toast(e.message,true)}
     });
-    $('.key-rotate').forEach(b=>b.onclick=async()=>{
+    $$('.key-rotate').forEach(b=>b.onclick=async()=>{
       if(!confirm('Rotate this key now? The old token will stop working immediately.'))return;
       try{const result=await api('/api/v1/admin/keys/'+encodeURIComponent(b.dataset.id)+'/rotate',{method:'POST'});revealKey(result.token);toast('Key rotated');await loadKeys()}catch(e){toast(e.message,true)}
     });
