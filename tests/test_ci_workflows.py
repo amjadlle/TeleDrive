@@ -201,3 +201,34 @@ def test_storage_ci_retriggers_when_legacy_migration_or_db_lease_contract_change
     )
     assert "tests/test_legacy_bridge.py" in command
     assert "tests/test_legacy_import_admin.py" in command
+
+def test_real_bot_soak_is_explicitly_opted_in_and_never_silently_skipped():
+    bot = workflow("telegram-bot-e2e.yml")
+    assert bot["on"]["workflow_dispatch"]["inputs"]["run_soak"]["type"] == "boolean"
+    script = bot["jobs"]["telegram-bot-roundtrip"]["steps"]
+    assert any("tests/test_telegram_bot_e2e.py" in s.get("run", "") for s in script)
+    expression = bot["jobs"]["telegram-bot-roundtrip"]["env"]["TELEDRIVE_E2E_SOAK"]
+    assert "inputs.run_soak" in expression
+    assert "[p1-live-soak]" in expression
+    assert "github.event_name == 'push'" in expression
+    assert bot["concurrency"]["cancel-in-progress"] == "false"
+    assert bot["jobs"]["telegram-bot-roundtrip"]["timeout-minutes"] == "15"
+
+
+def test_bot_send_intent_contract_and_operator_health_trigger_correct_ci():
+    storage = workflow("storage-api-ci.yml")
+    for event in ("push", "pull_request"):
+        paths = storage["on"][event]["paths"]
+        assert "teledrive/storage/**" in paths
+        assert "web/**" in paths
+        assert "tests/test_bot_storage.py" in paths
+        assert "tests/test_storage_ops_health.py" in paths or "tests/test_storage_*.py" in paths
+    executed = "\\n".join(
+        step.get("run", "") for step in storage["jobs"]["storage-api"]["steps"]
+    )
+    assert "tests/test_bot_storage.py" in executed
+    assert "tests/test_storage_ops_health.py" in executed
+    security_steps = "\\n".join(
+        step.get("run", "") for step in workflow("security-ci.yml")["jobs"]["security"]["steps"]
+    )
+    assert "tests/test_bot_storage.py" in security_steps
