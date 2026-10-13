@@ -776,3 +776,25 @@ verification and explicit retention approvals are implemented.
   multi-host/per-region production soak or revocation load certification.
   Tests are optional by design to avoid unexpected data transfer/costs.
 - **New P1.1/P1.4 changes require fresh 7-workflow same-SHA CI evidence.**
+
+## P1.3 signed browser POST Content-Type interoperability (2026-10-14)
+
+- Browser POST accepts the optional S3 `Content-Type` form field only
+  when the signed policy includes an exact field condition or a bounded
+  `["starts-with", "$Content-Type", "image/"]` constraint. Checksum,
+  credentials, bucket, success status and redirect remain strictly bound;
+  an added unsigned Content-Type or an altered exact MIME type fails before
+  Telegram send.
+- MIME values pass through the normal S3 metadata validator (bounded value
+  size, no control characters) **before upload** and are attached to the
+  immutable object in the same SQL transaction that publishes the HEAD.
+  Subsequent signed GET and HEAD return the persisted content type without
+  changing Telegram bytes.
+- Real HTTP SDK interoperability covers boto3-generated `Content-Type`
+  POST policies, MIME prefix acceptance and denial, binary-body checksum,
+  signed head/readback, and malformed metadata. The multipart file part
+  MIME header is **not** treated as an unsigned replacement for this
+  independently signed form field.
+- Advanced `x-amz-meta-*` browser fields, arbitrary AWS policy operators
+  and unsupported storage semantics are still rejected rather than
+  acknowledged without persistence. Same-SHA CI signoff remains required.
