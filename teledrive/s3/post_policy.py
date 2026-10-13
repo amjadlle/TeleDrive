@@ -118,6 +118,15 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
                 raise SigV4Error("AccessDenied", "Invalid signed size range")
             has_range = True
             continue
+        # A signed prefix may constrain the browser's destination key.
+        # All other fields remain exact matches.
+        if (isinstance(entry, list) and len(entry) == 3
+                and entry[0] == "starts-with" and entry[1] == "$key"):
+            if ("key" in seen or not isinstance(entry[2], str)
+                    or not key.startswith(entry[2])):
+                raise SigV4Error("AccessDenied", "POST key is outside signed prefix")
+            seen.add("key")
+            continue
         if isinstance(entry, dict) and len(entry) == 1:
             name, value = next(iter(entry.items()))
         elif (isinstance(entry, list) and len(entry) == 3
