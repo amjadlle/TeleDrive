@@ -206,5 +206,12 @@ class BucketCatalog:
                 raise ValueError("Bucket has multipart history; safe GC required")
         if history is not None:
             raise ValueError("Bucket has object history; safe physical GC required")
+        # A physically empty bucket can be deleted even if its tag set is
+        # nonempty; do not leave dangling metadata across SQL backends.
+        if inspect(self.db.engine).has_table("storage_bucket_tags"):
+            self.db.connection.execute(
+                text("DELETE FROM storage_bucket_tags WHERE bucket = :bucket"),
+                {"bucket": name},
+            )
         self.db.connection.execute(delete(buckets).where(buckets.c.name == name))
         self.db.commit()
