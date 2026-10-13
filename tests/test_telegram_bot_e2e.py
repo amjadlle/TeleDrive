@@ -1115,3 +1115,153 @@ def test_live_bot_five_durable_jobs_three_sql_workers_different_sizes():
                     emergency_db.close()
 
     asyncio.run(scenario())
+
+def test_live_bot_accepted_upload_lost_ack_is_fenced_until_proven():
+    """Real channel ACK-loss drill: persist intent, never send same part twice.
+
+    The deliberately withheld ACK is stored ONLY by this test's fault
+    injector. Its original Telegram file ID must be independently
+    downloaded and matched before explicitly recording a recovery receipt.
+    Production Bot API alone cannot reconstruct arbitrary lost channel ACKs.
+    """
+    import time
+    from sqlalchemy import select, update
+    from teledrive.storage.manifest import writer_fences
+    from teledrive.storage.bot_api_adapter import BotApiError, _bot_files
+
+    token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
+    chat = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
+    if not token or not chat:
+        pytest.skip("Dedicated real Telegram Bot API channel not configured")
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-live-lost-ack-") as folder:
+            root = Path(folder)
+            db_path = root / "intents.db"
+            payload = os.urandom(64 * 1024 + 73)
+            part_size = 64 * 1024
+            source = root / "original.bin"
+            source.write_bytes(payload)
+            part = root / "first.bin"
+            part.write_bytes(payload[:part_size])
+            checksum = hashlib.sha256(part.read_bytes()).hexdigest()
+            real = BotApiClient(token)
+            remote_ack = []
+            sends = []
+
+            class WithholdOneAck:
+                async def call(self, method, fields, source=None):
+                    result = await real.call(method, fields, source)
+                    if method == "sendDocument":
+                        sends.append(int(result["message_id"]))
+                        if not remote_ack:
+                            remote_ack.append(result)
+                            raise BotApiError("Bot API sendDocument request failed")
+                    return result
+
+                async def download_file(self, remote_path, destination):
+                    return await real.download_file(remote_path, destination)
+
+            db = connect_database(str(db_path))
+            try:
+                manifests = ManifestStore(db)
+                object_id = manifests.begin(
+                    "live-intent", "ACK-lost.bin", len(payload), int(time.time()),
+                )
+                manifests.start_writer(
+                    object_id, "interrupted-writer", int(time.time()), ttl=60,
+                )
+                transport = BotApiChunkTransport(
+                    WithholdOneAck(), BotFileIndex(db), chat_id=int(chat),
+                    account="bot-live-lost-ack", min_upload_interval=1.1,
+                )
+                await transport.verify_target()
+                with pytest.raises(BotApiError, match="request failed"):
+                    await transport.upload(
+                        part, object_id=object_id, ordinal=0, checksum=checksum,
+                    )
+                assert len(sends) == 1
+                assert BotFileIndex(db).unresolved_count() == 1
+                assert manifests.recovery_parts(object_id) == []
+
+                db.connection.execute(update(writer_fences).where(
+                    writer_fences.c.object_id == object_id,
+                ).values(lease_until=0))
+                db.commit()
+                db.close()
+                db = connect_database(str(db_path))
+                transport = BotApiChunkTransport(
+                    real, BotFileIndex(db), chat_id=int(chat),
+                    account="bot-live-lost-ack", min_upload_interval=1.1,
+                )
+                index = transport.index
+                with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+                    index.find_receipt(
+                        object_id, 0, account=transport.account, chat_id=int(chat),
+                        checksum=checksum, size=part_size,
+                    )
+                with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+                    await transport.upload(
+                        part, object_id=object_id, ordinal=0, checksum=checksum,
+                    )
+                assert len(sends) == 1
+
+                # External operator proof is simulated here using the ACK the
+                # injector had retained. Fetch actual Telegram bytes, verify
+                # checksum and channel ID, THEN durably record the receipt.
+                acknowledged = remote_ack[0]
+                assert int(acknowledged["chat"]["id"]) == int(chat)
+                file_id = acknowledged["document"]["file_id"]
+                remote_meta = await real.call("getFile", {"file_id": file_id})
+                remote_path = root / "proof.bin"
+                await real.download_file(remote_meta["file_path"], remote_path)
+                assert remote_path.read_bytes() == payload[:part_size]
+                assert hashlib.sha256(remote_path.read_bytes()).hexdigest() == checksum
+                index.put_receipt(
+                    transport.account, int(chat), int(acknowledged["message_id"]),
+                    file_id, object_id=object_id, ordinal=0,
+                    checksum=checksum, size=part_size,
+                )
+                assert index.unresolved_count() == 0
+                completed = await TelegramObjectStorage(
+                    ManifestStore(db), transport, chunk_size=part_size,
+                    scratch_directory=root,
+                ).resume_file("live-intent", "ACK-lost.bin", source, object_id)
+                assert completed.sha256 == hashlib.sha256(payload).hexdigest()
+                refs = ManifestStore(db).parts(object_id)
+                assert len(refs) == 2
+                assert refs[0].message_id == acknowledged["message_id"]
+                assert refs[0].sha256 == checksum
+
+                db.close()
+                db = connect_database(str(db_path))
+                source.unlink()
+                final_transport = BotApiChunkTransport(
+                    real, BotFileIndex(db), chat_id=int(chat),
+                    account="bot-live-lost-ack",
+                )
+                restored = root / "verified-remote.bin"
+                await TelegramObjectStorage(
+                    ManifestStore(db), final_transport, chunk_size=part_size,
+                    scratch_directory=root,
+                ).download_to_path(object_id, restored)
+                assert restored.read_bytes() == payload
+                assert len(db.connection.execute(select(_bot_files.c.message_id)).all()) == 2
+            finally:
+                try:
+                    # Only this invocation's two positively known Telegram IDs.
+                    # The first message is recorded before a simulated lost ACK.
+                    ids = set(sends)
+                    for _, _, message_id in db.connection.execute(select(
+                        _bot_files.c.account, _bot_files.c.chat_id,
+                        _bot_files.c.message_id,
+                    )).all():
+                        ids.add(int(message_id))
+                    for message_id in sorted(ids):
+                        await real.call("deleteMessage", {
+                            "chat_id": int(chat), "message_id": message_id,
+                        })
+                finally:
+                    db.close()
+
+    asyncio.run(scenario())
