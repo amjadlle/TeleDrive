@@ -168,7 +168,7 @@ def matching_rule(rules: list[dict], origin: str, method: str,
             continue
         allowed = [header.lower() for header in rule["allowed_headers"]]
         if not all(any(
-            re.fullmatch("^" + re.escape(pattern).replace(r"\\*", ".*") + "$", name.lower())
+            re.fullmatch("^" + re.escape(pattern).replace(r"\*", ".*") + "$", name.lower())
             for pattern in allowed
         ) for name in requested_headers):
             continue
