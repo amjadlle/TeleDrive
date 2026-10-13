@@ -352,6 +352,36 @@ manifest system as normal GET/HEAD. Boto3 tests verify V1, V2, delimiter
 pagination and encoded object names. `us-east-1` bucket discovery is exposed
 through the independently scoped `s3:GetBucketLocation` permission.
 
+**S3 bucket CORS (browser clients):** Signed `GetBucketCors`, `PutBucketCors`
+and `DeleteBucketCors` manage bounded CORS XML rules, stored in SQL rather
+than Telegram payloads. Scope S3 keys with `s3:GetBucketCORS` and
+`s3:PutBucketCORS` (also available in WebUI/Desktop credential management).
+Public `OPTIONS` preflight requests consult the bucket's configured rules,
+checking the Origin, requested method and requested headers. **CORS does
+not authenticate requests:** every actual S3 read/write still requires
+normal SigV4 authorization and the appropriate object permissions. Rules
+cannot silently expose private objects or bypass the signed request scope.
+
+~~~python
+s3.put_bucket_cors(
+    Bucket="backup-bucket",
+    CORSConfiguration={"CORSRules": [{
+        "AllowedOrigins": ["https://backup.example.com"],
+        "AllowedMethods": ["GET", "PUT", "HEAD"],
+        "AllowedHeaders": ["x-amz-*", "content-type"],
+        "ExposeHeaders": ["ETag"],
+        "MaxAgeSeconds": 600,
+    }]},
+)
+assert s3.get_bucket_cors(Bucket="backup-bucket")["CORSRules"][0]["MaxAgeSeconds"] == 600
+~~~
+
+Cross-origin requests should use HTTPS when accessed remotely. CORS is a
+browser restriction mechanism, **not** a bucket policy, firewall or a
+substitute for signed credentials. Hostile XML, unsupported methods, oversize
+policies and invalid wildcard patterns are rejected. Live Postgres/MySQL
+and boto3 tests cover persistence and safe cleanup.
+
 **S3 DeleteObjects supported:** Signed `POST /bucket?delete` now accepts
 up to 1,000 keys per request, standard `Quiet` mode and a verified
 Content-MD5/CRC32/SHA-256 checksum along with the SigV4 payload hash.
