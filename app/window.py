@@ -602,12 +602,14 @@ class MainWindow(QMainWindow):
     def _start_uploader(self, mode: str) -> None:
         if self.process.state() != QProcess.ProcessState.NotRunning:
             QMessageBox.information(self, "Uploader", "An upload process is already running."); return
-        if not self.source.text().strip() or not self.api_hash.text().strip():
+        if not self.source.text().strip() or not any(a["enabled"].isChecked() for a in self._account_widgets):
             self.pages.setCurrentIndex(3)
             QMessageBox.information(self, "Setup required", "Complete and save the Settings page before running uploads."); return
         command = self._command(mode)
-        for auth_file in (self.auth_dir / "code.txt", self.auth_dir / "password.txt"):
-            auth_file.unlink(missing_ok=True)
+        self._process_buffer = ""
+        for auth_file in self.auth_dir.glob("*.txt"):
+            if auth_file.is_file() and not auth_file.is_symlink():
+                auth_file.unlink(missing_ok=True)
         self.activity.appendPlainText("$ " + " ".join(command))
         self.status_badge.setText("Working")
         self.run_button.setEnabled(False)
@@ -652,7 +654,7 @@ class MainWindow(QMainWindow):
         conn = self._connection()
         if conn is not None:
             try:
-                conn.execute("DELETE FROM files")
+                conn.clear_files()
                 conn.commit()
             finally:
                 conn.close()
@@ -661,38 +663,43 @@ class MainWindow(QMainWindow):
         self._refresh_all()
 
     def _read_process_output(self) -> None:
-        text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace").rstrip()
-        if text:
-            self.activity.appendPlainText(text)
-            self.log_view.appendPlainText(text)
-            self._answer_login_prompt(text)
+        chunk = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        if not chunk:
+            return
+        self.activity.appendPlainText(chunk.rstrip())
+        self.log_view.appendPlainText(chunk.rstrip())
+        # QProcess may deliver half of a login prompt in one read.
+        self._process_buffer = (self._process_buffer + chunk)[-16384:]
+        lines = self._process_buffer.split("\n")
+        self._process_buffer = lines.pop()
+        for line in lines:
+            self._answer_login_prompt(line)
 
-    def _answer_login_prompt(self, text: str) -> None:
-        if self.awaiting_login_prompt:
+    def _answer_login_prompt(self, line: str) -> None:
+        parsed = parse_auth_prompt(line)
+        if not parsed or self.awaiting_login_prompt:
             return
-        prompt = None
-        secret = False
-        if "Please enter the code" in text:
-            prompt = "Enter the Telegram code sent to your phone."
-            self.pending_login_mode = "code"
-        elif "Please enter your password" in text or "Please enter the password" in text:
-            prompt = "Enter your Telegram two-step verification password."
-            secret = True
-            self.pending_login_mode = "password"
-        if prompt is None:
-            return
+        account, kind = parsed
         self.awaiting_login_prompt = True
-        answer, ok = QInputDialog.getText(self, "Telegram sign in", prompt, QLineEdit.EchoMode.Password if secret else QLineEdit.EchoMode.Normal)
-        if ok and answer.strip() and self.pending_login_mode:
-            value = answer.strip()
-            if self.pending_login_mode == "code":
-                self.login_code = value
-            response = self.auth_dir / f"{self.pending_login_mode}.txt"
-            response.write_text(value, encoding="utf-8")
-        else:
+        self.pending_login_mode = kind
+        self.pending_login_account = account
+        try:
+            label = "login code" if kind == "code" else "two-step verification password"
+            answer, ok = QInputDialog.getText(
+                self, "Telegram sign in", f"Enter {label} for account '{account}':",
+                QLineEdit.EchoMode.Password if kind == "password" else QLineEdit.EchoMode.Normal,
+            )
+            if ok and answer.strip():
+                write_auth_response(self.auth_dir, account, kind, answer)
+            else:
+                self._stop_uploader()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Telegram sign in", str(exc))
             self._stop_uploader()
-        self.awaiting_login_prompt = False
-
+        finally:
+            self.pending_login_mode = None
+            self.pending_login_account = None
+            self.awaiting_login_prompt = False
 
     def _process_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
         self.run_button.setEnabled(True)
@@ -710,32 +717,62 @@ class MainWindow(QMainWindow):
         elif current_page == 2:
             self._refresh_table(self.history_table, "status = 'uploaded'")
 
-    def _connection(self) -> sqlite3.Connection | None:
-        if not state_path().exists(): return None
-        conn = sqlite3.connect(state_path(), timeout=2); conn.execute("PRAGMA busy_timeout=2000"); return conn
+    def _connection(self) -> Database | None:
+        try:
+            raw = yaml.safe_load(config_path().read_text(encoding="utf-8")) or {}
+            state = raw.get("state", {})
+            value = state.get("database_url") or state.get("db_path", "data/state.db")
+            url = normalize_database_url(str(value), config_dir=config_path().parent)
+            sqlite_path = sqlite_database_path(url)
+            if sqlite_path and not Path(sqlite_path).exists():
+                return None
+            self._last_db_error = None
+            return connect_database(url)
+        except Exception as exc:
+            reason = type(exc).__name__
+            if reason != self._last_db_error:
+                self._last_db_error = reason
+                self.activity.appendPlainText(f"Database unavailable: {reason}")
+            return None
 
     def _refresh_stats(self) -> None:
         conn = self._connection()
         if conn is None:
-            self.stats_label.setText("No uploads yet"); self.stats_detail.setText("Save settings, then scan the source folder."); self.progress.setValue(0); return
+            self.stats_label.setText("No database connection")
+            self.stats_detail.setText("Save settings and check database connectivity.")
+            self.account_status_label.setText("Account status unavailable")
+            self.progress.setValue(0)
+            return
         try:
-            total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-            uploaded = conn.execute("SELECT COUNT(*) FROM files WHERE status='uploaded'").fetchone()[0]
-            failed = conn.execute("SELECT COUNT(*) FROM files WHERE status='failed'").fetchone()[0]
-        except sqlite3.Error:
+            counts = conn.dashboard_counts()
+            statuses = conn.all_account_states()
+            totals = conn.uploaded_counts_by_account()
+        except Exception as exc:
+            self.stats_detail.setText(f"Database read failed: {type(exc).__name__}")
             return
         finally:
             conn.close()
+        uploaded = counts.get("uploaded", 0)
+        total = sum(counts.values())
+        failed = counts.get("failed", 0)
         self.stats_label.setText(f"{uploaded:,} uploaded  •  {max(total-uploaded, 0):,} remaining")
         self.stats_detail.setText(f"{total:,} files tracked  •  {failed:,} need attention")
         self.progress.setValue(round(uploaded * 100 / total) if total else 0)
+        self.account_status_label.setText("    |    ".join(
+            f"{name}: {state.get('state', 'unknown')} · {totals.get(name, 0)} uploaded"
+            for name, state in statuses.items()
+        ) or "No account status yet")
 
     def _refresh_table(self, table: QTableWidget, condition: str) -> None:
         conn = self._connection()
-        if conn is None: table.setRowCount(0); return
+        if conn is None:
+            table.setRowCount(0)
+            return
         try:
-            rows = conn.execute(f"SELECT path, status, attempts, datetime(last_update_ts, 'unixepoch', 'localtime') FROM files WHERE {condition} ORDER BY last_update_ts DESC LIMIT ?", (TABLE_ROW_LIMIT,)).fetchall()
-        except sqlite3.Error:
+            kind = "history" if condition == "status = 'uploaded'" else "queue"
+            rows = conn.list_files(kind, TABLE_ROW_LIMIT)
+        except Exception as exc:
+            self.activity.appendPlainText(f"File history unavailable: {type(exc).__name__}")
             return
         finally:
             conn.close()
@@ -744,10 +781,16 @@ class MainWindow(QMainWindow):
         try:
             table.clearContents()
             table.setRowCount(len(rows))
-            status_colors = {"pending": "#9a661d", "failed": "#b63838", "uploaded": "#327454"}
+            status_colors = {"pending": "#9a661d", "failed": "#b63838",
+                             "uploaded": "#327454", "uploading": "#3264a0"}
             for row_index, row in enumerate(rows):
-                for column, value in enumerate(row):
-                    text = str(value or "")
+                values = (
+                    row["path"], row["status"], row["attempts"],
+                    datetime.fromtimestamp(row["last_update_ts"]).strftime("%Y-%m-%d %H:%M:%S")
+                    if row["last_update_ts"] else "",
+                )
+                for column, value in enumerate(values):
+                    text = str(value if value is not None else "")
                     item = QTableWidgetItem(text)
                     if column == 0:
                         item.setToolTip(text)
