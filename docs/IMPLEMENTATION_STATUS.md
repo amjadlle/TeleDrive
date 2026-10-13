@@ -327,3 +327,14 @@ verification and explicit retention approvals are implemented.
   are covered by Storage API CI. DNS, wildcard TLS certificates, reverse
   proxy forwarding and real external-client verification remain deployment
   prerequisites, not implied automatic compatibility.
+
+## P1 actual-process SIGKILL resume regression
+
+- tests/test_storage_sigkill.py starts a separate OS process executing
+  the real durable SQL queue and chunk uploader. It SIGKILLs the worker
+  between the first persisted Telegram message and the second send.
+  A fresh SQLite worker with expired leases must verify and reuse the
+  first remote chunk, transfer only the missing tail and publish an
+  immutable HEAD without deleting or retransmitting the existing media.
+- This verifies a deterministic process crash; it is not a live
+  Telegram revocation or multi-server stress/soak certification.
