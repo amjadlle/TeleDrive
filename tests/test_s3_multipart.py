@@ -88,6 +88,9 @@ def test_multipart_two_part_roundtrip_without_reupload(service):
     # Repeating Complete after successful transaction is safe and idempotent.
     again = complete(service, uid, [(1, first_etag), (2, second_etag)])
     assert again.status_code == 200 and service[2].uploads == bot_uploads
+    mismatched_retry = complete(service, uid, [(2, second_etag)])
+    assert mismatched_retry.status_code == 400
+    assert xml_text(mismatched_retry, "Code") == "InvalidPart"
 
 
 def test_multipart_missing_part_and_minimum_size_fail_without_losing_data(service):
@@ -275,3 +278,24 @@ def test_boto3_multipart_real_http_transport(service):
         thread.join(timeout=10)
         sock.close()
         assert not thread.is_alive()
+
+
+def test_corrupted_telegram_part_prevents_multipart_publication(service):
+    setup(service)
+    original = b"untouched-data"
+    assert signed(service, "PUT", "/backup-bucket/asset.bin", original).status_code == 200
+    uid = begin(service)
+    etag = part(service, uid, 1, b"remote-corruption-test")
+    bot = service[2]
+    latest_file_id = f"file-{bot.uploads}"
+    assert latest_file_id in bot.parts
+    bot.parts[latest_file_id] = b"tampered-body"
+    completion = complete(service, uid, [(1, etag)])
+    assert completion.status_code != 200
+    # Checksum verification happens before any pointer mutation.
+    still_current = signed(service, "GET", "/backup-bucket/asset.bin")
+    assert still_current.status_code == 200
+    assert still_current.content == original
+    # Failure can be inspected/retried; no visible truncated object.
+    listed = signed(service, "GET", f"/backup-bucket/asset.bin?uploadId={uid}")
+    assert listed.status_code == 200
