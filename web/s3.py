@@ -534,9 +534,12 @@ async def _handle(request: Request):
                 if block:
                     return _error("InvalidRequest", "CopyObject request must have no body", 400)
             try:
-                result = copy_object(catalog, src_bucket, src_key, bucket, key)
+                result = copy_object(
+                    catalog, src_bucket, src_key, bucket, key,
+                    expected_source_id=source_item.id,
+                )
             except CopyConflict:
-                return _error("OperationAborted", "Concurrent destination mutation", 409)
+                return _error("OperationAborted", "Concurrent source/destination mutation", 409)
             copied = ET.Element("CopyObjectResult", xmlns=NAMESPACE)
             ET.SubElement(copied, "LastModified").text = time.strftime(
                 "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
