@@ -104,6 +104,14 @@ class ObjectTagStore:
             self.db.connection.rollback()
             raise
 
+    def attach_uncommitted(self, object_id: str,
+                           tags: list[tuple[str, str]]) -> None:
+        """Set initial tags before publishing head; caller commits both atomically."""
+        for tag_key, tag_value in validate_tags(tags):
+            self.db.connection.execute(insert(object_tags).values(
+                object_id=object_id, tag_key=tag_key, tag_value=tag_value
+            ))
+
     def copy_tags(self, source_id: str, destination_id: str) -> None:
         """Copy in the caller's transaction; never issue a separate commit."""
         for tag_key, tag_value in self.get(source_id):
