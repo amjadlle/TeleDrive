@@ -455,21 +455,22 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     if request.method in {"POST", "PUT", "PATCH"}:
+        # Size-bound browser JSON requests. Cache on the ORIGINAL request:
+        # Starlette's call_next() replays _CachedRequest's cached body.
+        # Constructing a new Request here silently discards POST/PUT payloads.
+        length = request.headers.get("content-length")
+        if length:
+            try:
+                if int(length) > MAX_REQUEST_BYTES:
+                    return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+            except ValueError:
+                return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
             if len(body) > MAX_REQUEST_BYTES:
                 return JSONResponse(status_code=413, content={"detail": "Request body too large"})
-        delivered = False
-
-        async def receive():
-            nonlocal delivered
-            if delivered:
-                return {"type": "http.request", "body": b"", "more_body": False}
-            delivered = True
-            return {"type": "http.request", "body": bytes(body), "more_body": False}
-
-        request = Request(request.scope, receive)
+        request._body = bytes(body)
 
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
