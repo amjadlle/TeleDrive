@@ -656,3 +656,207 @@ def test_bot_api_network_uncertainty_does_not_retry_send(storage, tmp_path):
         ))
     assert api.attempts == 1
     assert transport.index.unjournaled_count() == 0
+
+def test_send_intent_committed_before_network_and_cleared_by_atomic_receipt(tmp_path):
+    """Even the first HTTP send observes a committed SQL intent."""
+    db = connect_database(str(tmp_path / "intent-before-send.db"))
+    try:
+        index = BotFileIndex(db)
+
+        class InspectSend(FakeBotApi):
+            async def call(self, method, fields, source=None):
+                if method == "sendDocument":
+                    # A new database connection sees the record before any
+                    # remote bytes can be accepted.
+                    other = connect_database(str(tmp_path / "intent-before-send.db"))
+                    try:
+                        assert BotFileIndex(other).unresolved_count() == 1
+                    finally:
+                        other.close()
+                return await super().call(method, fields, source)
+
+        api = InspectSend()
+        transport = BotApiChunkTransport(
+            api, index, chat_id=api.chat_id, min_upload_interval=0,
+        )
+        source = tmp_path / "body.bin"
+        source.write_bytes(bytes(range(256)) * 5)
+        checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+        run(transport.upload(source, object_id="send-intent", ordinal=0, checksum=checksum))
+        assert api.counter == 1
+        assert index.unresolved_count() == 0
+        assert index.find_receipt(
+            "send-intent", 0, account="bot", chat_id=api.chat_id,
+            checksum=checksum, size=source.stat().st_size,
+        ) is not None
+    finally:
+        db.close()
+
+
+def test_lost_ack_prevents_duplicate_send_across_sql_restart_and_can_reconcile(tmp_path):
+    """A real accepted remote send without ACK is fenced until owner proof.
+
+    The test retains the actual ACK in its fake remote. An operator cannot
+    recover those fields from Bot API channel history automatically.
+    """
+    import time
+    from sqlalchemy import update
+    from teledrive.storage.manifest import writer_fences
+
+    db_path = str(tmp_path / "ambiguous.db")
+    db = connect_database(db_path)
+
+    class LostAck(FakeBotApi):
+        received_ack = None
+
+        async def call(self, method, fields, source=None):
+            result = await super().call(method, fields, source)
+            if method == "sendDocument" and self.received_ack is None:
+                self.received_ack = result
+                raise BotApiError("Bot API sendDocument request failed")
+            return result
+
+    api = LostAck()
+    transport = BotApiChunkTransport(
+        api, BotFileIndex(db), chat_id=api.chat_id, min_upload_interval=0,
+    )
+    content = os.urandom(2048 + 19)
+    source = tmp_path / "ambiguous-source.bin"
+    source.write_bytes(content)
+    manifest = ManifestStore(db)
+    object_id = manifest.begin("ci", "lost-ack.bin", len(content), int(time.time()))
+    manifest.start_writer(object_id, "dead-worker", int(time.time()), ttl=60)
+    part = tmp_path / "first.bin"
+    part.write_bytes(content[:2048])
+    digest = hashlib.sha256(part.read_bytes()).hexdigest()
+    with pytest.raises(BotApiError, match="request failed"):
+        run(transport.upload(part, object_id=object_id, ordinal=0, checksum=digest))
+    assert api.counter == 1 and transport.index.unresolved_count() == 1
+    assert manifest.recovery_parts(object_id) == []
+    db.connection.execute(update(writer_fences).where(
+        writer_fences.c.object_id == object_id,
+    ).values(lease_until=0))
+    db.commit()
+    db.close()
+
+    recovered_db = connect_database(db_path)
+    try:
+        recovered_index = BotFileIndex(recovered_db)
+        recovered_transport = BotApiChunkTransport(
+            api, recovered_index, chat_id=api.chat_id, min_upload_interval=0,
+        )
+        with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+            recovered_index.find_receipt(
+                object_id, 0, account="bot", chat_id=api.chat_id,
+                checksum=digest, size=2048,
+            )
+        with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+            run(recovered_transport.upload(
+                part, object_id=object_id, ordinal=0, checksum=digest,
+            ))
+        assert api.counter == 1  # no duplicate upload after SQL restart
+
+        # Simulate an operator who independently obtained the original ACK,
+        # verified channel identity and content, and explicitly persisted it.
+        original_ack = api.received_ack
+        assert api.documents[original_ack["document"]["file_id"]] == content[:2048]
+        recovered_index.put_receipt(
+            "bot", api.chat_id, original_ack["message_id"],
+            original_ack["document"]["file_id"],
+            object_id=object_id, ordinal=0, checksum=digest, size=2048,
+        )
+        assert recovered_index.unresolved_count() == 0
+        completed = run(TelegramObjectStorage(
+            ManifestStore(recovered_db), recovered_transport, chunk_size=2048,
+            scratch_directory=tmp_path,
+        ).resume_file("ci", "lost-ack.bin", source, object_id))
+        assert completed.sha256 == hashlib.sha256(content).hexdigest()
+        assert api.counter == 2  # only 19-byte tail is newly sent
+        refs = ManifestStore(recovered_db).parts(object_id)
+        assert [ref.message_id for ref in refs] == [1, 2]
+        assert refs[0].sha256 == digest
+    finally:
+        recovered_db.close()
+
+
+def test_ack_sql_receipt_failure_leaves_intent_for_manual_recovery(tmp_path):
+    """Never clear the only proof of an uncertain send on SQL error."""
+    db = connect_database(str(tmp_path / "ack-intent-failure.db"))
+    try:
+        index = BotFileIndex(db)
+        api = FakeBotApi()
+        transport = BotApiChunkTransport(
+            api, index, chat_id=api.chat_id, min_upload_interval=0,
+        )
+        db.connection.exec_driver_sql(
+            "CREATE TRIGGER abort_receipt BEFORE INSERT "
+            "ON storage_bot_upload_receipts "
+            "BEGIN SELECT RAISE(ABORT, 'forced lost receipt'); END"
+        )
+        db.commit()
+        source = tmp_path / "first.bin"
+        source.write_bytes(os.urandom(4097))
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        with pytest.raises(Exception, match="forced lost receipt"):
+            run(transport.upload(
+                source, object_id="receipt-crash", ordinal=0, checksum=digest,
+            ))
+        assert api.counter == 1
+        assert index.unresolved_count() == 1
+        with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+            run(transport.upload(
+                source, object_id="receipt-crash", ordinal=0, checksum=digest,
+            ))
+        assert api.counter == 1
+    finally:
+        db.close()
+
+
+def test_definitive_429_rejection_clears_intent_for_safe_retry(tmp_path):
+    db = connect_database(str(tmp_path / "definite-reject.db"))
+    try:
+        class RejectOnce(FakeBotApi):
+            failures = 0
+
+            async def call(self, method, fields, source=None):
+                if method == "sendDocument" and not self.failures:
+                    self.failures += 1
+                    raise BotApiRateLimited(61)
+                return await super().call(method, fields, source)
+
+        api = RejectOnce()
+        transport = BotApiChunkTransport(
+            api, BotFileIndex(db), chat_id=api.chat_id, min_upload_interval=0,
+        )
+        source = tmp_path / "429.bin"
+        source.write_bytes(b"known-rejected")
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        with pytest.raises(BotApiRateLimited):
+            run(transport.upload(
+                source, object_id="explicit-rejection", ordinal=0,
+                checksum=digest,
+            ))
+        assert api.counter == 0 and transport.index.unresolved_count() == 0
+        run(transport.upload(
+            source, object_id="explicit-rejection", ordinal=0, checksum=digest,
+        ))
+        assert api.counter == 1 and transport.index.unresolved_count() == 0
+    finally:
+        db.close()
+
+
+def test_independent_bot_accounts_have_distinct_send_intent_fences(tmp_path):
+    db = connect_database(str(tmp_path / "multi-account-intents.db"))
+    try:
+        idx = BotFileIndex(db)
+        idx.start_send("bot-a", -10042, "item", 0, "a" * 64, 20)
+        idx.start_send("bot-b", -10042, "item", 0, "b" * 64, 20)
+        idx.start_send("bot-a", -10043, "item", 0, "c" * 64, 20)
+        assert idx.unresolved_count() == 3
+        with pytest.raises(BotApiError, match="Unresolved"):
+            idx.start_send("bot-a", -10042, "item", 0, "a" * 64, 20)
+        assert idx.unresolved_count() == 3
+        idx.clear_rejected_send("bot-a", -10042, "item", 0, "a" * 64, 20)
+        assert idx.unresolved_count() == 2
+    finally:
+        db.close()
