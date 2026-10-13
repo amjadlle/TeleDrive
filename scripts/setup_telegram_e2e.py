@@ -55,6 +55,7 @@ async def find_channel(client: TelegramClient, title: str) -> list:
     matches = []
     async for dialog in client.iter_dialogs():
         if (dialog.is_channel and not dialog.is_group
+                and not getattr(dialog.entity, "username", None)
                 and dialog.name.casefold() == title.casefold()):
             matches.append(dialog)
     return matches
