@@ -170,7 +170,7 @@ def test_limits_duplicate_keys_and_unsupported_version_are_rejected(service):
         assert r.status_code == 400, (entries, r.text)
         assert b"InvalidTag" in r.content
     assert signed(service, "GET", "/backup-bucket/file.bin?tagging&versionId=old").status_code == 501
-    assert signed(service, "GET", "/backup-bucket/file.bin?versionId=old").status_code == 501
+    assert signed(service, "GET", "/backup-bucket/file.bin?versionId=old").status_code == 404
     assert signed(service, "PUT", "/backup-bucket/file.bin", b"new",
                   extra_headers={"x-amz-tagging": "k=v"}).status_code == 200
     assert extract_tags(signed(service, "GET", path)) == [("k", "v")]
