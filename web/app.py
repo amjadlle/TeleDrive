@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import copy
 import sys
+import tempfile
 import os
 import re
 import time
@@ -15,7 +16,7 @@ from typing import Any
 
 import yaml
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
@@ -29,6 +30,10 @@ from teledrive.db import redact_database_url
 from teledrive.api_keys import ApiKeyStore
 from teledrive.storage.manifest import ManifestStore
 from teledrive.storage.catalog import BucketCatalog
+from teledrive.storage.engine import TelegramObjectStorage
+from teledrive.storage.bot_api_adapter import (
+    BotApiClient, BotApiChunkTransport, BotFileIndex, BOT_RECOMMENDED_CHUNK_SIZE,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("TELEDRIVE_CONFIG", "/config/config.yaml"))
@@ -454,7 +459,9 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
-    if request.method in {"POST", "PUT", "PATCH"}:
+    binary_upload = (request.method == "PUT" and
+                     re.fullmatch(r"/api/v1/buckets/[A-Za-z0-9.-]+/content", request.url.path))
+    if request.method in {"POST", "PUT", "PATCH"} and not binary_upload:
         # Size-bound browser JSON requests. Cache on the ORIGINAL request:
         # Starlette's call_next() replays _CachedRequest's cached body.
         # Constructing a new Request here silently discards POST/PUT payloads.
@@ -520,6 +527,45 @@ class KeyCreateRequest(BaseModel):
 
 class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
+
+def storage_bot_transport(conn):
+    """Bot API is an optional Telegram transport for REST object transfers."""
+    token = os.environ.get("TELEDRIVE_STORAGE_BOT_TOKEN", "").strip()
+    chat_raw = os.environ.get("TELEDRIVE_STORAGE_BOT_CHAT_ID", "").strip()
+    if not token or not chat_raw:
+        raise HTTPException(503, "REST object transfer requires Telegram Bot credentials")
+    try:
+        chat_id = int(chat_raw)
+        client = BotApiClient(token)
+        return BotApiChunkTransport(client, BotFileIndex(conn), chat_id=chat_id,
+                                    account="api-bot")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(503, "Telegram Bot storage configuration is invalid") from exc
+
+
+def _byte_range(value: str | None, size: int) -> tuple[int, int, bool]:
+    """HTTP Range with inclusive input -> half-open output; 416 on invalid input."""
+    if value is None:
+        return 0, size, False
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", value.strip())
+    if match is None or not (match.group(1) or match.group(2)):
+        raise HTTPException(416, "Unsupported byte range", headers={"Content-Range": f"bytes */{size}"})
+    first, last = match.groups()
+    if size == 0:
+        raise HTTPException(416, "Empty object has no satisfiable range",
+                            headers={"Content-Range": "bytes */0"})
+    if not first:
+        count = int(last)
+        if count <= 0:
+            raise HTTPException(416, "Invalid suffix range", headers={"Content-Range": f"bytes */{size}"})
+        start, end = max(0, size - count), size
+    else:
+        start = int(first)
+        end = min(size, int(last) + 1) if last else size
+        if start >= size or end <= start:
+            raise HTTPException(416, "Unsatisfiable range", headers={"Content-Range": f"bytes */{size}"})
+    return start, end, True
+
 
 
 def require_api_scope(required: str):
@@ -813,6 +859,99 @@ def unlink_current_object(bucket: str, key: str = Query(..., min_length=1, max_l
         return {"ok": True, "unlinked": deleted}
     finally:
         conn.close()
+
+
+@app.put("/api/v1/buckets/{bucket}/content", tags=["Uploads"],
+         summary="Upload raw binary content to Telegram (synchronous commit)", status_code=201)
+async def put_object_content(
+    bucket: str, request: Request, key: str = Query(..., min_length=1, max_length=1024),
+    generation: int | None = Query(None, ge=0),
+    _: None = Depends(require_api_scope("objects:write")),
+):
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "Content-Type must be application/octet-stream")
+    max_size = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+    if max_size < 1:
+        raise HTTPException(503, "REST uploads are disabled by policy")
+    stage_root = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+    _secure_mkdir(stage_root)
+    conn = db_connect()
+    staged = None
+    try:
+        manifests = ManifestStore(conn)
+        catalog = BucketCatalog(manifests)
+        if bucket not in catalog.list_buckets():
+            raise HTTPException(404, "Bucket not found")
+        transport = storage_bot_transport(conn)
+        # Verify Telegram access BEFORE consuming a potentially large body.
+        await transport.verify_target()
+        fd, pathname = tempfile.mkstemp(dir=stage_root, prefix="api-upload-")
+        staged = Path(pathname)
+        transferred = 0
+        with os.fdopen(fd, "wb") as sink:
+            async for data in request.stream():
+                transferred += len(data)
+                if transferred > max_size:
+                    raise HTTPException(413, "Upload exceeds configured limit")
+                sink.write(data)
+            sink.flush()
+            os.fsync(sink.fileno())
+        engine = TelegramObjectStorage(manifests, transport,
+                                       chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                                       scratch_directory=stage_root)
+        result = await engine.put_file(bucket, key, staged)
+        try:
+            head = catalog.publish(result.id, now=int(time.time()),
+                                   expected_generation=generation)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"id": result.id, "bucket": bucket, "key": key,
+                "size": result.size, "sha256": result.sha256,
+                "generation": head.generation}
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        conn.close()
+
+
+@app.get("/api/v1/buckets/{bucket}/content", tags=["Uploads"],
+         summary="Stream verified object bytes from Telegram; supports HTTP Range")
+async def get_object_content(
+    bucket: str, request: Request, key: str = Query(..., min_length=1, max_length=1024),
+    _: None = Depends(require_api_scope("objects:read")),
+):
+    conn = db_connect()
+    try:
+        manifests = ManifestStore(conn)
+        catalog = BucketCatalog(manifests)
+        try:
+            item = catalog.get(bucket, key).item
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "Object not found") from exc
+        start, end, partial = _byte_range(request.headers.get("range"), item.size)
+        transport = storage_bot_transport(conn)
+        root = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+        _secure_mkdir(root)
+        engine = TelegramObjectStorage(manifests, transport,
+                                       chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                                       scratch_directory=root)
+    except BaseException:
+        conn.close()
+        raise
+
+    async def stream():
+        try:
+            async for piece in engine.iter_bytes(item.id, start=start, end=end):
+                yield piece
+        finally:
+            conn.close()
+
+    headers = {"ETag": '"' + item.sha256 + '"', "Accept-Ranges": "bytes",
+               "Content-Length": str(end-start), "X-TeleDrive-Object-ID": item.id}
+    if partial:
+        headers["Content-Range"] = f"bytes {start}-{end-1}/{item.size}"
+    return StreamingResponse(stream(), status_code=206 if partial else 200,
+                             media_type="application/octet-stream", headers=headers)
 
 
 @app.get("/api/health", tags=["System"], response_model=OKResponse, summary="Liveness health check (unauthenticated)")
