@@ -262,3 +262,10 @@ verification and explicit retention approvals are implemented.
   tags never alter current-version tags; physical Telegram bytes remain
   immutable. Unknown/staged version IDs return NoSuchVersion. Permission
   and revocation checks use the existing independent tagging scopes.
+
+## P1.3 historical CopySource
+
+- Signed `CopyObject` accepts a single `?versionId=` selector in its
+  signed `x-amz-copy-source` header. Only versions proven published to
+  the exact source bucket/key are readable; private data cannot be copied
+  with a guessed staged ID. No Telegram data is reuploaded or deleted.

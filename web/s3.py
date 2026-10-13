@@ -1042,24 +1042,55 @@ async def _handle(request: Request):
             if (request.headers.get("x-amz-metadata-directive") is not None
                     and "x-amz-metadata-directive" not in signed_headers):
                 raise SigV4Error("AccessDenied", "Metadata directive must be signed")
-            # Both `bucket/key` (boto3) and `/bucket/key` (AWS CLI)
-            # are valid CopySource header shapes. Never accept remote URLs
-            # or source version selectors as though they were object keys.
-            if ("?" in source_header or source_header.startswith("//")
-                    or "://" in source_header):
+            # A signed CopySource may name a specific historical version.
+            # Never treat arbitrary query selectors or duplicate VersionIds as
+            # part of the object key; URI escapes are decoded only afterwards.
+            if source_header.startswith("//") or "://" in source_header:
                 return _error("InvalidArgument", "Copy source must be a local bucket/object path", 400)
+            original_header, divider, source_query = source_header.partition("?")
+            source_version_id = None
+            if divider:
+                try:
+                    qualifiers = parse_qsl(
+                        source_query, keep_blank_values=True, strict_parsing=True,
+                        encoding="utf-8", errors="strict", max_num_fields=2,
+                    )
+                except (UnicodeError, ValueError):
+                    return _error("InvalidArgument", "Malformed CopySource version selector", 400)
+                if len(qualifiers) != 1 or qualifiers[0][0] != "versionId":
+                    return _error("InvalidArgument", "Only a single source VersionId is supported", 400)
+                source_version_id = qualifiers[0][1]
+                if not source_version_id or len(source_version_id) > 80:
+                    return _error("InvalidArgument", "Invalid CopySource version ID", 400)
             original_path = unquote(
-                source_header[1:] if source_header.startswith("/") else source_header
+                original_header[1:] if original_header.startswith("/") else original_header
             )
             src_bucket, slash, src_key = original_path.partition("/")
             if not slash or not src_bucket or not src_key:
                 return _error("InvalidArgument", "Invalid CopySource bucket/object key", 400)
             if src_bucket not in catalog.list_buckets():
                 return _error("NoSuchBucket", "CopySource bucket does not exist", 404)
-            try:
-                source_item = catalog.get(src_bucket, src_key).item
-            except FileNotFoundError:
-                return _error("NoSuchKey", "CopySource object does not exist", 404)
+            if source_version_id is not None:
+                proven = db.connection.execute(
+                    select(published_versions.c.object_id).where(
+                        published_versions.c.object_id == source_version_id,
+                        published_versions.c.bucket == src_bucket,
+                        published_versions.c.key_hash == catalog._keyhash(src_key),
+                    )
+                ).scalar_one_or_none()
+                if proven is None:
+                    return _error("NoSuchVersion", "CopySource version is not published", 404)
+                try:
+                    source_item = catalog.manifests.get(source_version_id)
+                except FileNotFoundError:
+                    return _error("NoSuchVersion", "CopySource version not readable", 404)
+                if source_item.bucket != src_bucket or source_item.key != src_key:
+                    return _error("NoSuchVersion", "CopySource key mismatch", 404)
+            else:
+                try:
+                    source_item = catalog.get(src_bucket, src_key).item
+                except FileNotFoundError:
+                    return _error("NoSuchKey", "CopySource object does not exist", 404)
             if tag_directive == "COPY" and ObjectTagStore(catalog).get(source_item.id):
                 if (store.resolve(owner, "s3:GetObjectTagging") is None
                         or store.resolve(owner, "s3:PutObjectTagging") is None):
@@ -1080,6 +1111,7 @@ async def _handle(request: Request):
                 result = copy_object(
                     catalog, src_bucket, src_key, bucket, key,
                     expected_source_id=source_item.id,
+                    source_version_id=source_version_id,
                     replacement_tags=(inline_tags or []) if tag_directive == "REPLACE" else None,
                     replacement_metadata=copy_properties if metadata_directive == "REPLACE" else None,
                 )
