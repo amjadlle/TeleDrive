@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*.*.*"
+    # On these branch updates validate the release gate without publishing.
+    branches:
+      - main
+      - feature/docker-webui-multiaccount
+    paths:
+      - ".github/workflows/release.yml"
+      - "tests/test_ci_workflows.py"
 
 permissions:
   contents: read
@@ -56,6 +63,7 @@ jobs:
 
   build:
     needs: verify
+    if: github.ref_type == 'tag'
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
