@@ -101,6 +101,12 @@ def test_bot_roundtrip_sha256_range_and_cleanup(tmp_path, storage):
     assert len(api.deleted) == 3
     with pytest.raises(FileNotFoundError):
         run(new_transport.download(parts[0], tmp_path / "no-file"))
+    # Physical deletion of test-owned messages also removes ACK receipts:
+    # future recoveries must never adopt an ID that was already deleted.
+    assert new_transport.index.find_receipt(
+        obj.id, 0, account="bot", chat_id=api.chat_id,
+        checksum=parts[0].sha256, size=parts[0].size,
+    ) is None
 
 
 def test_bot_requires_admin_post_permission(storage):
@@ -419,3 +425,31 @@ def test_bot_ack_receipt_rejects_foreign_checksum_and_bad_source(tmp_path):
             )
     finally:
         reopened.close()
+
+
+def test_bot_ack_receipt_and_file_id_commit_atomically(tmp_path):
+    """Injected receipt SQL failure must not persist a misleading file ID."""
+    from sqlalchemy.exc import IntegrityError
+
+    database = connect_database(str(tmp_path / "receipt-atomicity.db"))
+    try:
+        index = BotFileIndex(database)
+        database.connection.exec_driver_sql(
+            "CREATE TRIGGER abort_bot_receipt BEFORE INSERT "
+            "ON storage_bot_upload_receipts "
+            "BEGIN SELECT RAISE(ABORT, 'inject SQL receipt failure'); END"
+        )
+        database.commit()
+        with pytest.raises(IntegrityError):
+            index.put_receipt(
+                "bot", -1001234567890, 999, "file-id-must-not-survive",
+                object_id="test-object", ordinal=0, checksum="a" * 64, size=5,
+            )
+        with pytest.raises(FileNotFoundError):
+            index.get("bot", -1001234567890, 999)
+        assert index.find_receipt(
+            "test-object", 0, account="bot", chat_id=-1001234567890,
+            checksum="a" * 64, size=5,
+        ) is None
+    finally:
+        database.close()

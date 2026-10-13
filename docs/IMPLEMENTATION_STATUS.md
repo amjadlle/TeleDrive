@@ -456,3 +456,24 @@ verification and explicit retention approvals are implemented.
   **not** certify PostgreSQL/MySQL native restores, Telegram Bot account
   revocation recovery, multi-region disaster scenarios or operator secrets
   recovery. Those remain staging/operational acceptance tasks.
+
+
+## P1.1 Bot receipt SQL atomicity regression
+
+- Added an injected SQLite trigger failure between the Bot file-ID insert
+  and ACK receipt insert. Both insertions must roll back together, and no
+  discoverable recovery candidate may survive. Test-owned message cleanup
+  also removes its associated receipt before a later recovery can use it.
+
+## P1 implementation and CI evidence update (2026-10-13)
+
+- `272d743c`: all seven workflows green after durable Bot ACK receipt
+  reconciliation, including real Telegram Bot/User E2E.
+- `ce7f96e6`: Storage API passed **339** SQL/HTTP/storage tests including
+  the independent three-process, twelve-job SQLite queue soak, and all
+  **3** actual AWS CLI/rclone tests; DB CI and release verification passed.
+- `17881a75`: live Telegram Bot E2E passed **2** tests (one explicit manual
+  multipart skip), including separate SQLite snapshot restore and remote
+  media readback with exact SHA-256 and Range integrity.
+- A CI pass on an earlier commit does not certify subsequent changes; the
+  release candidate still needs a full seven-workflow fresh SHA check.
