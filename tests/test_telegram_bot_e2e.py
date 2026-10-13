@@ -258,11 +258,21 @@ def test_live_bot_sqlite_snapshot_restores_remote_telegram_object():
                     received.extend(block)
                 assert bytes(received) == payload[2047:2051]
             finally:
-                # Never delete unrelated media. Only this test's ACK IDs.
+                # Cleanup must remain possible even if the restored snapshot
+                # cannot be opened. The original SQL ACK index is committed
+                # before any fresh snapshot/reopen attempt.
                 try:
-                    if transport is not None:
-                        for ref in refs:
-                            await transport.delete(ref)
+                    if refs:
+                        cleanup_db = connect_database(str(live_path))
+                        try:
+                            cleanup_transport = BotApiChunkTransport(
+                                BotApiClient(token), BotFileIndex(cleanup_db),
+                                chat_id=int(chat_id), account="bot-ci-dr",
+                            )
+                            for ref in refs:
+                                await cleanup_transport.delete(ref)
+                        finally:
+                            cleanup_db.close()
                 finally:
                     if active_db is not None:
                         active_db.close()
