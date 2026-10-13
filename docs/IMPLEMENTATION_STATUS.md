@@ -62,8 +62,9 @@ every workflow at the release SHA.
 - [ ] **P1.3 Advanced S3 parity:** version listing/restore, logical
   DeleteMarker/VersionId DELETE, conditional writes, presigned multipart
   operations, historical CopySource, common checksums and checksum-pinned
-  browser POST are implemented and tested. Full AWS browser-policy operators,
-  redirect/status variants and S3 lifecycle remain unsupported.
+  browser POST are implemented and tested. Browser POST also supports
+  exactly signed 200/201/204 success status and HTTPS-only 303 callbacks;
+  unsupported policy operators and S3 lifecycle remain open.
 - [ ] **P1.4 Operations:** operator metrics/alerts, SQLite online backup and
   verified real Telegram payload restore, Windows/Linux CI, PostgreSQL/MySQL
   integration, multi-process queue tests and **native PostgreSQL 17 + MySQL
@@ -236,8 +237,8 @@ verification and explicit retention approvals are implemented.
 
 ### Still open — do not claim these are implemented
 - **P1 remaining:** Bot API ACK lost before receipt persistence (Bot API
-  cannot read arbitrary historical channel posts), additional browser POST
-  wildcard/redirect policy variants, long-running multi-host Telegram 429
+  cannot read arbitrary historical channel posts), unimplemented browser POST
+  wildcard operators and non-HTTPS/mixed-response variants, multi-host Telegram 429
   and revocation soak, production-representative staging restore with real
   secrets and Telegram retention, and operator-controlled production legacy
   cutover. Native PostgreSQL/MySQL disposable CI restores, receipt-persisted
@@ -701,6 +702,34 @@ verification and explicit retention approvals are implemented.
   three-chunk uploads (1 MiB + 1 MiB + 17 B) with real message IDs, SQL restart,
   per-chunk checksums, Range validation and scoped cleanup; Telethon also
   adds 2047 B and Bot adds exact 8192 B.
-- **Acceptance is provisional until this SHA's GitHub Actions jobs finish.**
-  This does not close the remaining production multi-host Telegram soak,
-  lost-ACK-before-receipt gap, or full S3 browser policy parity.
+- **Verified at SHA `4b5984ba`: 7/7 GitHub Actions workflows green**;
+  the newer response-mode/redirect/mixed-binary changes require their own
+  same-SHA GitHub Actions signoff. This does not close production multi-host
+  Telegram soak, lost-ACK-before-receipt or full S3 policy parity.
+
+## P1.3 browser POST response-mode and HTTPS callback contract (2026-10-14)
+
+- Signed browser forms may request AWS-compatible success status
+  `200` (empty), `201` (`PostResponse` XML with bucket/key/ETag/Location),
+  or `204` (empty, default). This optional field must itself appear as an
+  **exact policy condition**; 202/302, malformed values, unsigned overrides
+  and duplicate fields fail closed before any Telegram transfer.
+- Exactly signed `success_action_redirect` can select a **303** response to
+  an HTTPS destination; the caller's signed query is preserved and
+  URL-encoded `bucket`, `key`, `etag` are appended only after upload
+  and durable publication. TeleDrive never fetches callback URLs itself.
+  HTTP redirects, credentials inside URLs, fragments, control characters,
+  invalid ports, changed/unsigned destinations and conflicting signed status
+  + redirect are rejected before any send. Other browser POST success
+  operators remain unsupported.
+- HTTP integration tests use independently signed boto3 browser policies for
+  201 XML and HTTPS 303, plus randomized payload sizes, Unicode/XML/URL
+  escaping, normal GET readback, signed field tampering and negative URL
+  vectors. No intentional Telegram deletion is introduced.
+- Live user/Bot channel tests now also include 3 MiB + 31 B sent as
+  four 1 MiB-bounded remote messages, along with a NUL/0xFF-alternating
+  65,537-byte payload. Existing readback SHA-256, SQL restart, contiguous
+  offsets, ranged downloads and test-owned cleanup remain mandatory.
+- **Fresh same-SHA CI evidence required** before claiming these changes
+  accepted. This scope is not full AWS browser-policy parity, production
+  credential recovery or an extended multi-host Telegram soak.
