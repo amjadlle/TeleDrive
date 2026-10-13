@@ -53,6 +53,8 @@ def _canonical_path(request: Request) -> str:
 
 def _presigned_signature(request: Request, lookup_secret, permission: str,
                          now: datetime | None) -> str:
+    if request.method not in {"GET", "HEAD", "PUT", "DELETE"}:
+        raise SigV4Error("NotImplemented", "Presigned multipart POST is unsupported")
     if request.headers.get("authorization"):
         raise SigV4Error("AccessDenied", "Ambiguous Authorization and query signature")
     try:
