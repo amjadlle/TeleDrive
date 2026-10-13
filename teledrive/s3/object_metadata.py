@@ -59,6 +59,15 @@ def parse_object_metadata(headers, signed_headers: set[str]) -> dict[str, str]:
             raise ObjectMetadataError("InvalidArgument", "Invalid user metadata name")
         if not isinstance(value, str) or any(ord(c) < 32 or ord(c) == 127 for c in value):
             raise ObjectMetadataError("InvalidArgument", "Invalid object metadata value")
+        # Starlette emits HTTP headers through latin-1. A Unicode value
+        # outside that range otherwise fails late during GET/HEAD after
+        # a successful remote upload, making the published object unreadable.
+        try:
+            value.encode("latin-1")
+        except UnicodeEncodeError as exc:
+            raise ObjectMetadataError(
+                "InvalidArgument", "Object metadata cannot be encoded as HTTP header"
+            ) from exc
         if len(value.encode("utf-8")) > 1024:
             raise ObjectMetadataError("InvalidArgument", "Object metadata field too large")
         result[key] = value
