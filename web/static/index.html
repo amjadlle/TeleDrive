@@ -24,6 +24,7 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 <button class="tab" data-page="queue">Queue</button>
 <button class="tab" data-page="history">History</button>
 <button class="tab" data-page="settings">Settings</button>
+<button class="tab" data-page="api-management">API Management</button>
 <button class="tab" data-page="logs">Logs</button>
 </nav>
 
@@ -78,6 +79,49 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 <div><label>Interval (minutes)</label><input class="input" id="runInterval" type="number"></div>
 </div></div>
 <div class="section"><button class="btn primary" id="saveSettings">Save settings</button></div>
+</section>
+
+<section id="api-management" class="page">
+<div class="card">
+<h3>REST API access keys</h3>
+<p class="muted">Keys are stored hashed. Secret values are shown once and cannot be recovered. Keep admin keys private; give integrations only the scopes they need.</p>
+<div class="form-grid">
+<div><label>Key name</label><input class="input" id="keyName" maxlength="120" placeholder="Backup client"></div>
+<div><label>Expiry (optional, UTC)</label><input class="input" id="keyExpiry" type="datetime-local"></div>
+</div>
+<div class="section" id="keyScopes">
+<label>Permissions</label>
+<div class="form-grid">
+<label><input type="checkbox" value="objects:read"> Read objects</label>
+<label><input type="checkbox" value="objects:write"> Write objects</label>
+<label><input type="checkbox" value="objects:delete"> Delete object pointers</label>
+<label><input type="checkbox" value="buckets:read"> List buckets</label>
+<label><input type="checkbox" value="buckets:manage"> Manage buckets</label>
+<label><input type="checkbox" value="jobs:read"> Read jobs</label>
+<label><input type="checkbox" value="jobs:manage"> Manage jobs</label>
+<label><input type="checkbox" value="accounts:read"> Read account status</label>
+<label><input type="checkbox" value="accounts:manage"> Manage accounts</label>
+<label><input type="checkbox" value="settings:read"> Read settings</label>
+<label><input type="checkbox" value="settings:manage"> Change settings</label>
+<label><input type="checkbox" value="keys:manage"> Manage keys</label>
+<label><input type="checkbox" value="admin:*"> Full admin (exclusive)</label>
+</div></div>
+<div class="section row"><button class="btn primary compact" id="createKey">Create API key</button><button class="btn compact" id="refreshKeys">Refresh list</button></div>
+<div class="section card" id="createdKeyCard" style="display:none">
+<b>New API key — copy now; it will not be shown again</b>
+<textarea id="createdKeySecret" class="input" readonly rows="2" spellcheck="false"></textarea>
+<div class="row"><button class="btn compact" id="copyKey">Copy</button><button class="btn compact" id="dismissKey">Hide secret</button></div>
+</div>
+</div>
+<div class="card section">
+<h3>Existing keys</h3>
+<div class="scroll"><table><thead><tr><th>Name</th><th>Key prefix</th><th>Permissions</th><th>Created / last used</th><th>Status</th><th>Actions</th></tr></thead><tbody id="apiKeysRows"></tbody></table></div>
+</div>
+<div class="card section"><h3>API endpoints</h3>
+<p><code>/api/v1/buckets</code> · <code>/api/v1/buckets/{bucket}/objects</code></p>
+<p class="tiny">Use <code>Authorization: Bearer &lt;token&gt;</code> for scoped endpoints. Administrative key management still requires the WebUI Basic login and CSRF header. The Telegram binary upload and S3 protocol endpoints are under development.</p>
+<a href="/docs" target="_blank" rel="noopener">OpenAPI / Swagger documentation ↗</a>
+</div>
 </section>
 
 <section id="logs" class="page"><div id="logBox" class="logs"></div></section>
