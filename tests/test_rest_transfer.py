@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import web.app as webapp
+PRODUCTION_BOT_TRANSPORT = webapp.storage_bot_transport
 from teledrive.db import connect_database
 from teledrive.storage.bot_api_adapter import BotApiChunkTransport, BotFileIndex
 
@@ -54,7 +55,8 @@ def service(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp, "WEB_USER", "admin-test")
     monkeypatch.setattr(webapp, "WEB_PASSWORD", "some-long-password")
     webapp.AUTH_FAILURES.clear()
-    with TestClient(webapp.app, headers={"host": "localhost"}) as client:
+    client = TestClient(webapp.app, headers={"host": "localhost"})
+    try:
         response = client.post("/api/v1/admin/keys",
             auth=("admin-test", "some-long-password"),
             headers={"x-teledrive-csrf": "1"}, json={
@@ -69,6 +71,8 @@ def service(tmp_path, monkeypatch):
         res = client.post("/api/v1/buckets", headers=headers, json={"name": "backup-bucket"})
         assert res.status_code == 201, res.text
         yield client, headers, bot, tmp_path
+    finally:
+        client.close()
 
 
 def put(client, headers, payload, key="data.bin"):
@@ -149,7 +153,13 @@ def test_missing_key_is_404_and_overwrite_is_versioned(service):
     assert conflicting.status_code == 409
 
 
-def test_missing_bot_credentials_returns_503_before_upload(api=None):
-    # This condition is verified by the unit-level config validation tests;
-    # the real transfer suite supplies a fake bot runtime per fixture.
-    pass
+def test_missing_bot_credentials_returns_503_before_upload(service, monkeypatch):
+    client, headers, bot, _ = service
+    # The service fixture temporarily patches the transport. Restore the
+    # production factory and remove its required Telegram configuration.
+    monkeypatch.setattr(webapp, "storage_bot_transport", PRODUCTION_BOT_TRANSPORT)
+    monkeypatch.delenv("TELEDRIVE_STORAGE_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEDRIVE_STORAGE_BOT_CHAT_ID", raising=False)
+    result = put(client, headers, b"secret", key="unconfigured")
+    assert result.status_code == 503
+    assert bot.counter == 0
