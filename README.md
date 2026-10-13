@@ -240,6 +240,20 @@ Only expose the WebUI/API over trusted HTTPS or a VPN. The new binary route is
 subject to a configured byte quota and requires an explicit Bearer token;
 admin key issuance requires HTTP Basic authentication plus CSRF protection.
 
+## REST object metadata (current implementation)
+
+The authenticated REST API provides a metadata-only `HEAD` operation:
+
+~~~bash
+curl -I -H "Authorization: Bearer <API_KEY>" \
+  "http://127.0.0.1:8080/api/v1/buckets/my-bucket/content?key=folder%2Ffile.bin"
+~~~
+
+It returns `Content-Length`, SHA-256-derived `ETag`, `Accept-Ranges`,
+and `X-TeleDrive-Object-ID` without downloading bytes from Telegram.
+Keys need the `objects:read` scope. This is REST functionality, **not yet
+a complete AWS S3 HEAD Object implementation**.
+
 ## Telegram-only object storage: Phase 1 foundation
 
 A new `teledrive.storage` module provides immutable object manifests and
