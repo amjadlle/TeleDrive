@@ -169,10 +169,12 @@ class BotApiClient:
         parsed_url = urllib.parse.urlsplit(url)
         if parsed_url.scheme != "https" or parsed_url.hostname != "api.telegram.org":
             raise BotApiError("Bot file downloads must use Telegram HTTPS")
+        created = False
         try:
             request = urllib.request.Request(url)
             with _telegram_https_opener().open(request, timeout=90) as response:
                 with destination.open("xb") as output:
+                    created = True
                     size = 0
                     while data := response.read(1024 * 1024):
                         size += len(data)
@@ -181,10 +183,12 @@ class BotApiClient:
                         output.write(data)
         except (urllib.error.HTTPError, urllib.error.URLError,
                 TimeoutError, OSError) as exc:
-            destination.unlink(missing_ok=True)
+            if created:
+                destination.unlink(missing_ok=True)
             raise BotApiError("Bot API file download failed") from None
         except BaseException:
-            destination.unlink(missing_ok=True)
+            if created:
+                destination.unlink(missing_ok=True)
             raise
 
     async def download_file(self, file_path: str, destination: Path) -> None:
