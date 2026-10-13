@@ -174,3 +174,56 @@ def test_operator_health_warns_on_unresolved_bot_send_without_identifiers(admin)
     assert "unresolved_bot_sends" not in {
         entry["code"] for entry in again.json()["alerts"]
     }
+
+def test_operator_unresolved_bot_inventory_requires_auth_and_has_no_side_effects(admin):
+    """Read-only triage explicitly exposes checksum/size to authorized admin only."""
+    import hashlib
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+
+    client, path, _ = admin
+    db = connect_database(path)
+    try:
+        index = BotFileIndex(db)
+        index.start_send(
+            "bot-a", -100123456, "object-inflight-a", 0,
+            hashlib.sha256(b"first").hexdigest(), 5,
+        )
+        index.start_send(
+            "bot-b", -100123457, "object-inflight-b", 1,
+            hashlib.sha256(b"second").hexdigest(), 6,
+        )
+    finally:
+        db.close()
+    endpoint = "/api/v1/admin/storage/bot-unresolved"
+    assert client.get(endpoint).status_code in (401, 403)
+    unauthorized = client.get(endpoint, auth=("testadmin", "not-correct"))
+    assert unauthorized.status_code in (401, 403)
+    for limit in ("0", "1001", "-1", "not-an-integer"):
+        assert client.get(endpoint + "?limit=" + limit,
+                          auth=("testadmin", "secure-auth-password")).status_code == 422
+    response = client.get(endpoint + "?limit=1",
+                          auth=("testadmin", "secure-auth-password"))
+    assert response.status_code == 200, response.text
+    content = response.json()
+    assert content["total"] == 2
+    assert len(content["intents"]) == 1
+    assert content["intents"][0]["account"] == "bot-a"
+    assert content["intents"][0]["ordinal"] == 0
+    assert content["intents"][0]["size"] == 5
+    assert len(content["intents"][0]["sha256"]) == 64
+    assert "independently verify" in content["message"]
+    for forbidden in ("bot_token", "file_id", "secret_key",
+                      "lease_token", "123456:"):
+        assert forbidden not in response.text
+    full = client.get(endpoint, auth=("testadmin", "secure-auth-password"))
+    assert full.status_code == 200
+    assert len(full.json()["intents"]) == 2
+    assert full.json()["total"] == 2
+    # Read-only inventory must not remove/fabricate receipts or send media.
+    db = connect_database(path)
+    try:
+        idx = BotFileIndex(db)
+        assert idx.unresolved_count() == 2
+        assert idx.unjournaled_count() == 0
+    finally:
+        db.close()
