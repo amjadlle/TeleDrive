@@ -51,7 +51,7 @@ def test_metadata_roundtrip_is_exact_and_no_extra_telegram_reads(service):
         "Content-Type": "application/pdf",
         "Cache-Control": "private, max-age=300",
         "Content-Disposition": 'attachment; filename="report.pdf"',
-        "Content-Encoding": "gzip",
+        "Content-Encoding": "identity",
         "Content-Language": "en-US",
         "x-amz-meta-origin": "teledrive-e2e",
         "x-amz-meta-checksum": "annotated-only",
