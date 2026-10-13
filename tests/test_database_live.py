@@ -814,3 +814,71 @@ def test_real_sql_revoked_version_tagging_is_fenced_on_new_connection(env_name):
     finally:
         db1.close()
         db2.close()
+
+
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_four_workers_compete_to_revoke_one_published_version(env_name):
+    """Real PG/MySQL row lock: one logical DELETE, no double-revoke/500 error."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from uuid import uuid4
+    from hashlib import sha256
+    from sqlalchemy import select, func
+    from teledrive.storage.catalog import BucketCatalog, removed_versions
+    from teledrive.storage.manifest import ManifestStore, objects
+    from teledrive.s3.tagging import ObjectTagStore, TaggingError
+
+    bucket = "ci-" + uuid4().hex[:20]
+    key = "concurrent/revoked-version.bin"
+    db = connect_database(url)
+    try:
+        cat = BucketCatalog(ManifestStore(db))
+        cat.create_bucket(bucket, int(time.time()))
+        ver = cat.manifests.begin(bucket, key, 0, int(time.time()))
+        cat.manifests.finish(ver, sha256(b"").hexdigest(), int(time.time()))
+        cat.publish(ver, now=int(time.time()))
+    finally:
+        db.close()
+
+    gate = Barrier(4)
+
+    def compete(_):
+        conn = connect_database(url)
+        try:
+            store = BucketCatalog(ManifestStore(conn))
+            conn.commit()
+            gate.wait(timeout=20)
+            return store.delete_version(bucket, key, ver)
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(compete, range(4)))
+    assert sorted(results) == [False, False, False, True]
+
+    verification = connect_database(url)
+    try:
+        cat = BucketCatalog(ManifestStore(verification))
+        assert not cat.is_visible_version(bucket, key, ver)
+        assert cat.list_versions(bucket, key) == []
+        with pytest.raises(FileNotFoundError):
+            cat.get(bucket, key)
+        rows = verification.connection.execute(select(func.count()).select_from(
+            removed_versions
+        ).where(removed_versions.c.object_id == ver)).scalar_one()
+        assert rows == 1
+        # Physical Telegram reference and immutable manifest are still
+        # retained for audited recovery; logical delete never performs GC.
+        status = verification.connection.execute(select(objects.c.status).where(
+            objects.c.id == ver
+        )).scalar_one()
+        assert status == "ready"
+        with pytest.raises(TaggingError) as denied:
+            ObjectTagStore(cat).replace_published(bucket, key, ver, [("bad", "yes")])
+        assert denied.value.code == "NoSuchVersion"
+    finally:
+        verification.close()

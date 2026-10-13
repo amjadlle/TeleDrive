@@ -784,3 +784,144 @@ def test_live_bot_rejected_429_then_remote_chunk_sha_and_sql_restart():
                     database.close()
 
     asyncio.run(scenario())
+
+
+
+def test_live_bot_versioned_real_payload_copy_and_revocation_without_remote_resend():
+    """Live payload versions, marker, alias restore and logical deletion.
+
+    Multiple actual Telegram uploads of different sizes are recovered using
+    only SQL journal + channel file IDs. A server-side historical CopyObject
+    must not issue any Telegram send, even when the source VersionId is
+    subsequently deleted. The copy's immutable alias remains reachable.
+    """
+    import time
+    from types import SimpleNamespace
+    from sqlalchemy import select
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.copy import copy_object
+    from teledrive.storage.manifest import object_aliases
+    from teledrive.storage.bot_api_adapter import _bot_files
+    from teledrive.s3.tagging import ObjectTagStore, TaggingError
+
+    token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
+    chat = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
+    if not token or not chat:
+        pytest.skip("Dedicated real Telegram Bot API channel not configured")
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-live-versions-") as folder:
+            root = Path(folder)
+            db_path = root / "versions.db"
+            payloads = [
+                b"",
+                os.urandom(65_537),
+                os.urandom(262_144 + 19),
+            ]
+            conn = connect_database(str(db_path))
+            bucket, key = "ci-real-versions", "history/İstanbul.bin"
+            transport = BotApiChunkTransport(
+                BotApiClient(token), BotFileIndex(conn),
+                chat_id=int(chat), account="bot-ci-real-versions",
+                min_upload_interval=1.1,
+            )
+            try:
+                await transport.verify_target()
+                cat = BucketCatalog(ManifestStore(conn))
+                cat.create_bucket(bucket, int(time.time()))
+                engine = TelegramObjectStorage(
+                    cat.manifests, transport, chunk_size=128 * 1024,
+                    scratch_directory=root,
+                )
+                versions = []
+                for idx, payload in enumerate(payloads):
+                    source = root / f"source-{idx}.bin"
+                    source.write_bytes(payload)
+                    uploaded = await engine.put_file(bucket, key, source)
+                    assert uploaded.sha256 == hashlib.sha256(payload).hexdigest()
+                    cat.publish(uploaded.id, now=int(time.time()))
+                    versions.append(uploaded.id)
+                    source.unlink()
+                original_messages = conn.connection.execute(
+                    select(_bot_files.c.message_id)
+                ).scalars().all()
+                assert len(original_messages) == 4
+                assert len(set(original_messages)) == 4
+                marker = cat.delete_marker(bucket, key)
+                assert cat.current_marker(bucket, key) == marker
+                assert cat.is_visible_version(bucket, key, versions[1])
+
+                copied = copy_object(
+                    cat, bucket, key, bucket, key,
+                    source_version_id=versions[1],
+                )
+                assert copied.source_object_id == versions[1]
+                assert cat.get(bucket, key).item.id == copied.object_id
+                assert cat.get(bucket, key).item.sha256 == (
+                    hashlib.sha256(payloads[1]).hexdigest()
+                )
+                assert cat.delete_version(bucket, key, versions[1])
+                assert not cat.is_visible_version(bucket, key, versions[1])
+                with pytest.raises(TaggingError) as denied:
+                    ObjectTagStore(cat).replace_published(
+                        bucket, key, versions[1], [("tag", "forbidden")]
+                    )
+                assert denied.value.code == "NoSuchVersion"
+                assert conn.connection.execute(select(
+                    object_aliases.c.source_object_id
+                ).where(object_aliases.c.object_id == copied.object_id)).scalar_one() == versions[1]
+                assert conn.connection.execute(
+                    select(_bot_files.c.message_id)
+                ).scalars().all() == original_messages
+
+                conn.close()
+                conn = connect_database(str(db_path))
+                transport = BotApiChunkTransport(
+                    BotApiClient(token), BotFileIndex(conn),
+                    chat_id=int(chat), account="bot-ci-real-versions",
+                )
+                cat = BucketCatalog(ManifestStore(conn))
+                assert cat.get(bucket, key).item.id == copied.object_id
+                assert cat.is_visible_version(bucket, key, versions[0])
+                assert cat.is_visible_version(bucket, key, versions[2])
+                assert not cat.is_visible_version(bucket, key, versions[1])
+                engine = TelegramObjectStorage(
+                    cat.manifests, transport, chunk_size=128 * 1024,
+                    scratch_directory=root,
+                )
+                for ident, expected in [
+                    (versions[0], payloads[0]),
+                    (versions[2], payloads[2]),
+                    (copied.object_id, payloads[1]),
+                ]:
+                    recovered = root / (ident + ".bin")
+                    await engine.download_to_path(ident, recovered)
+                    assert recovered.read_bytes() == expected
+                    assert hashlib.sha256(recovered.read_bytes()).hexdigest() == (
+                        hashlib.sha256(expected).hexdigest()
+                    )
+                    for start, stop in (
+                        (0, min(len(expected), 9)),
+                        (max(0, len(expected) - 8), len(expected)),
+                        (len(expected), len(expected)),
+                    ):
+                        fragment = b"".join([piece async for piece in engine.iter_bytes(
+                            ident, start=start, end=stop, block_size=7,
+                        )])
+                        assert fragment == expected[start:stop]
+            finally:
+                try:
+                    # Collect only messages indexed by this disposable test
+                    # database, including an ACK before journal persistence.
+                    cleanup_conn = conn
+                    for account, peer, mid in cleanup_conn.connection.execute(select(
+                        _bot_files.c.account, _bot_files.c.chat_id,
+                        _bot_files.c.message_id,
+                    )).all():
+                        await transport.delete(SimpleNamespace(
+                            account=account, chat_id=int(peer),
+                            message_id=int(mid),
+                        ))
+                finally:
+                    conn.close()
+    asyncio.run(scenario())
