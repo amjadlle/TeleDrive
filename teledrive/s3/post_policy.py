@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from email import policy as mime_policy
 from email.parser import BytesParser
+from urllib.parse import urlsplit
 
 from .sigv4 import SigV4Error, _hmac
 
@@ -15,7 +16,7 @@ FORM_LIMIT = 20 * 1024 * 1024
 REQUIRED_FIELDS = frozenset(("key", "policy", "x-amz-algorithm",
                              "x-amz-credential", "x-amz-date",
                              "x-amz-signature", "x-amz-checksum-sha256"))
-OPTIONAL_FIELDS = frozenset(("success_action_status",))
+OPTIONAL_FIELDS = frozenset(("success_action_status", "success_action_redirect"))
 FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 CONDITIONS = (REQUIRED_FIELDS - {"policy", "x-amz-signature"}) | {"bucket"}
 
@@ -89,8 +90,26 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
     if not -300 <= (now - signed_at).total_seconds() <= 900:
         raise SigV4Error("AccessDenied", "Policy signing date expired")
     status = fields.get("success_action_status")
+    redirect = fields.get("success_action_redirect")
     if status is not None and status not in ("200", "201", "204"):
         raise SigV4Error("InvalidArgument", "Unsupported POST success response status")
+    # Redirects are only browser instructions (the server never fetches
+    # their target). Require an exact signed, HTTPS-only destination and
+    # forbid credentials, fragments and ambiguous URL representations.
+    if redirect is not None:
+        if (status is not None or len(redirect) > 2048
+                or any(ord(char) < 32 or char == "\\" for char in redirect)):
+            raise SigV4Error("InvalidArgument", "Unsupported POST success redirect")
+        try:
+            target = urlsplit(redirect)
+            valid = (target.scheme == "https" and target.netloc
+                     and target.hostname and target.username is None
+                     and target.password is None and target.fragment == ""
+                     and (target.port is None or target.port > 0))
+        except ValueError:
+            valid = False
+        if not valid:
+            raise SigV4Error("InvalidArgument", "Unsafe POST success redirect")
     key = fields["key"]
     if not key or len(key.encode()) > 1024 or "$" + "{" in key:
         raise SigV4Error("InvalidArgument", "Exact non-template object key required")
@@ -111,13 +130,16 @@ def verify_post_policy(fields, body, bucket, lookup_secret, *, max_bytes, now=No
         raise SigV4Error("InvalidArgument", "Invalid POST policy JSON") from exc
     if (not isinstance(doc, dict) or set(doc) != {"conditions", "expiration"}
             or not isinstance(clauses, list)
-            or len(clauses) != len(CONDITIONS) + 1 + (status is not None)
+            or len(clauses) != len(CONDITIONS) + 1
+            + (status is not None) + (redirect is not None)
             or not now < expiration <= signed_at + timedelta(minutes=15)):
         raise SigV4Error("AccessDenied", "Policy must expire within fifteen minutes")
     bound = {name: fields[name] for name in CONDITIONS if name != "bucket"}
     bound["bucket"] = bucket
     if status is not None:
         bound["success_action_status"] = status
+    if redirect is not None:
+        bound["success_action_redirect"] = redirect
     expected_conditions = set(bound)
     seen = set()
     has_range = False
