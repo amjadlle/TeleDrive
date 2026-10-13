@@ -84,7 +84,7 @@ def signed(service, method, path, body=b"", *, extra_headers=None, access=None, 
     headers.update(extra_headers or {})
     url = "http://localhost:9000" + path
     request = AWSRequest(method=method, url=url, data=body, headers=headers)
-    request.context["payload_signing_enabled"] = True
+    request.context["payload_signing_enabled"] = headers["x-amz-content-sha256"] != "UNSIGNED-PAYLOAD"
     S3SigV4Auth(Credentials(access or issued.access_key,
                             secret or issued.secret_key), "s3", "us-east-1").add_auth(request)
     if date:
