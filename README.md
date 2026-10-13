@@ -335,10 +335,22 @@ assert s3.get_object(Bucket="backup-bucket", Key="test.txt")["Body"].read() == b
 
 **Implemented now:** SigV4 header authentication (15-minute timestamp window),
 individually scoped and encrypted access keys, ListBuckets, CreateBucket,
-HeadBucket, ListObjectsV2 with delimiter/CommonPrefixes and signed pagination, PutObject, GetObject, HeadObject,
+HeadBucket, GetBucketLocation, ListObjectsV1 (marker) and ListObjectsV2
+(with delimiter/CommonPrefixes, signed V2 continuation tokens, and URL-encoded
+list responses), PutObject, GetObject, HeadObject,
 DeleteObject (logical unlink), DeleteBucket (only physically empty),
 and single byte-range GET. Object writes are acknowledged only after Telegram
 upload and manifest commit.
+
+**Legacy S3 listing compatibility:** ListObjectsV1 is supported with
+`prefix`, `delimiter`, `marker`, `max-keys` and `NextMarker`.
+The V1 marker and V2 continuation token are separate protocols; mixing
+them is rejected. Both V1 and V2 support `encoding-type=url`, percent
+encoding UTF-8 key names and XML control characters inside XML responses.
+The gateway uses immutable catalog entries from the same Telegram-backed
+manifest system as normal GET/HEAD. Boto3 tests verify V1, V2, delimiter
+pagination and encoded object names. `us-east-1` bucket discovery is exposed
+through the independently scoped `s3:GetBucketLocation` permission.
 
 **S3 DeleteObjects supported:** Signed `POST /bucket?delete` now accepts
 up to 1,000 keys per request, standard `Quiet` mode and a verified
