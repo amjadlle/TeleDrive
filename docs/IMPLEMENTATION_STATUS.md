@@ -606,3 +606,14 @@ verification and explicit retention approvals are implemented.
   ACL/encryption/retention and other unsupported browser POST extensions are
   deliberately rejected. The entire MIME form is capped at 20 MiB or lower
   configured REST upload limit. Physical Telegram deletion remains disabled.
+
+## P1.4 real Telethon 5/16 MiB data stress
+
+- A one-shot '[p1-live-size]' commit marker opts the real Telegram user
+  E2E workflow into two additional tests (5 MiB + 1 and 16 MiB + 17 bytes).
+  They write random real Telegram chunks of 4 MiB each, cross the 4 MiB
+  boundary, verify every remote message ID and SHA256, reopen SQL, then
+  download the original data using only immutable Telegram messages. The
+  cleanup scope is exclusively the ACK IDs recorded by the test invocation.
+- The workflow defaults to skipping these high-bandwidth checks on routine
+  pushes and supports an explicit workflow_dispatch run_stress flag.

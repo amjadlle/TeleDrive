@@ -242,3 +242,102 @@ def test_real_telethon_varied_payload_lengths_with_remote_readback(size, chunk_s
                     conn.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.skipif(
+    os.getenv("TELEDRIVE_E2E_STRESS") != "1",
+    reason="5/16 MiB live Telethon size stress explicitly opt-in",
+)
+@pytest.mark.parametrize("size", [
+    pytest.param(5 * 1024 * 1024 + 1, id="5MiB-plus-one"),
+    pytest.param(16 * 1024 * 1024 + 17, id="16MiB-plus-17"),
+])
+def test_live_telethon_large_payload_chunk_boundaries_and_remote_restore(size):
+    """Real user Telegram uploads >5MiB, downloads every chunk after SQL restart."""
+    api_id = os.getenv("TELEDRIVE_E2E_API_ID", "")
+    api_hash = os.getenv("TELEDRIVE_E2E_API_HASH", "")
+    session = os.getenv("TELEDRIVE_E2E_SESSION", "")
+    if not all((api_id, api_hash, session)):
+        pytest.skip("Dedicated test account and channel required")
+    chunk_size = 4 * 1024 * 1024
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-user-large-") as folder:
+            root = Path(folder)
+            db_path = root / "large.db"
+            original = root / "payload.bin"
+            payload = os.urandom(size)
+            original.write_bytes(payload)
+            db = connect_database(str(db_path))
+            client = TelegramClient(StringSession(session), int(api_id), api_hash)
+            target = None
+            acked = []
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    raise RuntimeError("Telethon test session is no longer authorized")
+                target = await resolve_telegram_target(
+                    client, os.getenv("TELEDRIVE_E2E_TARGET"),
+                    os.getenv("TELEDRIVE_E2E_CHANNEL_NAME"),
+                )
+
+                class OwnedRemote(TelethonChunkTransport):
+                    async def upload(self, path, *, object_id, ordinal, checksum):
+                        result = await super().upload(
+                            path, object_id=object_id,
+                            ordinal=ordinal, checksum=checksum,
+                        )
+                        acked.append(result)
+                        await asyncio.sleep(0.75)
+                        return result
+
+                transport = OwnedRemote({"ci": (client, target)})
+                engine = TelegramObjectStorage(
+                    ManifestStore(db), transport, chunk_size=chunk_size,
+                    scratch_directory=root,
+                )
+                item = await engine.put_file("ci", "p1/large.bin", original)
+                parts = engine.manifests.parts(item.id)
+                assert len(parts) == (size + chunk_size - 1) // chunk_size
+                assert len(parts) == len(acked)
+                assert item.sha256 == hashlib.sha256(payload).hexdigest()
+                for index, part in enumerate(parts):
+                    fragment = payload[part.offset:part.offset + part.size]
+                    assert part.ordinal == index and part.size == len(fragment)
+                    assert part.offset == index * chunk_size
+                    assert part.sha256 == hashlib.sha256(fragment).hexdigest()
+                    assert (part.account, part.chat_id, part.message_id) == acked[index]
+
+                # No original file or in-memory source from the first SQL
+                # session is used by this recovery path.
+                db.close()
+                db = connect_database(str(db_path))
+                original.unlink()
+                new_engine = TelegramObjectStorage(
+                    ManifestStore(db), OwnedRemote({"ci": (client, target)}),
+                    chunk_size=chunk_size, scratch_directory=root,
+                )
+                target_path = root / "restored.bin"
+                await new_engine.download_to_path(item.id, target_path)
+                assert target_path.stat().st_size == size
+                assert hashlib.sha256(target_path.read_bytes()).hexdigest() == item.sha256
+                for start, end in (
+                    (chunk_size - 3, chunk_size + 5),
+                    (max(0, size - 64), size),
+                    (size, size),
+                ):
+                    blocks = [block async for block in new_engine.iter_bytes(
+                        item.id, start=start, end=end,
+                        block_size=7,
+                    )]
+                    assert b"".join(blocks) == payload[start:end]
+            finally:
+                try:
+                    if target is not None:
+                        for _, peer, mid in acked:
+                            assert int(await client.get_peer_id(target)) == peer
+                            await client.delete_messages(target, [mid], revoke=True)
+                finally:
+                    await client.disconnect()
+                    db.close()
+    asyncio.run(scenario())
