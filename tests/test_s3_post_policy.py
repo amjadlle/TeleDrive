@@ -900,6 +900,44 @@ def test_browser_post_tagging_requires_extra_explicit_permission(service):
     assert service[2].uploads == 1
 
 
+
+def test_browser_post_tag_sql_failure_cannot_replace_published_version(service, monkeypatch):
+    from teledrive.s3.tagging import ObjectTagStore
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    first = b"previous-published-original" * 37
+    key = "browser/transactional-tags.bin"
+    good = post(service, first, make_form(
+        service, first, key=key,
+        extra_fields={"x-amz-tagging": "stage=previous"},
+    ))
+    assert good.status_code == 204
+    old_id = signed(service, "HEAD", "/backup-bucket/" + key).headers[
+        "x-amz-version-id"
+    ]
+    uploads_before = service[2].uploads
+    original = ObjectTagStore.attach_uncommitted
+
+    def inject_sql_failure(self, object_id, tags):
+        if ("stage", "failing") in tags:
+            raise RuntimeError("injected tag journal failure")
+        return original(self, object_id, tags)
+
+    monkeypatch.setattr(ObjectTagStore, "attach_uncommitted", inject_sql_failure)
+    later = b"new-remote-but-not-published" * 41
+    failed = post(service, later, make_form(
+        service, later, key=key,
+        extra_fields={"x-amz-tagging": "stage=failing"},
+    ))
+    assert failed.status_code == 503, failed.text
+    assert service[2].uploads == uploads_before + 1
+    assert signed(service, "GET", "/backup-bucket/" + key).content == first
+    assert _post_tags(service, key) == [("stage", "previous")]
+    assert signed(service, "HEAD", "/backup-bucket/" + key).headers[
+        "x-amz-version-id"
+    ] == old_id
+
+
 def test_real_boto3_browser_post_signed_object_tagging_and_readback(service):
     import boto3
     from botocore.config import Config
