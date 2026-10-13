@@ -837,6 +837,9 @@ def test_definitive_429_rejection_clears_intent_for_safe_retry(tmp_path):
                 checksum=digest,
             ))
         assert api.counter == 0 and transport.index.unresolved_count() == 0
+        # Advance the simulated cooldown without sleeping for 61s in a
+        # deterministic offline test. This remote now accepts the request.
+        transport._next_upload = 0.0
         run(transport.upload(
             source, object_id="explicit-rejection", ordinal=0, checksum=digest,
         ))
