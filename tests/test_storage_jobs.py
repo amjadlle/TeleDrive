@@ -99,22 +99,31 @@ def test_staged_job_restarts_without_reupload(queue):
     source = root / "stage.bin"
     source.write_bytes(b"staged" * 32)
     identifier = manager.enqueue("job-bucket", "staged.bin", source, allowed_root=root)
-    claim = manager.claim_next(now=int(time.time()) - 1000, ttl=120)
+    claim = manager.claim_next(now=int(time.time()), ttl=120)
     assert claim["id"] == identifier
     remote = MemoryTelegram()
     engine = TelegramObjectStorage(manager.catalog.manifests, remote, chunk_size=64,
                                    scratch_directory=root)
     ready = asyncio.run(engine.put_file("job-bucket", "staged.bin", source))
     assert manager.mark_staged(identifier, claim["lease_token"], ready.id,
-                               now=int(time.time()) - 999) is False
-    # lease from simulated past was expired; claim token cannot stage.
-    # Normal fresh worker can adopt this finished Telegram manifest only
-    # after an explicit SQL staging record under a valid lease.
-    # Do not claim invisible chunks or invent object publication.
+                               now=int(time.time()))
+    sent_before_restart = remote.uploads
+    # Simulate a hard-killed runner: the persisted READY manifest and job
+    # staging record survive, but its owner lease expires.
+    manager.db.connection.execute(
+        jobs.update().where(jobs.c.id == identifier).values(lease_until=0)
+    )
+    manager.db.commit()
     db = connect_database(path)
     try:
-        store = StorageUploadJobs(BucketCatalog(ManifestStore(db)))
-        assert store.catalog.get if store.catalog else False
+        resumed = StorageUploadJobs(BucketCatalog(ManifestStore(db)))
+        outcome = asyncio.run(resumed.run_next(
+            remote, allowed_root=root, scratch_directory=root, chunk_size=64,
+        ))
+        assert outcome == {"id": identifier, "state": "done", "object_id": ready.id}
+        assert remote.uploads == sent_before_restart
+        assert resumed.catalog.get("job-bucket", "staged.bin").item.id == ready.id
+        assert resumed.list_jobs()[0]["state"] == "done"
     finally:
         db.close()
 
