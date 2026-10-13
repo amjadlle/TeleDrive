@@ -503,9 +503,15 @@ async def _handle(request: Request):
             if (request.headers.get("x-amz-metadata-directive") is not None
                     and "x-amz-metadata-directive" not in signed_headers):
                 raise SigV4Error("AccessDenied", "Metadata directive must be signed")
-            if not source_header.startswith("/") or "?" in source_header:
-                return _error("InvalidArgument", "Copy source must be an object path without version selector", 400)
-            original_path = unquote(source_header[1:])
+            # Both `bucket/key` (boto3) and `/bucket/key` (AWS CLI)
+            # are valid CopySource header shapes. Never accept remote URLs
+            # or source version selectors as though they were object keys.
+            if ("?" in source_header or source_header.startswith("//")
+                    or "://" in source_header):
+                return _error("InvalidArgument", "Copy source must be a local bucket/object path", 400)
+            original_path = unquote(
+                source_header[1:] if source_header.startswith("/") else source_header
+            )
             src_bucket, slash, src_key = original_path.partition("/")
             if not slash or not src_bucket or not src_key:
                 return _error("InvalidArgument", "Invalid CopySource bucket/object key", 400)
