@@ -872,3 +872,17 @@ verification and explicit retention approvals are implemented.
   production representative secret-backed DR, operator-approved cutover,
   sustained multi-host Telegram rate-limit load and full AWS lifecycle
   remain **open**. No production data removal or `main` merge is implied.
+
+## Latest P1 CI reconciliation
+
+- The initial expanded-coverage workflow exposed two **test-fixture**
+  assumptions in the new authenticated Bot intent inventory test:
+  warning capitalization and invoking a manifest-join metric before
+  the minimal test database created any chunk table. The assertions were
+  corrected without weakening access controls or changing storage
+  behavior. Storage, Security, Release, SQL, Desktop and real Telegram
+  jobs must all be green for the **same final SHA**.
+- This acceptance revision deliberately re-triggers the three explicit
+  real-data suites: Bot multipart 5/16 MiB, Bot twelve-object mixed-size
+  soak, and Telethon 5/16 MiB. Only dedicated E2E test credentials are
+  involved; operators still own staging/production signoff.
