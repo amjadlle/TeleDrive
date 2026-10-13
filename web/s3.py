@@ -378,7 +378,11 @@ async def _handle(request: Request):
             if any(name in request.headers for name in ("if-modified-since", "if-unmodified-since")):
                 return _error("NotImplemented", "Conditional write dates are unsupported", 501)
             has_write_cond = any(name in request.headers for name in ("if-match", "if-none-match"))
-            simple_object = bool(separator and not request.query_params
+            # SigV4 presigned URLs carry authentication query fields, not
+            # operation selectors. Permit these to use the same signed CAS.
+            auth_only_query = all(name.startswith("X-Amz-")
+                                  for name in request.query_params)
+            simple_object = bool(separator and auth_only_query
                                  and not request.headers.get("x-amz-copy-source"))
             if has_write_cond and not simple_object:
                 return _error("NotImplemented", "Conditions are supported only for object PUT/DELETE", 501)
