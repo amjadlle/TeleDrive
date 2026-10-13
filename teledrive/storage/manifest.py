@@ -44,6 +44,16 @@ chunks = Table(
     UniqueConstraint("account", "chat_id", "message_id", name="uq_storage_chunk_message"),
     CheckConstraint("size > 0", name="ck_storage_chunk_size"),
 )
+# Immutable server-side copies reference the original Telegram chunk journal.
+# No duplicate (account, chat_id, message_id) rows are created. Physical GC
+# MUST account for these aliases before deleting any original Telegram media.
+object_aliases = Table(
+    "storage_object_aliases", metadata,
+    Column("object_id", String(36), ForeignKey("storage_objects.id"), primary_key=True),
+    Column("source_object_id", String(36), ForeignKey("storage_objects.id"),
+           nullable=False),
+)
+
 writer_fences = Table(
     "storage_writer_fences", metadata,
     Column("object_id", String(36), ForeignKey("storage_objects.id"), primary_key=True),
@@ -260,10 +270,31 @@ class ManifestStore:
                             size=int(row["size"]), sha256=row["sha256"],
                             created_at=int(row["created_at"]))
 
+    def resolve_content_id(self, identifier: str) -> str:
+        """Locate immutable Telegram bytes for a ready object or server-side copy.
+
+        Depth is bounded and cycles fail closed if metadata is corrupt.
+        This read-only lookup also validates source readiness at each hop.
+        """
+        visited: set[str] = set()
+        current = identifier
+        for _ in range(64):
+            if current in visited:
+                raise ManifestError("Cyclic copy alias metadata")
+            visited.add(current)
+            self.get(current)
+            source = self.db.connection.execute(select(
+                object_aliases.c.source_object_id
+            ).where(object_aliases.c.object_id == current)).scalar_one_or_none()
+            if source is None:
+                return current
+            current = source
+        raise ManifestError("Copy alias chain is too deep")
+
     def parts(self, identifier: str) -> list[ChunkReference]:
-        self.get(identifier)
+        current = self.resolve_content_id(identifier)
         rows = self.db.connection.execute(select(chunks).where(
-            chunks.c.object_id == identifier
+            chunks.c.object_id == current
         ).order_by(chunks.c.ordinal)).mappings().all()
         return [ChunkReference(ordinal=int(r["ordinal"]), offset=int(r["offset"]),
                                size=int(r["size"]), sha256=r["sha256"], account=r["account"],
