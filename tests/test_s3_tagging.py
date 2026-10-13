@@ -360,3 +360,34 @@ def test_copy_tag_directive_replace_snapshots_new_tags_without_telegram_upload(s
                **{"x-amz-tagging": "not-replace=forbidden"})
     assert bad.status_code == 400
     assert signed(service, "HEAD", "/backup-bucket/should-not-exist").status_code == 404
+
+
+def test_copy_tagging_cannot_bypass_separate_read_write_scopes(service):
+    create(service)
+    source = "/backup-bucket/file.bin"
+    assert signed(service, "PUT", source + "?tagging",
+                  tag_xml([("confidential", "label")])).status_code == 200
+    db = service[3]()
+    try:
+        limited = S3CredentialStore(db, service[4]).create(
+            "basic-copy-only", ["s3:GetObject", "s3:PutObject"]
+        )
+        replace_only = S3CredentialStore(db, service[4]).create(
+            "can-change-tags", ["s3:GetObject", "s3:PutObject", "s3:PutObjectTagging"]
+        )
+    finally:
+        db.close()
+    # A client with ordinary CopyObject permissions cannot exfiltrate
+    # protected source tags by copying the object to its own key.
+    denied = signed(service, "PUT", "/backup-bucket/no-leak",
+                    extra_headers={"x-amz-copy-source": source},
+                    access=limited.access_key, secret=limited.secret_key)
+    assert denied.status_code == 403
+    assert signed(service, "HEAD", "/backup-bucket/no-leak").status_code == 404
+    # Explicit REPLACE may deliberately strip tags, but only with permission.
+    replacement = signed(service, "PUT", "/backup-bucket/unlabeled",
+                         extra_headers={"x-amz-copy-source": source,
+                                        "x-amz-tagging-directive": "REPLACE"},
+                         access=replace_only.access_key, secret=replace_only.secret_key)
+    assert replacement.status_code == 200, replacement.text
+    assert extract_tags(signed(service, "GET", "/backup-bucket/unlabeled?tagging")) == []
