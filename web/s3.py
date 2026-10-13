@@ -16,7 +16,7 @@ import tempfile
 import time
 import zlib
 from pathlib import Path
-from urllib.parse import unquote, parse_qsl
+from urllib.parse import unquote, parse_qsl, quote
 from xml.etree import ElementTree as ET
 from defusedxml import ElementTree as SafeET
 from defusedxml.common import DefusedXmlException
@@ -302,24 +302,30 @@ def _page(catalog: BucketCatalog, bucket: str, prefix: str,
 def _list_xml(bucket: str, keys: list, common: list[str], prefix: str,
               limit: int, after: str, delimiter: str,
               more: bool, next_token: str | None, etag_for=None, *,
-              version_one: bool = False, next_marker: str | None = None) -> bytes:
+              version_one: bool = False, next_marker: str | None = None,
+              encoding_type: str | None = None) -> bytes:
     root = ET.Element("ListBucketResult", xmlns=NAMESPACE)
-    fields = [("Name", bucket), ("Prefix", prefix),
+    # S3 EncodingType=url percent-encodes UTF-8 keys *inside XML* so names
+    # containing XML control characters remain safely representable.
+    encoded = lambda value: quote(value, safe="") if encoding_type == "url" else value
+    fields = [("Name", bucket), ("Prefix", encoded(prefix)),
               ("MaxKeys", limit), ("IsTruncated", "true" if more else "false")]
     if not version_one:
         fields.append(("KeyCount", len(keys) + len(common)))
     for field, val in fields:
         ET.SubElement(root, field).text = str(val)
     if delimiter:
-        ET.SubElement(root, "Delimiter").text = delimiter
+        ET.SubElement(root, "Delimiter").text = encoded(delimiter)
+    if encoding_type:
+        ET.SubElement(root, "EncodingType").text = encoding_type
     if version_one:
-        ET.SubElement(root, "Marker").text = after
+        ET.SubElement(root, "Marker").text = encoded(after)
     elif after:
-        ET.SubElement(root, "StartAfter").text = after
+        ET.SubElement(root, "StartAfter").text = encoded(after)
     for item in keys:
         c = ET.SubElement(root, "Contents")
         for field, value in (
-            ("Key", item.item.key),
+            ("Key", encoded(item.item.key)),
             ("LastModified", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(item.item.created_at))),
             ("ETag", '"' + (etag_for(item.item) if etag_for else item.item.sha256) + '"'),
             ("Size", item.item.size),
@@ -327,11 +333,11 @@ def _list_xml(bucket: str, keys: list, common: list[str], prefix: str,
         ):
             ET.SubElement(c, field).text = str(value)
     for name in common:
-        ET.SubElement(ET.SubElement(root, "CommonPrefixes"), "Prefix").text = name
+        ET.SubElement(ET.SubElement(root, "CommonPrefixes"), "Prefix").text = encoded(name)
     if next_token:
         ET.SubElement(root, "NextContinuationToken").text = next_token
     if version_one and next_marker:
-        ET.SubElement(root, "NextMarker").text = next_marker
+        ET.SubElement(root, "NextMarker").text = encoded(next_marker)
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
@@ -553,6 +559,9 @@ async def _handle(request: Request):
             version_one = list_type is None
             prefix = request.query_params.get("prefix", "")
             delimiter = request.query_params.get("delimiter", "")
+            encoding_type = request.query_params.get("encoding-type")
+            if encoding_type not in (None, "url"):
+                return _error("InvalidArgument", "Unsupported list encoding-type", 400)
             if len(prefix.encode("utf-8")) > 1024 or len(delimiter.encode("utf-8")) > 16:
                 return _error("InvalidArgument", "Prefix or delimiter is too large", 400)
             if version_one:
@@ -590,7 +599,8 @@ async def _handle(request: Request):
                                       after if version_one or not token else "",
                                       delimiter, more, next_token,
                                       lambda obj: tags.object_etag(obj.id, obj.sha256),
-                                      version_one=version_one, next_marker=next_marker),
+                                      version_one=version_one, next_marker=next_marker,
+                                      encoding_type=encoding_type),
                             media_type="application/xml")
 
         if bucket not in catalog.list_buckets():
