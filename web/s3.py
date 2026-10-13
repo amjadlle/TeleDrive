@@ -56,7 +56,12 @@ def _xml(tag: str, pairs: list[tuple[str, str]] | None = None) -> bytes:
 
 
 def _error(code: str, message: str, status: int) -> Response:
-    return Response(_xml("Error", [("Code", code), ("Message", message)]),
+    # S3 error XML is *not* in the successful-response namespace.
+    # Boto3/other AWS SDK error parsers otherwise yield Error.Code == "".
+    root = ET.Element("Error")
+    ET.SubElement(root, "Code").text = code
+    ET.SubElement(root, "Message").text = message
+    return Response(ET.tostring(root, encoding="utf-8", xml_declaration=True),
                     media_type="application/xml", status_code=status)
 
 
