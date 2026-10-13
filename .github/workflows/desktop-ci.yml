@@ -16,6 +16,7 @@ on:
       - "installer/**"
       - "requirements.txt"
       - "pyproject.toml"
+      - "docs/P0_ACCEPTANCE.md"
       - ".github/workflows/desktop-ci.yml"
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - "installer/**"
       - "requirements.txt"
       - "pyproject.toml"
+      - "docs/P0_ACCEPTANCE.md"
       - ".github/workflows/desktop-ci.yml"
 
 permissions:

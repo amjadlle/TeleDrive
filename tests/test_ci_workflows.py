@@ -165,3 +165,12 @@ def test_final_p0_contract_runs_on_database_and_desktop_workflow_changes():
         rules = workflow(name)["on"]
         assert "tests/test_s3_p0_final.py" in rules["push"]["paths"]
         assert "tests/test_s3_p0_final.py" in rules["pull_request"]["paths"]
+
+
+def test_final_release_acceptance_report_triggers_all_three_filtered_ci_jobs():
+    # An updated acceptance record must invalidate the previous same-SHA
+    # CI baseline rather than leaving stale green checks on an older SHA.
+    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+        events = workflow(name)["on"]
+        assert "docs/P0_ACCEPTANCE.md" in events["push"]["paths"]
+        assert "docs/P0_ACCEPTANCE.md" in events["pull_request"]["paths"]
