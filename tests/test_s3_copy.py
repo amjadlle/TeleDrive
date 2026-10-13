@@ -66,6 +66,14 @@ def test_metadata_only_copy_durable_after_source_delete_and_overwrite(service):
     assert signed(service, "GET", "/origin-bucket/original.bin").content == b"replaced"
 
 
+def test_copy_source_without_leading_slash_matches_boto3(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    assert signed(service, "PUT", "/backup-bucket/src", b"without-slash").status_code == 200
+    result = copy(service, "backup-bucket/src", "/backup-bucket/target")
+    assert result.status_code == 200, result.text
+    assert signed(service, "GET", "/backup-bucket/target").content == b"without-slash"
+
+
 def test_copy_chain_flattens_and_remains_readable_when_heads_disappear(service):
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
     payload = b"chain-immutable" * 333
