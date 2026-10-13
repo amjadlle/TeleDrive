@@ -22,16 +22,61 @@ class FakeTelegramClient:
         return ("resolved", target)
 
 
+def channel(title="TeleDrive E2E Storage", *, public=False, is_group=False, is_channel=True):
+    entity = SimpleNamespace(username="public_username" if public else None)
+    return SimpleNamespace(
+        id=-1001234567890,
+        name=title,
+        entity=entity,
+        is_channel=is_channel,
+        is_group=is_group,
+    )
+
+
+def test_private_channel_name_resolves_from_dialogs():
+    expected = channel(title="TeleDrive E2E Storage")
+    client = FakeTelegramClient([expected])
+    result = asyncio.run(resolve_telegram_target(
+        client, "-1009876543210", "  teledrive e2e storage  "
+    ))
+    assert result is expected.entity
+    assert client.entity_requests == []
+
+
+def test_private_channel_name_rejects_no_match():
+    client = FakeTelegramClient([channel(title="Unrelated")])
+    with pytest.raises(ValueError, match="No broadcast channel"):
+        asyncio.run(resolve_telegram_target(client, None, "TeleDrive E2E Storage"))
+    assert client.entity_requests == []
+
+
+def test_private_channel_name_rejects_duplicates():
+    client = FakeTelegramClient([channel(), channel()])
+    with pytest.raises(ValueError, match="Multiple Telegram broadcast channels"):
+        asyncio.run(resolve_telegram_target(client, None, "TeleDrive E2E Storage"))
+
+
+@pytest.mark.parametrize("wrong_channel", [
+    channel(public=True),
+    channel(is_group=True),
+    channel(is_channel=False),
+])
+def test_private_channel_name_rejects_public_groups_and_chats(wrong_channel):
+    client = FakeTelegramClient([wrong_channel])
+    with pytest.raises(ValueError, match="No broadcast channel"):
+        asyncio.run(resolve_telegram_target(client, None, "TeleDrive E2E Storage"))
+
+
 def test_private_channel_id_uses_joined_dialog_entity():
-    channel = object()
-    client = FakeTelegramClient([SimpleNamespace(id=-1001234567890, entity=channel)])
+    expected = channel()
+    client = FakeTelegramClient([expected])
     result = asyncio.run(resolve_telegram_target(client, "  -1001234567890  "))
-    assert result is channel
+    assert result is expected.entity
     assert client.entity_requests == []
 
 
 def test_unknown_private_channel_fails_closed():
-    client = FakeTelegramClient([SimpleNamespace(id=-1001111111111, entity=object())])
+    client = FakeTelegramClient([channel()])
     with pytest.raises(ValueError, match="not in the test account's dialogs"):
         asyncio.run(resolve_telegram_target(client, "-1002222222222"))
     assert client.entity_requests == []
