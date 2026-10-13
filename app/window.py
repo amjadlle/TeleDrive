@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
-import sqlite3
+import os
+from datetime import datetime
 import sys
 from urllib.request import Request, urlopen
 
@@ -13,11 +14,14 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget, QInputDialog, QComboBox, QScrollArea, QHeaderView, QGridLayout,
+    QVBoxLayout, QWidget, QInputDialog, QComboBox, QScrollArea, QHeaderView, QGridLayout, QCheckBox,
 )
 from PySide6.QtGui import QDesktopServices
 
-from .paths import app_data_dir, config_path, state_path
+from .paths import app_data_dir, config_path
+from teledrive import uploader
+from teledrive.db import Database, connect_database, normalize_database_url, sqlite_database_path
+from teledrive.desktop_support import accounts_from_config, parse_auth_prompt, validate_account_rows, write_auth_response
 
 STYLE = """
 QMainWindow { background: transparent; }
@@ -117,9 +121,14 @@ class MainWindow(QMainWindow):
         self.loop_timer.timeout.connect(lambda: self._start_uploader("--run-once"))
         self.awaiting_login_prompt = False
         self.pending_login_mode: str | None = None
-        self.login_code: str | None = None
+        self.pending_login_account: str | None = None
+        self._process_buffer = ""
+        self._account_widgets: list[dict] = []
+        self._last_db_error: str | None = None
         self.auth_dir = app_data_dir() / "auth"
         self.auth_dir.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            self.auth_dir.chmod(0o700)
         self._build_ui()
         self._load_settings()
         self._refresh_all()
@@ -244,6 +253,9 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar()
         box.addWidget(self.stats_label); box.addWidget(self.stats_detail); box.addSpacing(6); box.addWidget(self.progress)
         layout.addWidget(card)
+        self.account_status_label = QLabel("No account status yet", objectName="fieldHint")
+        self.account_status_label.setWordWrap(True)
+        layout.addWidget(self.account_status_label)
         actions = QHBoxLayout()
         self.run_button = QPushButton("Run upload batch")
         self.run_button.clicked.connect(lambda: self._start_uploader("--run-once"))
@@ -306,10 +318,9 @@ class MainWindow(QMainWindow):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
         self.api_id = QLineEdit(); self.api_hash = QLineEdit(); self.api_hash.setEchoMode(QLineEdit.EchoMode.Password)
-        self.phone = QLineEdit(); self.phone.setPlaceholderText("+country code and number")
-        self.target = QLineEdit(); self.target.setPlaceholderText("me, @channel, or channel ID")
+        self.target = QLineEdit(); self.target.setPlaceholderText("Default: me, @channel or chat ID")
         self.source = QLineEdit(); self.source.setPlaceholderText("Select the folder containing files to upload")
-        for text_field in (self.api_id, self.api_hash, self.phone, self.target):
+        for text_field in (self.api_id, self.api_hash, self.target):
             text_field.setFixedWidth(420)
         self.source.setFixedWidth(300)
         choose = QPushButton("Choose folder"); choose.setObjectName("secondary"); choose.setFixedWidth(112); choose.clicked.connect(self._choose_folder)
@@ -327,7 +338,24 @@ class MainWindow(QMainWindow):
         self.send_mode = QComboBox(); self.send_mode.setFixedWidth(300); self.send_mode.addItem("Document (file attachment)", "document"); self.send_mode.addItem("Media (photo/video)", "media"); self.send_mode.addItem("Auto (Telegram default)", "auto")
         form.addRow(QLabel("Telegram connection", objectName="sectionTitle"))
         form.addRow("Telegram API ID", self.api_id); form.addRow("Telegram API hash", self.api_hash)
-        form.addRow("Phone number", self.phone); form.addRow("Target channel / Saved Messages", self.target)
+        form.addRow("Default upload target", self.target)
+        self.strategy = QComboBox()
+        for label, strategy in (("Single account", "single"), ("Round robin", "round_robin"),
+                                ("Failover", "failover"), ("Parallel", "parallel")):
+            self.strategy.addItem(label, strategy)
+        form.addRow("Account scheduling strategy", self.strategy)
+        self.database_url = QLineEdit()
+        self.database_url.setPlaceholderText("Any synchronous SQLAlchemy database URL")
+        form.addRow("Database URL", self.database_url)
+        form.addRow(QLabel("Telegram accounts", objectName="sectionTitle"))
+        self.accounts_panel = QWidget()
+        self.accounts_layout = QVBoxLayout(self.accounts_panel)
+        self.accounts_layout.setContentsMargins(0, 0, 0, 0)
+        form.addRow(self.accounts_panel)
+        add_account = QPushButton("Add account")
+        add_account.setObjectName("secondary")
+        add_account.clicked.connect(lambda: self._add_account_editor())
+        form.addRow(add_account)
         form.addRow(QLabel("Upload source", objectName="sectionTitle"))
         form.addRow("Source folder", source_row)
         upload_limits = QGridLayout(); upload_limits.setHorizontalSpacing(18); upload_limits.setVerticalSpacing(10)
@@ -381,8 +409,13 @@ class MainWindow(QMainWindow):
         api_id = int(telegram.get("api_id", 0) or 0)
         self.api_id.setText(str(api_id) if api_id else "")
         self.api_hash.setText(str(telegram.get("api_hash", "")))
-        self.phone.setText(str(telegram.get("phone", "")))
         self.target.setText(str(telegram.get("target", "me")))
+        self.strategy.setCurrentIndex(max(0, self.strategy.findData(telegram.get("strategy", "single"))))
+        state = raw.get("state", {})
+        self.database_url.setText(str(state.get("database_url") or state.get("db_path", "data/state.db")))
+        self._clear_account_editors()
+        for account in accounts_from_config(telegram):
+            self._add_account_editor(account)
         self.source.setText(str(upload.get("source_dir", "")))
         self.per_run.setValue(int(upload.get("max_files_per_run", 3)))
         self.per_day.setValue(int(upload.get("max_files_per_day", 100)))
