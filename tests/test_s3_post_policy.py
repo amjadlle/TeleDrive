@@ -15,7 +15,8 @@ from teledrive.s3.credentials import S3CredentialStore
 
 def make_form(service, data, *, key="browser/upload.bin", seconds=300,
               missing=None, clauses=None, issued=None, key_prefix=None,
-              status=None, redirect=None, content_type=None, content_type_prefix=None):
+              status=None, redirect=None, content_type=None, content_type_prefix=None,
+              extra_fields=None):
     credential = issued or service[1]
     current = datetime.now(timezone.utc).replace(microsecond=0)
     day = current.strftime("%Y%m%d")
@@ -32,6 +33,7 @@ def make_form(service, data, *, key="browser/upload.bin", seconds=300,
         form["success_action_redirect"] = redirect
     if content_type is not None:
         form["Content-Type"] = content_type
+    form.update(extra_fields or {})
     conditions = [{"bucket": "backup-bucket"}]
     conditions.extend(
         ["starts-with", "$key", key_prefix] if k == "key" and key_prefix is not None
@@ -514,6 +516,126 @@ def test_real_boto3_presigned_browser_post_content_type_is_persisted(service):
     assert post(service, payload, signed_form["fields"]).status_code == 204
     response = signed(service, "GET", "/backup-bucket/sdk/mime.pdf")
     assert response.status_code == 200 and response.content == payload
+    assert response.headers["content-type"] == "application/pdf"
+    assert service[2].uploads == 1
+
+
+
+@pytest.mark.parametrize("size", [0, 1, 65537])
+def test_browser_post_signed_custom_metadata_and_cache_headers_roundtrip(service, size):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = hashlib.shake_256(f"browser-metadata:{size}".encode()).digest(size)
+    metadata = {
+        "x-amz-meta-owner": "ci-operator",
+        "x-amz-meta-şehir": "not-allowed",
+    }
+    # The metadata field name is strictly ASCII and must be signed.
+    invalid = make_form(service, data, extra_fields=metadata)
+    assert post(service, data, invalid).status_code == 400
+    extra = {
+        "x-amz-meta-owner": "ci-operator",
+        "x-amz-meta-i18n": "İstanbul & 東京",
+        "Cache-Control": "private, max-age=120",
+        "Content-Disposition": "attachment; filename=remote.bin",
+        "Content-Language": "tr",
+    }
+    key = f"browser/custom-metadata/{size}.bin"
+    result = post(service, data, make_form(
+        service, data, key=key, content_type="application/octet-stream",
+        extra_fields=extra,
+    ))
+    assert result.status_code == 204, result.text
+    get = signed(service, "GET", f"/backup-bucket/{key}")
+    head = signed(service, "HEAD", f"/backup-bucket/{key}")
+    assert get.status_code == 200 and get.content == data
+    assert head.status_code == 200
+    for response in (get, head):
+        assert response.headers["x-amz-meta-owner"] == extra["x-amz-meta-owner"]
+        assert response.headers["x-amz-meta-i18n"] == extra["x-amz-meta-i18n"]
+        assert response.headers["cache-control"] == extra["Cache-Control"]
+        assert response.headers["content-disposition"] == extra["Content-Disposition"]
+        assert response.headers["content-language"] == "tr"
+        assert response.headers["content-type"] == "application/octet-stream"
+    assert service[2].uploads == (0 if size == 0 else 1)
+
+
+@pytest.mark.parametrize("field", [
+    "x-amz-meta-owner", "Cache-Control", "Content-Disposition",
+    "Content-Language",
+])
+def test_browser_post_metadata_mutation_or_missing_policy_denied_before_send(service, field):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"metadata-must-be-exact"
+    initial = {field: "signed-value"}
+    signed_form = make_form(service, body, extra_fields=initial)
+    changes = [
+        {**signed_form, field: "changed"},
+        {k: v for k, v in signed_form.items() if k != field},
+        {**make_form(service, body), field: "unsigned"},
+    ]
+    for mutated in changes:
+        response = post(service, body, mutated)
+        assert response.status_code in (400, 403), response.text
+    assert service[2].uploads == 0
+
+
+def test_browser_post_metadata_must_be_bounded_before_telegram_send(service):
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    body = b"guard-aggregate-metadata"
+    large = {
+        "x-amz-meta-one": "a" * 1024,
+        "x-amz-meta-two": "b" * 1024,
+        "x-amz-meta-three": "c" * 1024,
+    }
+    form = make_form(service, body, extra_fields=large)
+    assert post(service, body, form).status_code == 400
+    too_many = {f"x-amz-meta-field-{n}": str(n) for n in range(13)}
+    assert post(service, body, make_form(
+        service, body, extra_fields=too_many,
+    )).status_code == 400
+    malformed = {"x-amz-meta-shell": "valid\\r\\nInjected: unsafe"}
+    assert post(service, body, make_form(
+        service, body, extra_fields=malformed,
+    )).status_code == 400
+    assert service[2].uploads == 0
+
+
+def test_real_boto3_presigned_post_custom_metadata_cache_and_binary_readback(service):
+    import boto3
+    from botocore.config import Config
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    payload = hashlib.shake_256(b"boto3-meta-and-cache").digest(262149)
+    checksum = base64.b64encode(hashlib.sha256(payload).digest()).decode()
+    fields = {
+        "Content-Type": "application/pdf",
+        "Cache-Control": "private, max-age=60",
+        "x-amz-meta-ci-origin": "SDK-generated",
+        "x-amz-meta-ci-variant": "binary",
+        "x-amz-checksum-sha256": checksum,
+    }
+    creds = service[1]
+    client = boto3.client(
+        "s3", endpoint_url="http://localhost:9000",
+        aws_access_key_id=creds.access_key, aws_secret_access_key=creds.secret_key,
+        region_name="us-east-1", config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+        ),
+    )
+    generated = client.generate_presigned_post(
+        Bucket="backup-bucket", Key="sdk/custom-meta.pdf",
+        Fields=fields, Conditions=[
+            {name: value} for name, value in fields.items()
+        ] + [["content-length-range", 0, 8 * 1024 * 1024]],
+        ExpiresIn=120,
+    )
+    result = post(service, payload, generated["fields"])
+    assert result.status_code == 204, result.text
+    response = signed(service, "GET", "/backup-bucket/sdk/custom-meta.pdf")
+    assert response.status_code == 200 and response.content == payload
+    assert response.headers["x-amz-meta-ci-origin"] == "SDK-generated"
+    assert response.headers["x-amz-meta-ci-variant"] == "binary"
+    assert response.headers["cache-control"] == "private, max-age=60"
     assert response.headers["content-type"] == "application/pdf"
     assert service[2].uploads == 1
 
