@@ -79,15 +79,20 @@ def test_if_modified_and_unmodified_since_use_stable_manifest_timestamp(service)
     assert matching.status_code == 200
 
 
-def test_unsupported_write_conditions_are_rejected_without_telegram_upload(service):
+def test_failed_write_conditions_reject_before_telegram_upload(service):
     tag = setup_object(service)
     before = service[2].uploads
     write = signed(service, "PUT", "/backup-bucket/cache.bin", b"unsafe-overwrite",
                    extra_headers={"If-None-Match": "*"})
-    assert write.status_code == 501
-    assert b"NotImplemented" in write.content
+    assert write.status_code == 412
+    assert b"PreconditionFailed" in write.content
     deletion = signed(service, "DELETE", "/backup-bucket/cache.bin",
-                      extra_headers={"If-Match": tag})
-    assert deletion.status_code == 501
+                      extra_headers={"If-Match": '"different"'})
+    assert deletion.status_code == 412
     assert service[2].uploads == before
     assert get(service).content == b"cached-object-bytes"
+    # A correct conditional DELETE must atomically unlink the current head.
+    permitted = signed(service, "DELETE", "/backup-bucket/cache.bin",
+                       extra_headers={"If-Match": tag})
+    assert permitted.status_code == 204
+    assert get(service).status_code == 404
