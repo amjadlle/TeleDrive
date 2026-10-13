@@ -55,13 +55,14 @@ every workflow at the release SHA.
 - [x] **P1.1 SQL metadata safety:** heartbeat, fencing, stale PENDING
   preview and explicit abandonment are implemented; remote orphan
   identification remains separately open.
-- [ ] **P1.2 Legacy integration:** durable job queue, verified chunk resume
-  and worker restart are implemented; integrating the legacy folder
-  uploader with this pipeline remains outstanding.
+- [x] **P1.2 Legacy integration (code + CI):** bounded idempotent folder
+  imports, operator preview, fenced automatic cutover, durable Bot API
+  upload and worker restart are implemented. Production cutover remains
+  explicit and needs operator acceptance on its own data/credentials.
 - [ ] **P1.3 Advanced S3 parity:** published-only version listing/restore,
   conditional and presigned checksum-bound Complete, version tagging,
   historical CopySource and common checksums are implemented; S3 delete
-  markers and generic presigned POST remain outstanding.
+  markers are implemented; generic presigned browser POST remains outstanding.
 - [ ] **P1.4 Operations:** operator controls, metrics/alerts, SQLite
   backup/verification and runbooks are implemented; repository protection,
   cross-platform migrations and live-remote DR drills remain outstanding.
@@ -231,9 +232,10 @@ verification and explicit retention approvals are implemented.
 
 ### Still open — do not claim these are implemented
 - **P1 remaining:** Bot API ACK-without-receipt loss (not discoverable via
-  Bot API), legacy folder uploader merge, extended multi-worker soak,
-  generic browser presigned POST, migration and
-  real Telegram restoration exercises. Receipt-persisted ACKs now reconcile.
+  Bot API), generic browser presigned POST, live multi-host Telegram rate-limit
+  soak, PostgreSQL/MySQL disaster restore and an operator-controlled legacy
+  production cutover. Receipt-persisted ACKs, automated folder import,
+  logical S3 delete markers and live SQLite/Bot API restore now work.
 - **P2 remaining:** audited retention-approved physical GC, S3 SSE/policy/
   lifecycle semantics, DNS/TLS and external virtual-host/Cyberduck acceptance,
   Telegram rebuild, live full DR/fault/rate-limit benchmarks and installers.
@@ -543,3 +545,20 @@ verification and explicit retention approvals are implemented.
 - This is still an explicit operational migration: source root and bot target
   must be configured, worker runs remain opt-in and separate services using
   different databases are out of scope.
+
+
+## P1.4 live RDBMS concurrency regression evidence
+
+- `52c442b8` PostgreSQL 17 + MySQL 8.4 CI: **70 passed**, including four
+  new tests. Four independent DB sessions compete for the same durable
+  queue claim; exactly one worker acquires the fenced lease. Two separate
+  importers enqueue the same source revision simultaneously; the stable
+  UUIDv5 key produces exactly one record. Both checks run on **both** DBs.
+- `d7b906eb` Storage API CI: **360 passed** and the **3/3** real AWS CLI/
+  rclone cases passed. These include the leased legacy bridge and WebUI
+  cutover restrictions. Release verification and two live Telegram E2E
+  workflows also passed at that SHA. The final documentation signoff commit
+  reruns the path-filtered release CI matrix; earlier green SHAs do not
+  certify later code changes.
+- Scope: deterministic concurrency and SQL visibility, not a production
+  multi-host Telegram 429/revocation soak. No physical Telegram GC enabled.
