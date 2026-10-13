@@ -158,8 +158,19 @@ def test_revoke_and_scope_are_enforced_independently(service):
 def test_unsigned_payload_and_unsupported_operations_fail_closed(service):
     client, _, bot, _, _ = service
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
-    response = signed(service, "PUT", "/backup-bucket/unsafe", b"stuff",
-                      extra_headers={"x-amz-content-sha256": "UNSIGNED-PAYLOAD"})
+    # Botocore's S3SigV4Auth always replaces UNSIGNED-PAYLOAD with a
+    # SHA-256 for PUT. Mutate the actual signed wire request to verify the
+    # gateway rejects the unsigned upload before touching Telegram.
+    req = AWSRequest(method="PUT", url="http://localhost:9000/backup-bucket/unsafe",
+                     data=b"stuff", headers={
+                         "x-amz-content-sha256": hashlib.sha256(b"stuff").hexdigest(),
+                     })
+    req.context["payload_signing_enabled"] = True
+    S3SigV4Auth(Credentials(service[1].access_key, service[1].secret_key),
+                "s3", "us-east-1").add_auth(req)
+    bad_headers = dict(req.headers)
+    bad_headers["X-Amz-Content-SHA256"] = "UNSIGNED-PAYLOAD"
+    response = client.put("/backup-bucket/unsafe", content=b"stuff", headers=bad_headers)
     assert response.status_code == 400
     assert bot.uploads == 0
     unsupported = signed(service, "POST", "/backup-bucket/object?uploads")
