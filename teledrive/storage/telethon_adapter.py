@@ -6,9 +6,12 @@ this adapter does not silently fall back to a local/S3 storage provider.
 from __future__ import annotations
 
 from pathlib import Path
+import re
+from uuid import UUID
 from typing import Any, Mapping
 
 from .manifest import ChunkReference
+from .recovery import Discovery, RemoteChunk
 
 
 class TelethonChunkTransport:
@@ -76,3 +79,81 @@ class TelethonChunkTransport:
             raise FileNotFoundError("Telegram account unavailable for cleanup")
         client, _ = account
         await client.delete_messages(reference.chat_id, [reference.message_id])
+
+
+    @staticmethod
+    def _parse_marker(caption: str | None, object_id: str) -> tuple[int, str] | None:
+        # Never accept substrings or prefixes, only the exact upload marker.
+        try:
+            UUID(object_id)
+        except ValueError:
+            return None
+        matched = re.fullmatch(
+            rf"teledrive:{re.escape(object_id)}:([0-9]{{1,10}}):([0-9a-f]{{16}})",
+            caption or "",
+        )
+        if matched is None:
+            return None
+        return int(matched.group(1)), matched.group(2)
+
+    async def _message_for(self, part: RemoteChunk):
+        account = self.accounts.get(part.account)
+        if account is None:
+            raise RuntimeError("Stored Telegram account is not configured")
+        client, target = account
+        peer_id = int(await client.get_peer_id(target))
+        if peer_id != part.chat_id:
+            # Do not inspect or delete a message from a different target.
+            raise RuntimeError("Configured Telegram target differs from the original chunk")
+        return client, target, await client.get_messages(target, ids=part.message_id)
+
+    async def probe(self, chunk: RemoteChunk, *, object_id: str) -> str:
+        _, _, message = await self._message_for(chunk)
+        if message is None:
+            return "missing"
+        marker = self._parse_marker(getattr(message, "message", None), object_id)
+        actual_chat = getattr(message, "chat_id", None)
+        if (not getattr(message, "out", False) or marker is None
+                or marker != (chunk.ordinal, chunk.checksum_prefix)
+                or (actual_chat is not None and int(actual_chat) != chunk.chat_id)):
+            return "mismatch"
+        return "verified"
+
+    async def discover(self, object_id: str, *, scan_limit: int) -> Discovery:
+        if scan_limit < 1:
+            raise ValueError("scan_limit must be positive")
+        found: list[RemoteChunk] = []
+        scanned = 0
+        complete = True
+        for name, (client, target) in self.accounts.items():
+            chat_id = int(await client.get_peer_id(target))
+            local_count = 0
+            async for message in client.iter_messages(target, limit=scan_limit + 1):
+                local_count += 1
+                scanned += 1
+                if local_count > scan_limit:
+                    complete = False
+                    break
+                marker = self._parse_marker(getattr(message, "message", None), object_id)
+                if marker is None:
+                    continue
+                # Channel messages by other admins may look like uploads but
+                # cannot be proven owned by this TeleDrive account.
+                if not getattr(message, "out", False):
+                    complete = False
+                    continue
+                remote_chat = getattr(message, "chat_id", None)
+                if remote_chat is not None and int(remote_chat) != chat_id:
+                    complete = False
+                    continue
+                found.append(RemoteChunk(name, chat_id, int(message.id), *marker))
+        return Discovery(tuple(found), complete, scanned)
+
+    async def delete_verified(self, chunk: RemoteChunk, *, object_id: str) -> bool:
+        if await self.probe(chunk, object_id=object_id) != "verified":
+            return False
+        client, target, _ = await self._message_for(chunk)
+        await client.delete_messages(target, [chunk.message_id], revoke=True)
+        # Do not assume Telegram accepted deletion. A later retry can safely
+        # continue if eventual consistency makes the message still visible.
+        return await self.probe(chunk, object_id=object_id) == "missing"
