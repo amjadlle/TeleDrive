@@ -318,7 +318,7 @@ def test_explicit_multi_process_live_postgres_bot_acceptance_not_auto_spammed():
     assert job["concurrency"]["group"] == workflow(
         "telegram-bot-e2e.yml"
     )["concurrency"]["group"]
-    assert job["concurrency"]["group"] == workflow(
+    assert job["concurrency"]["group"] != workflow(
         "telegram-storage-e2e.yml"
     )["concurrency"]["group"]
     assert "postgres" in job["services"]
@@ -702,15 +702,17 @@ def test_bot_variable_discovery_parses_full_name_listing(monkeypatch):
     assert len(calls) == 1
 
 
-def test_same_private_telegram_channel_is_serialized_across_refs():
-    """Bot, Telethon and opt-in PG workers must not flood the same channel."""
-    expected = "teledrive-live-telegram-${{ github.repository }}"
+def test_live_bot_workers_are_serialized_without_cancelling_user_e2e():
+    """GitHub permits only one pending job per concurrency group."""
+    bot_group = "teledrive-live-bot-${{ github.repository }}"
+    user_group = "teledrive-live-user-${{ github.repository }}"
     bot = workflow("telegram-bot-e2e.yml")
     user = workflow("telegram-storage-e2e.yml")
     workers = workflow("telegram-multiworker-e2e.yml")
-    assert bot["concurrency"]["group"] == expected
-    assert user["concurrency"]["group"] == expected
-    assert workers["jobs"]["three-process-telegram"]["concurrency"]["group"] == expected
+    assert bot["concurrency"]["group"] == bot_group
+    assert user["concurrency"]["group"] == user_group
+    assert workers["jobs"]["three-process-telegram"]["concurrency"]["group"] == bot_group
+    assert user_group != bot_group  # both required jobs must finish on same SHA
     for value in (
         bot["concurrency"], user["concurrency"],
         workers["jobs"]["three-process-telegram"]["concurrency"],
