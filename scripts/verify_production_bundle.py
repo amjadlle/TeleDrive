@@ -15,8 +15,8 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
-_COMMIT = re.compile(r"[0-9a-f]{40}\\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 
 
 def canonical_payload(bundle: dict) -> bytes:
