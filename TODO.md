@@ -12,7 +12,7 @@ Date: 2026-10-14. Primary objective: close the **supported P0/P1 development sco
 
 ## Required before release signoff
 - [ ] Verify every workflow on the **final release candidate SHA**, including the renamed Release workflow, reports a successful conclusion. Canceled/skipped required jobs do not count.
-- [ ] Verify package version/tag is new and not already published; publish only via a tagged, verified build.
+- [x] Prepare version 1.0.7 and verify that v1.0.7 tag/release do not already exist. Release publication is gated by all eight independent CI workflows on the **same SHA**.
 - [ ] Verify Linux/Windows assets and tagged GitHub Release actually exist.
 - [ ] Record release URL, tag, exact source SHA and final CI run evidence, then freeze feature development.
 
@@ -23,3 +23,5 @@ Date: 2026-10-14. Primary objective: close the **supported P0/P1 development sco
 - [ ] Production-only physical multi-host soak, actual original-data DR and authorized legacy cutover.
 
 The [CI catalog](docs/CI_WORKFLOWS.md) defines what a green check proves. The [canonical implementation status](docs/IMPLEMENTATION_STATUS.md) describes bounded release support. Keep the physical deletion interlock OFF.
+
+Release candidate: `v1.0.7`. The marker commit `[publish-release]` requests artifact builds and publishing; missing/failed required workflows must block the release. No unrelated feature additions should be merged after a successful release.
