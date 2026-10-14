@@ -827,3 +827,17 @@ def test_disposable_dev_acceptance_does_not_require_live_telegram_credentials():
     assert 'down -v --remove-orphans' in runner
     assert 'production_acceptance_signed_off": False' in runner
 
+
+
+def test_release_publish_marker_requires_main_and_same_sha_guard():
+    release = workflow("release.yml")
+    build = release["jobs"]["build"]
+    publish = release["jobs"]["publish"]
+    for job in (build, publish):
+        assert "[publish-release]" in job["if"]
+        assert "refs/heads/main" in job["if"]
+        assert "github.ref_type == 'tag'" in job["if"]
+    assert publish["needs"] == "build"
+    script = "\\n".join(step.get("run", "") for step in publish["steps"])
+    assert "scripts/check_release_matrix.py" in script
+    assert "gh release create" in script
