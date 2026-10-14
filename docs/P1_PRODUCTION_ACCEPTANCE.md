@@ -335,3 +335,30 @@ production hosts, original SQL archive with the original Telegram
 account/channel, and explicit legacy cutover approval. An operator must
 independently verify the source system and supply those receipts before
 changing any production read routing.
+
+
+## 7. One-command P1 operator acceptance wizard
+
+On an operator-owned interactive terminal (not stdin/heredoc), from the
+latest TeleDrive main checkout with the virtual environment active:
+
+`python scripts/p1_acceptance_wizard.py`
+
+The wizard guides six separate tasks: latest successful CI E2E evidence,
+Telegram user StringSession creation/validation, genuinely independent HTTPS
+host one-hour soak, consistent SQLite or PostgreSQL/MySQL isolated backup and
+actual original-channel Bot readback, legacy cutover SHA/HEAD verification, and
+OPTIONAL lost-ACK independent user+Bot verification. For the last operation
+it is explicitly **dry-run only** and never calls `--apply`.
+
+The wizard writes unique 0600 evidence JSON under
+`~/teledrive-p1-evidence/` and stores newly generated Telethon
+StringSessions (without printing them) under
+`~/.config/teledrive/operator.session`. Do not send Telegram
+sessions, API hashes, Bot tokens, DB URLs, host URLs, Bot file IDs, backups
+or original private chat/message IDs to an assistant, issue or public CI.
+
+Missing independent hosts or production credentials are **BLOCKED**, not
+faked as passing. A passing telemetry receipt never proves host physical
+independence, signed cutover, or authorization. Production routing is never
+switched automatically; physical remote deletion stays disabled.
