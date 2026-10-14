@@ -387,10 +387,13 @@ def test_e2e_chat_bootstrap_rejects_invalid_private_channel_before_write(
     writes = []
     monkeypatch.setattr(setup, "require_github_cli", lambda repo: None)
     from subprocess import CompletedProcess
-    monkeypatch.setattr(
-        setup.subprocess, "run",
-        lambda cmd, **kwargs: CompletedProcess(cmd, 1, stdout=b"", stderr=b""),
-    )
+    def no_existing_variable(cmd, **kwargs):
+        if cmd[:3] == ["gh", "variable", "get"]:
+            return CompletedProcess(cmd, 1, stdout=b"", stderr=b"")
+        assert cmd[:3] == ["gh", "variable", "list"]
+        return CompletedProcess(cmd, 0, stdout=b"[]", stderr=b"")
+
+    monkeypatch.setattr(setup.subprocess, "run", no_existing_variable)
     monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: bad)
     monkeypatch.setattr(
         setup, "store_secret",
@@ -419,7 +422,9 @@ def test_e2e_chat_variable_cleanup_never_logs_unmasked_value(
     def mock_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
         if cmd[:3] == ["gh", "variable", "list"]:
-            return CompletedProcess(cmd, 0, stdout=json.dumps(names).encode(),
+            refreshed = not present or (len(calls) > 1 and delete_success)
+            rows = ([{"name": "AN_UNRELATED_VARIABLE"}] if refreshed else names)
+            return CompletedProcess(cmd, 0, stdout=json.dumps(rows).encode(),
                                     stderr=sample_id.encode())
         assert cmd[:3] == ["gh", "variable", "delete"]
         return CompletedProcess(cmd, 0 if delete_success else 1,
@@ -436,7 +441,10 @@ def test_e2e_chat_variable_cleanup_never_logs_unmasked_value(
         "--json", "name",
     ]
     assert all(kwargs["capture_output"] for _, kwargs in calls)
-    assert (len(calls) == 2) == present
+    assert [cmd[2] for cmd, _ in calls] == (
+        ["list", "delete"] if present and not delete_success else
+        ["list", "delete", "list"] if present else ["list", "list"]
+    )
     captured = capsys.readouterr()
     assert sample_id not in captured.out + captured.err
 
@@ -482,3 +490,111 @@ def test_e2e_chat_migration_rejects_untrusted_existing_variable_without_writing(
     )
     with pytest.raises(ValueError, match="numeric private channel"):
         setup.secure_existing_bot_chat_id("some-owner/some-repo")
+
+
+def test_e2e_chat_migration_unreadable_existing_variable_fails_closed(
+    monkeypatch,
+):
+    """A permission/network read error must not silently become a prompt."""
+    from subprocess import CompletedProcess
+    from scripts import setup_telegram_e2e as setup
+
+    monkeypatch.setattr(setup, "require_github_cli", lambda repo: None)
+    commands = []
+
+    def read_failure(cmd, **kwargs):
+        assert kwargs["capture_output"] is True
+        commands.append(cmd[:3])
+        if cmd[:3] == ["gh", "variable", "get"]:
+            return CompletedProcess(cmd, 1, stdout=b"", stderr=b"denied")
+        assert cmd[:3] == ["gh", "variable", "list"]
+        return CompletedProcess(
+            cmd, 0,
+            stdout=b'[{"name":"TELEDRIVE_E2E_BOT_CHAT_ID"}]',
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(setup.subprocess, "run", read_failure)
+    monkeypatch.setattr(
+        setup.getpass, "getpass",
+        lambda _: pytest.fail("Do not prompt when the original variable exists"),
+    )
+    monkeypatch.setattr(
+        setup, "store_secret",
+        lambda *args: pytest.fail("Do not overwrite secrets after a read error"),
+    )
+    with pytest.raises(RuntimeError, match="cannot be securely read"):
+        setup.secure_existing_bot_chat_id("some-owner/some-repo")
+    assert commands == [
+        ["gh", "variable", "get"], ["gh", "variable", "list"],
+    ]
+
+
+def test_e2e_chat_migration_missing_variable_uses_hidden_input(
+    monkeypatch, capsys,
+):
+    from subprocess import CompletedProcess
+    from scripts import setup_telegram_e2e as setup
+
+    private_peer = "-100" + "123450987654"
+    commands = []
+    saved = []
+    monkeypatch.setattr(setup, "require_github_cli", lambda repo: None)
+
+    def missing_variable(cmd, **kwargs):
+        assert kwargs["capture_output"] is True
+        commands.append(cmd[:3])
+        if cmd[:3] == ["gh", "variable", "get"]:
+            return CompletedProcess(cmd, 1, stdout=b"", stderr=b"not found")
+        assert cmd[:3] == ["gh", "variable", "list"]
+        return CompletedProcess(cmd, 0, stdout=b"[]", stderr=b"")
+
+    monkeypatch.setattr(setup.subprocess, "run", missing_variable)
+    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: private_peer)
+    monkeypatch.setattr(
+        setup, "store_secret",
+        lambda repo, key, value: saved.append((repo, key, value)),
+    )
+    monkeypatch.setattr(setup, "remove_public_bot_chat_variable", lambda _: None)
+    setup.secure_existing_bot_chat_id("some-owner/some-repo")
+    assert saved == [(
+        "some-owner/some-repo", "TELEDRIVE_E2E_BOT_CHAT_ID", private_peer,
+    )]
+    assert commands == [
+        ["gh", "variable", "get"], ["gh", "variable", "list"],
+    ]
+    printed = capsys.readouterr()
+    assert private_peer not in printed.out + printed.err
+
+
+def test_e2e_chat_variable_cleanup_detects_racy_recreation(
+    monkeypatch, capsys,
+):
+    """A GitHub CLI success is insufficient if the variable still exists."""
+    from subprocess import CompletedProcess
+    from scripts import setup_telegram_e2e as setup
+
+    private_peer = "-100" + "888777666555"
+    commands = []
+
+    def variable_reappears(cmd, **kwargs):
+        assert kwargs["capture_output"] is True
+        commands.append(cmd[:3])
+        if cmd[:3] == ["gh", "variable", "list"]:
+            return CompletedProcess(
+                cmd, 0,
+                stdout=b'[{"name":"TELEDRIVE_E2E_BOT_CHAT_ID"}]',
+                stderr=private_peer.encode(),
+            )
+        assert cmd[:3] == ["gh", "variable", "delete"]
+        return CompletedProcess(cmd, 0, stdout=b"", stderr=private_peer.encode())
+
+    monkeypatch.setattr(setup.subprocess, "run", variable_reappears)
+    with pytest.raises(RuntimeError, match="still present"):
+        setup.remove_public_bot_chat_variable("some-owner/some-repo")
+    assert commands == [
+        ["gh", "variable", "list"], ["gh", "variable", "delete"],
+        ["gh", "variable", "list"],
+    ]
+    printed = capsys.readouterr()
+    assert private_peer not in printed.out + printed.err
