@@ -1538,7 +1538,10 @@ async def _handle(request: Request):
                             "PreconditionFailed", "Object changed during conditional PUT", 412
                         ) from exc
                     raise
-                return Response(status_code=200, headers={"ETag": '"' + item.sha256 + '"'})
+                return Response(status_code=200, headers={
+                    "ETag": '"' + item.sha256 + '"',
+                    "x-amz-version-id": item.id,
+                })
             finally:
                 stage.unlink(missing_ok=True)
 
