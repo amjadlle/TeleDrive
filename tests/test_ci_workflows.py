@@ -22,6 +22,7 @@ EXPECTED = (
     "desktop-ci.yml",
     "telegram-storage-e2e.yml",
     "telegram-bot-e2e.yml",
+    "telegram-multiworker-e2e.yml",
     "release.yml",
 )
 
@@ -136,7 +137,7 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
     }
     steps = "\n".join(s.get("run", "") for s in desktop["steps"])
     assert "tests/test_desktop_ui.py" in steps
-    assert "tests/test_storage_engine.py" in workflow("desktop-ci.yml")["on"]["push"]["paths"]
+    assert "tests/test_desktop_support.py" in steps
     assert "scripts/build-linux.sh" in steps
     assert "scripts/build.ps1" in steps
 
@@ -158,7 +159,19 @@ def test_live_multipart_push_is_explicitly_opted_in():
     assert job["timeout-minutes"] == "25"
 
 
-def test_final_p0_contract_runs_on_database_and_desktop_workflow_changes():
+def test_final_p0_contract_runs_on_every_database_and_desktop_push():
+    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+        rules = workflow(name)["on"]
+        for event in ("push", "pull_request"):
+            assert event in rules
+            assert "paths" not in rules[event]
+            assert "paths-ignore" not in rules[event]
+    commands = "\n".join(
+        s.get("run", "")
+        for s in workflow("storage-api-ci.yml")["jobs"]["storage-api"]["steps"]
+    )
+    assert "tests/test_s3_p0_final.py" in commands
+
     # Cross-service regressions must re-run at the release SHA; passing an
     # unrelated earlier desktop/database build is not immutable signoff.
     for name in ("database-ci.yml", "desktop-ci.yml"):
@@ -167,7 +180,12 @@ def test_final_p0_contract_runs_on_database_and_desktop_workflow_changes():
         assert "tests/test_s3_p0_final.py" in rules["pull_request"]["paths"]
 
 
-def test_final_release_acceptance_report_triggers_all_three_filtered_ci_jobs():
+def test_acceptance_report_updates_cannot_skip_required_ci():
+    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+        events = workflow(name)["on"]
+        assert "paths" not in events["push"]
+        assert "paths" not in events["pull_request"]
+
     # An updated acceptance record must invalidate the previous same-SHA
     # CI baseline rather than leaving stale green checks on an older SHA.
     for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
@@ -176,7 +194,15 @@ def test_final_release_acceptance_report_triggers_all_three_filtered_ci_jobs():
         assert "docs/P0_ACCEPTANCE.md" in events["pull_request"]["paths"]
 
 
-def test_status_audit_rechecks_every_filtered_release_workflow():
+def test_status_audit_rechecks_every_release_workflow():
+    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+        triggers = workflow(name)["on"]
+        for event in ("push", "pull_request"):
+            assert "paths" not in triggers[event]
+    release = workflow("release.yml")["on"]["push"]
+    assert "paths" not in release
+    assert "tags" in release and "branches" in release
+
     for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
         triggers = workflow(name)["on"]
         for event in ("push", "pull_request"):
@@ -184,7 +210,20 @@ def test_status_audit_rechecks_every_filtered_release_workflow():
     assert "docs/IMPLEMENTATION_STATUS.md" in workflow("release.yml")["on"]["push"]["paths"]
 
 
-def test_storage_ci_retriggers_when_legacy_migration_or_db_lease_contract_changes():
+def test_storage_ci_runs_legacy_migration_on_every_change():
+    events = workflow("storage-api-ci.yml")["on"]
+    for event in ("push", "pull_request"):
+        assert "paths" not in events[event]
+    command = "\n".join(
+        x.get("run", "") for x in workflow("storage-api-ci.yml")["jobs"]["storage-api"]["steps"]
+    )
+    for path in (
+        "tests/test_legacy_bridge.py",
+        "tests/test_legacy_import_admin.py",
+        "tests/test_storage_jobs.py",
+    ):
+        assert path in command
+
     # A green CI for a different SHA must not be mistaken for passing the
     # updated legacy migration tests or the SQL lease implementation.
     events = workflow("storage-api-ci.yml")["on"]
@@ -215,7 +254,25 @@ def test_real_bot_soak_is_explicitly_opted_in_and_never_silently_skipped():
     assert bot["jobs"]["telegram-bot-roundtrip"]["timeout-minutes"] == "25"
 
 
-def test_bot_send_intent_contract_and_operator_health_trigger_correct_ci():
+def test_bot_send_intent_contract_and_operator_health_run_on_every_push():
+    storage = workflow("storage-api-ci.yml")
+    for event in ("push", "pull_request"):
+        assert "paths" not in storage["on"][event]
+    executed = "\n".join(
+        s.get("run", "") for s in storage["jobs"]["storage-api"]["steps"]
+    )
+    for test_file in (
+        "tests/test_bot_storage.py",
+        "tests/test_storage_ops_health.py",
+        "tests/test_bot_receipt_reconcile.py",
+        "tests/test_bot_rate_slots.py",
+    ):
+        assert test_file in executed
+    security_steps = "\n".join(
+        s.get("run", "") for s in workflow("security-ci.yml")["jobs"]["security"]["steps"]
+    )
+    assert "tests/test_bot_storage.py" in security_steps
+
     storage = workflow("storage-api-ci.yml")
     for event in ("push", "pull_request"):
         paths = storage["on"][event]["paths"]
@@ -260,6 +317,9 @@ def test_explicit_multi_process_live_postgres_bot_acceptance_not_auto_spammed():
     assert job["concurrency"]["cancel-in-progress"] == "false"
     assert job["concurrency"]["group"] == workflow(
         "telegram-bot-e2e.yml"
+    )["concurrency"]["group"]
+    assert job["concurrency"]["group"] == workflow(
+        "telegram-storage-e2e.yml"
     )["concurrency"]["group"]
     assert "postgres" in job["services"]
     assert "postgres:17-alpine" in job["services"]["postgres"]["image"]
@@ -640,3 +700,42 @@ def test_bot_variable_discovery_parses_full_name_listing(monkeypatch):
     assert legacy_name in names
     assert len(names) == 41
     assert len(calls) == 1
+
+
+def test_same_private_telegram_channel_is_serialized_across_refs():
+    """Bot, Telethon and opt-in PG workers must not flood the same channel."""
+    expected = "teledrive-live-telegram-${{ github.repository }}"
+    bot = workflow("telegram-bot-e2e.yml")
+    user = workflow("telegram-storage-e2e.yml")
+    workers = workflow("telegram-multiworker-e2e.yml")
+    assert bot["concurrency"]["group"] == expected
+    assert user["concurrency"]["group"] == expected
+    assert workers["jobs"]["three-process-telegram"]["concurrency"]["group"] == expected
+    for value in (
+        bot["concurrency"], user["concurrency"],
+        workers["jobs"]["three-process-telegram"]["concurrency"],
+    ):
+        assert value["cancel-in-progress"] == "false"
+
+
+def test_every_test_file_is_referenced_by_a_real_ci_workflow():
+    """New regression modules cannot silently sit outside GitHub Actions."""
+    workflow_sources = "\n".join(
+        (WORKFLOWS / name).read_text(encoding="utf-8")
+        for name in EXPECTED
+    )
+    missing = [
+        path.name
+        for path in sorted((ROOT / "tests").glob("test_*.py"))
+        if f"tests/{path.name}" not in workflow_sources
+    ]
+    assert not missing, f"Unscheduled regression test modules: {missing}"
+
+
+def test_critical_ci_is_unfiltered_at_every_commit_sha():
+    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+        events = workflow(name)["on"]
+        for trigger in ("push", "pull_request"):
+            assert "paths" not in events[trigger]
+            assert "paths-ignore" not in events[trigger]
+    assert "paths" not in workflow("release.yml")["on"]["push"]
