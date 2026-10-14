@@ -85,7 +85,6 @@ The following operations have a routed implementation. Every qualification in th
 | [GetPublicAccessBlock](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetPublicAccessBlock.html) | 🟡 Partial | Fixed all-four-fields true, no public mode. |
 | [GetBucketPolicyStatus](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketPolicyStatus.html) | 🟡 Partial | Read-only IsPublic=false for the enforced private-only gateway; no bucket policy engine or public ACLs. |
 | [PutPublicAccessBlock](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html) | 🟡 Partial | Accepts only all-four-fields true; cannot weaken privacy. |
-
 | [GetBucketLifecycleConfiguration](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLifecycleConfiguration.html) | 🟡 Partial | Read a private bucket's bounded, prefix-scoped AbortIncompleteMultipartUpload-only rules; no AWS expiration/transition support. |
 | [PutBucketLifecycleConfiguration](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html) | 🟡 Partial | Signed strict XML; only Disabled/Enabled incomplete multipart abort rules with DaysAfterInitiation 1..3650 and Prefix. |
 | [DeleteBucketLifecycle](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketLifecycle.html) | 🟡 Partial | Removes SQL configuration; it never deletes an object or Telegram media. |

@@ -933,6 +933,7 @@ def test_public_markdown_is_english_structured_and_locally_linked():
         "CONTRIBUTING.md",
         "TODO.md",
         "docs/CI_WORKFLOWS.md",
+        "docs/S3_SPECS.md",
         "docs/IMPLEMENTATION_STATUS.md",
         "docs/BACKUP_RESTORE.md",
         "docs/SECURITY.md",
@@ -1093,3 +1094,43 @@ def test_paginated_bucket_listing_contract_is_required_in_both_ci_suites():
     import json
     manifest = json.loads((ROOT / "teledrive/s3/operation_manifest.json").read_text())
     assert next(x["status"] for x in manifest["operations"] if x["name"] == "ListBuckets") == "supported"
+
+
+def test_s3_specs_markdown_tables_render_as_complete_gfm_tables():
+    """A blank row inside the API matrix must never orphan Markdown table rows."""
+    content = (ROOT / "docs/S3_SPECS.md").read_text(encoding="utf-8")
+    lines = content.splitlines()
+    assert not re.search(r"\\n(?:- |\\n|\\|)", content), (
+        "Literal escaped line breaks in S3 Markdown"
+    )
+    groups = []
+    current = []
+    for lineno, line in enumerate(lines, 1):
+        if line.startswith("|"):
+            current.append((lineno, line))
+        elif current:
+            groups.append(current)
+            current = []
+    if current:
+        groups.append(current)
+    assert groups, "S3 compatibility tables are missing"
+    for group in groups:
+        start = group[0][0]
+        assert len(group) >= 2, ("orphan Markdown table row", start)
+        header_count = group[0][1].count("|")
+        assert re.fullmatch(r"\\|[\\s:|-]+\\|", group[1][1]), (
+            "missing GitHub-flavored Markdown table delimiter", start
+        )
+        assert all(row.count("|") == header_count for _, row in group), (
+            "mismatched table columns", start
+        )
+    # The supported/partial operation table must remain ONE continuous table.
+    table = next(group for group in groups if group[0][1].startswith(
+        "| AWS S3 API operation | Status | Implemented scope"
+    ))
+    entries = [row for _, row in table[2:]]
+    for operation in ("GetBucketLifecycleConfiguration",
+                      "PutBucketLifecycleConfiguration",
+                      "DeleteBucketLifecycle"):
+        assert any(f"[{operation}]" in row for row in entries), operation
+    assert len(re.findall(r"\\| \\[([A-Za-z0-9]+)\\]\\(https://docs.aws.amazon.com/AmazonS3/latest/API/", content)) == 116
