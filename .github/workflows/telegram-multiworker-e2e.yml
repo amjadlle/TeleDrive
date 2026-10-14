@@ -36,9 +36,20 @@ jobs:
     env:
       DB_TEST_POSTGRES_URL: postgresql+psycopg://teledrive:test-password@127.0.0.1:5432/teledrive
       TELEDRIVE_E2E_BOT_TOKEN: ${{ secrets.TELEDRIVE_E2E_BOT_TOKEN }}
-      TELEDRIVE_E2E_BOT_CHAT_ID: ${{ vars.TELEDRIVE_E2E_BOT_CHAT_ID }}
+      TELEDRIVE_E2E_BOT_CHAT_ID: ${{ secrets.TELEDRIVE_E2E_BOT_CHAT_ID }}
       TELEDRIVE_E2E_MULTIWORKER: "1"
     steps:
+      # The channel ID must come from an Actions SECRET, never a repository
+      # variable: vars can be printed unredacted in a step's initial env dump.
+      # Install masks before checkout, dependency installation, or pytest.
+      - name: Mask dedicated Telegram test target
+        shell: bash
+        run: |
+          if [[ -z "$TELEDRIVE_E2E_BOT_CHAT_ID" ]]; then
+            echo "::error::Configure TELEDRIVE_E2E_BOT_CHAT_ID as a repository Actions secret."
+            exit 1
+          fi
+          echo "::add-mask::$TELEDRIVE_E2E_BOT_CHAT_ID"
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
