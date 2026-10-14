@@ -255,14 +255,14 @@ def test_bucket_tagging_correct_s3_missing_semantics_and_safe_removal(service):
     assert b"NoSuchTagSet" in initial.content
     before = (remote.uploads, remote.downloads)
     set_tags = signed(service, "PUT", url, tag_xml([("cost", "ops"), ("zone", "eu")]))
-    assert set_tags.status_code == 204, set_tags.text
+    assert set_tags.status_code == 200, set_tags.text
     assert extract_tags(signed(service, "GET", url)) == [("cost", "ops"), ("zone", "eu")]
     assert before == (remote.uploads, remote.downloads)
     erased = signed(service, "DELETE", url)
     assert erased.status_code == 204
     assert signed(service, "GET", url).status_code == 404
     # Removing a physically empty bucket must not leave a FK-bound tag row.
-    assert signed(service, "PUT", url, tag_xml([("role","temporary")])).status_code == 204
+    assert signed(service, "PUT", url, tag_xml([("role","temporary")])).status_code == 200
     assert signed(service, "DELETE", "/bucket-with-tags").status_code == 204
     assert signed(service, "GET", url).status_code == 404
 
@@ -283,7 +283,7 @@ def test_bucket_tagging_scopes_and_checksum_fail_closed(service):
     assert denied.status_code == 403
     allowed = signed(service, "PUT", path, tag_xml([("account", "1")]),
                      access=tag_writer.access_key, secret=tag_writer.secret_key)
-    assert allowed.status_code == 204
+    assert allowed.status_code == 200
     assert extract_tags(signed(service, "GET", path, access=tag_reader.access_key,
                                secret=tag_reader.secret_key)) == [("account","1")]
     assert signed(service, "DELETE", path, access=tag_writer.access_key,
@@ -297,7 +297,7 @@ def test_bucket_tagging_is_isolated_from_object_tags(service):
     path = "/backup-bucket/file.bin?tagging"
     assert signed(service, "PUT", path, tag_xml([("object", "only")])).status_code == 200
     assert signed(service, "PUT", "/backup-bucket?tagging",
-                  tag_xml([("bucket", "only")])).status_code == 204
+                  tag_xml([("bucket", "only")])).status_code == 200
     assert extract_tags(signed(service, "GET", path)) == [("object", "only")]
     assert extract_tags(signed(service, "GET", "/backup-bucket?tagging")) == [("bucket", "only")]
     assert signed(service, "DELETE", "/backup-bucket?tagging").status_code == 204
@@ -391,3 +391,130 @@ def test_copy_tagging_cannot_bypass_separate_read_write_scopes(service):
                          access=replace_only.access_key, secret=replace_only.secret_key)
     assert replacement.status_code == 200, replacement.text
     assert extract_tags(signed(service, "GET", "/backup-bucket/unlabeled?tagging")) == []
+
+
+def test_bucket_tagging_full_50_tag_boundary_utf16_and_large_xml(service):
+    """50 high-entropy UTF-16-valid tags exceed prior 10-tag/16 KiB limits."""
+    assert signed(service, "PUT", "/tag-boundary-ci").status_code == 200
+    url = "/tag-boundary-ci?tagging"
+    tags = [(f"key-{n:02d}", "é" * 256) for n in range(50)]
+    xml = tag_xml(tags)
+    assert len(xml) > 16 * 1024
+    assert len(xml) < 256 * 1024
+    first = signed(service, "PUT", url, xml)
+    assert first.status_code == 200, first.text
+    expected = sorted(tags)
+    assert extract_tags(signed(service, "GET", url)) == expected
+    assert signed(service, "PUT", url, xml).status_code == 200
+    assert extract_tags(signed(service, "GET", url)) == expected
+    # The object path retains the smaller AWS 10-tag maximum.
+    assert signed(service, "PUT", "/tag-boundary-ci/data", b"unchanged").status_code == 200
+    invalid_object = signed(service, "PUT", "/tag-boundary-ci/data?tagging",
+                            tag_xml(tags[:11]))
+    assert invalid_object.status_code == 400
+    assert extract_tags(signed(service, "GET", url)) == expected
+    assert service[2].uploads == 1
+
+
+def test_bucket_tagging_rejects_51_tags_and_duplicate_fields_atomically(service):
+    assert signed(service, "PUT", "/tag-boundary-ci").status_code == 200
+    url = "/tag-boundary-ci?tagging"
+    assert signed(service, "PUT", url, tag_xml([("unchanged", "yes")])).status_code == 200
+    attacks = [
+        tag_xml([(f"k{n}", str(n)) for n in range(51)]),
+        tag_xml([("duplicate", "a"), ("duplicate", "b")]),
+        tag_xml([("aws:reserved", "no")]),
+        tag_xml([("", "no")]),
+        tag_xml([("k", "x" * 257)]),
+        tag_xml([("k" * 129, "v")]),
+        b'<Tagging xmlns="urn:evil"><TagSet /></Tagging>',
+        b'<Tagging><TagSet><Tag><Key>one</Key><Key>two</Key></Tag></TagSet></Tagging>',
+        b'<!DOCTYPE doc [<!ENTITY a "one">]><Tagging><TagSet>'
+        b'<Tag><Key>&a;</Key><Value>x</Value></Tag></TagSet></Tagging>',
+    ]
+    for payload in attacks:
+        rejected = signed(service, "PUT", url, payload)
+        assert rejected.status_code == 400, (payload[:100], rejected.text)
+        assert extract_tags(signed(service, "GET", url)) == [("unchanged", "yes")]
+    assert service[2].uploads == service[2].downloads == 0
+
+
+def test_bucket_tagging_valid_crc32_and_corrupt_checksum_do_not_update_tags(service):
+    import zlib
+
+    assert signed(service, "PUT", "/tag-checksum-ci").status_code == 200
+    url = "/tag-checksum-ci?tagging"
+    payload = tag_xml([("checksum", "valid")])
+    crc = base64.b64encode((zlib.crc32(payload) & 0xffffffff).to_bytes(4, "big")).decode()
+    accepted = signed(service, "PUT", url, payload, extra_headers={
+        "x-amz-checksum-crc32": crc, "x-amz-sdk-checksum-algorithm": "CRC32",
+    })
+    assert accepted.status_code == 200, accepted.text
+    rejected = signed(service, "PUT", url, tag_xml([("checksum", "invalid")]),
+                      extra_headers={"x-amz-checksum-crc32": crc,
+                                     "x-amz-sdk-checksum-algorithm": "CRC32"})
+    assert rejected.status_code == 400, rejected.text
+    mismatch_md5 = signed(service, "PUT", url, tag_xml([("checksum", "invalid")]),
+                          extra_headers={"Content-MD5": base64.b64encode(
+                              b"0" * 16).decode()})
+    assert mismatch_md5.status_code == 400
+    assert extract_tags(signed(service, "GET", url)) == [("checksum", "valid")]
+
+
+def test_boto3_full_bucket_tagging_limit_and_replacement_over_http(service):
+    import uvicorn
+    import web.s3 as gateway
+    from botocore.exceptions import ClientError
+
+    _, issued, remote, _, _ = service
+    assert signed(service, "PUT", "/tag-boundary-ci").status_code == 200
+    socket_obj = socket.socket()
+    socket_obj.bind(("127.0.0.1", 0))
+    socket_obj.listen(16)
+    port = socket_obj.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(
+        gateway.app, host="127.0.0.1", port=port,
+        lifespan="off", log_level="error",
+    ))
+    worker = threading.Thread(target=server.run, kwargs={"sockets": [socket_obj]},
+                              daemon=True)
+    worker.start()
+    try:
+        for _ in range(150):
+            if server.started:
+                break
+            time.sleep(0.04)
+        assert server.started
+        sdk = boto3.client(
+            "s3", endpoint_url=f"http://127.0.0.1:{port}",
+            aws_access_key_id=issued.access_key, aws_secret_access_key=issued.secret_key,
+            region_name="us-east-1",
+            config=Config(signature_version="s3v4",
+                          s3={"addressing_style": "path"},
+                          retries={"max_attempts": 0}),
+        )
+        pairs = [{"Key": f"tag-{n:02d}", "Value": "v" * 256} for n in range(50)]
+        answer = sdk.put_bucket_tagging(
+            Bucket="tag-boundary-ci", Tagging={"TagSet": pairs},
+        )
+        assert answer["ResponseMetadata"]["HTTPStatusCode"] == 200
+        assert sdk.get_bucket_tagging(Bucket="tag-boundary-ci")["TagSet"] == pairs
+        with pytest.raises(ClientError):
+            sdk.put_bucket_tagging(
+                Bucket="tag-boundary-ci",
+                Tagging={"TagSet": pairs + [{"Key": "too-many", "Value": "v"}]},
+            )
+        assert sdk.get_bucket_tagging(Bucket="tag-boundary-ci")["TagSet"] == pairs
+        assert sdk.put_bucket_tagging(
+            Bucket="tag-boundary-ci",
+            Tagging={"TagSet": [{"Key": "replaced", "Value": "yes"}]},
+        )["ResponseMetadata"]["HTTPStatusCode"] == 200
+        assert sdk.get_bucket_tagging(Bucket="tag-boundary-ci")["TagSet"] == [
+            {"Key": "replaced", "Value": "yes"}
+        ]
+        assert remote.uploads == remote.downloads == 0
+    finally:
+        server.should_exit = True
+        worker.join(timeout=10)
+        socket_obj.close()
+        assert not worker.is_alive()

@@ -1033,7 +1033,7 @@ def test_real_s3_lifecycle_has_single_process_schedule_and_ci():
 
 def test_s3_compatibility_matrix_cannot_relabel_safe_lifecycle_as_full_aws():
     specs = (ROOT / "docs/S3_SPECS.md").read_text()
-    assert "**Inventory totals:** 6 supported, 32 partial, 78 unsupported;" in specs
+    assert "**Inventory totals:** 7 supported, 31 partial, 78 unsupported;" in specs
     for action in (
         "GetBucketLifecycleConfiguration", "PutBucketLifecycleConfiguration",
         "DeleteBucketLifecycle",
@@ -1056,3 +1056,19 @@ def test_private_bucket_policy_status_regression_is_mandatory():
         source = "\n".join(s.get("run", "")
             for job in workflow(name)["jobs"].values() for s in job["steps"])
         assert "tests/test_s3_policy_status.py" in source
+
+
+def test_todo_has_real_markdown_checklist_line_breaks_and_s3_tagging_contract():
+    text = (ROOT / "TODO.md").read_text()
+    assert r"\n- [x]" not in text
+    assert r"\n- [ ]" not in text
+    assert "- [x] Complete AWS-compatible PutBucketTagging" in text
+    specs = (ROOT / "docs/S3_SPECS.md").read_text()
+    assert r"\n\n**Implementation evidence:**" not in specs
+    target = "| [PutBucketTagging](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketTagging.html)"
+    assert len([line for line in specs.splitlines() if line.startswith(target)]) == 1
+    assert any(line.startswith(target) and "✅ Supported" in line
+               for line in specs.splitlines())
+    import json
+    rows = json.loads((ROOT / "teledrive/s3/operation_manifest.json").read_text())["operations"]
+    assert next(x["status"] for x in rows if x["name"] == "PutBucketTagging") == "supported"

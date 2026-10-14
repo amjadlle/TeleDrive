@@ -284,15 +284,20 @@ def _tag_xml(tags: list[tuple[str, str]]) -> bytes:
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
-def _parse_tag_xml(body: bytes) -> list[tuple[str, str]]:
-    if len(body) > 16 * 1024:
+def _parse_tag_xml(body: bytes, *, bucket: bool = False) -> list[tuple[str, str]]:
+    if len(body) > (256 * 1024 if bucket else 16 * 1024):
         raise TaggingError("MalformedXML", "Tagging XML exceeds maximum size")
     try:
         root = SafeET.fromstring(body)
     except (ET.ParseError, DefusedXmlException) as exc:
         raise TaggingError("MalformedXML", "Tagging XML is malformed") from exc
     def tag_name(node):
-        return node.tag.rsplit("}", 1)[-1]
+        # Both bare AWS S3 XML and canonical 2006-03-01 namespace are
+        # accepted; arbitrary XML namespaces must not bypass validation.
+        name = node.tag.rsplit("}", 1)[-1]
+        if node.tag not in {name, f"{{{NAMESPACE}}}{name}"}:
+            raise TaggingError("MalformedXML", "Unexpected tagging XML namespace")
+        return name
     if (tag_name(root) != "Tagging" or root.attrib
             or len(root) != 1 or tag_name(root[0]) != "TagSet"
             or root[0].attrib):
@@ -306,25 +311,28 @@ def _parse_tag_xml(body: bytes) -> list[tuple[str, str]]:
                 any(child.attrib or len(child) for child in tag)):
             raise TaggingError("MalformedXML", "Invalid Tag key/value fields")
         entries.append((children["Key"].text or "", children["Value"].text or ""))
-    return validate_tags(entries)
+    return validate_tags(entries, max_tags=50 if bucket else 10)
 
 
-async def _tag_request_tags(request: Request) -> list[tuple[str, str]]:
+async def _tag_request_tags(request: Request, *, bucket: bool = False) -> list[tuple[str, str]]:
     body = bytearray()
     async for block in request.stream():
         body.extend(block)
-        if len(body) > 16 * 1024:
+        if len(body) > (256 * 1024 if bucket else 16 * 1024):
             raise TaggingError("MalformedXML", "Tagging XML exceeds maximum size")
-    _verify_upload_sha256(
-        request, hashlib.sha256(body).digest(), crc64nvme_value=crc64nvme(body),
-    )
-    md5_header = request.headers.get("content-md5")
-    if md5_header and not hmac.compare_digest(
-        md5_header,
-        base64.b64encode(hashlib.md5(body, usedforsecurity=False).digest()).decode("ascii")
-    ):
-        raise TaggingError("BadDigest", "Content-MD5 checksum mismatch")
-    return _parse_tag_xml(bytes(body))
+    if bucket:
+        _verify_bucket_control_payload(request, bytes(body))
+    else:
+        _verify_upload_sha256(
+            request, hashlib.sha256(body).digest(), crc64nvme_value=crc64nvme(body),
+        )
+        md5_header = request.headers.get("content-md5")
+        if md5_header and not hmac.compare_digest(
+            md5_header,
+            base64.b64encode(hashlib.md5(body, usedforsecurity=False).digest()).decode("ascii")
+        ):
+            raise TaggingError("BadDigest", "Content-MD5 checksum mismatch")
+    return _parse_tag_xml(bytes(body), bucket=bucket)
 
 
 def _range(value: str | None, size: int) -> tuple[int, int, bool]:
@@ -994,8 +1002,8 @@ async def _handle(request: Request):
                         return _error("NoSuchTagSet", "No bucket tag set exists", 404)
                     return Response(_tag_xml(values), media_type="application/xml")
                 if request.method == "PUT":
-                    tagstore.replace(bucket, await _tag_request_tags(request))
-                    return Response(status_code=204)
+                    tagstore.replace(bucket, await _tag_request_tags(request, bucket=True))
+                    return Response(status_code=200)
                 if request.method == "DELETE":
                     async for block in request.stream():
                         if block:

@@ -116,7 +116,7 @@
     },
     {
       "name": "PutBucketTagging",
-      "status": "partial",
+      "status": "supported",
       "workstream": "implemented"
     },
     {

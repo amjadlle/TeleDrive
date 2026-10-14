@@ -41,9 +41,9 @@ class TaggingError(ValueError):
         self.status = status
 
 
-def validate_tags(tags: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    if not isinstance(tags, list) or len(tags) > 10:
-        raise TaggingError("InvalidTag", "Object supports at most 10 tags")
+def validate_tags(tags: list[tuple[str, str]], *, max_tags: int = 10) -> list[tuple[str, str]]:
+    if not isinstance(tags, list) or len(tags) > max_tags:
+        raise TaggingError("InvalidTag", f"Resource supports at most {max_tags} tags")
     seen = set()
     result = []
     for key, value in tags:
@@ -192,7 +192,7 @@ class BucketTagStore:
 
     def replace(self, bucket: str, tags: list[tuple[str, str]]) -> None:
         from teledrive.storage.catalog import buckets
-        tags = validate_tags(tags)
+        tags = validate_tags(tags, max_tags=50)
         try:
             # Serialize concurrent bucket deletion/tag mutation.
             guarded = self.db.connection.execute(update(buckets).where(
