@@ -284,3 +284,35 @@ def test_cross_client_bot_ack_requires_opt_in():
     assert "TELEDRIVE_E2E_API_ID" in expressions
     assert "TELEDRIVE_E2E_API_HASH" in expressions
     assert "TELEDRIVE_E2E_SESSION" in expressions
+
+@pytest.mark.parametrize("name", [
+    "telegram-bot-e2e.yml", "telegram-multiworker-e2e.yml",
+])
+def test_bot_target_is_masked_secret_before_any_live_step(name):
+    """Reject accidental reintroduction of clear-text Actions channel IDs."""
+    raw = (WORKFLOWS / name).read_text(encoding="utf-8")
+    doc = workflow(name)
+    job = (doc["jobs"]["telegram-bot-roundtrip"]
+           if name == "telegram-bot-e2e.yml"
+           else doc["jobs"]["three-process-telegram"])
+    target = job["env"]["TELEDRIVE_E2E_BOT_CHAT_ID"]
+    assert target == "${{ secrets.TELEDRIVE_E2E_BOT_CHAT_ID }}"
+    assert "vars.TELEDRIVE_E2E_BOT_CHAT_ID" not in raw
+    assert "variable."" not in raw
+    assert not re.search(r"(?m)^\s*TELEDRIVE_E2E_BOT_CHAT_ID:\s*['\"]?-100[0-9]+", raw)
+    mask = job["steps"][0]
+    assert mask["name"] == "Mask dedicated Telegram test target"
+    assert mask["shell"] == "bash"
+    assert "::add-mask::$TELEDRIVE_E2E_BOT_CHAT_ID" in mask["run"]
+    assert "exit 1" in mask["run"]
+    assert mask["run"].index("exit 1") < mask["run"].index("::add-mask::")
+    assert job["steps"][1]["name"] == "Checkout"
+
+
+def test_telegram_setup_writes_bot_target_as_secret_and_avoids_value_output():
+    content = (ROOT / "scripts" / "setup_telegram_e2e.py").read_text("utf-8")
+    assert 'store_secret(repo, "TELEDRIVE_E2E_BOT_CHAT_ID"' in content
+    assert 'store_variable(repo, "TELEDRIVE_E2E_BOT_CHAT_ID"' not in content
+    assert "def secure_existing_bot_chat_id(" in content
+    assert "gh\", \"variable\", \"delete\"".replace("\\", "") in content
+    assert "--secure-bot-chat-id" in content
