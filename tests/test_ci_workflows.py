@@ -70,6 +70,9 @@ def test_workflow_parses_and_has_jobs_with_no_continue_on_error(name):
     doc = workflow(name)
     assert isinstance(doc, dict) and isinstance(doc.get("jobs"), dict)
     assert doc["jobs"], name
+    # Explicitly reject duplicate YAML keys that normal loaders may silently overwrite.
+    raw = path.read_text(encoding="utf-8")
+    assert not re.search(r"(?m)^(    name: [^\n]+\n(?:    [^\n]*\n){0,5}    name: )", raw)
     assert not re.search(r"(?m)^\s*continue-on-error:\s*true", path.read_text())
 
 
