@@ -155,7 +155,7 @@ def test_live_multipart_push_is_explicitly_opted_in():
     assert "inputs.run_multipart" in expression
     assert "[p0-live-multipart]" in expression
     assert "github.event_name == 'push'" in expression
-    assert job["timeout-minutes"] == "15"
+    assert job["timeout-minutes"] == "25"
 
 
 def test_final_p0_contract_runs_on_database_and_desktop_workflow_changes():
