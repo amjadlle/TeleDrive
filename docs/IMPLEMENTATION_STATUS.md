@@ -1,9 +1,15 @@
 # TeleDrive implementation status and acceptance backlog
 
-Audit date: **2026-10-13**. Snapshot: `feature/docker-webui-multiaccount`
-through the current P1/P2 implementation branch (2026-10-13). This is a
-code/CI evidence inventory, not a claim of production readiness. Recheck
-every workflow at the release SHA.
+Current audit: **2026-10-14** on `main`. This file retains earlier
+feature-branch CI snapshots as historical evidence, **not** final production
+acceptance. PRs #4 and #5 are merged. All seven standard workflows passed
+on `fc582f4` (Bot: 20 passed / 5 optional skipped).
+One-shot PostgreSQL + real Telegram three-process multiworker
+[`38537359663`](https://github.com/babico/TeleDrive/actions/runs/38537359663)
+passed on `243d691`, independently of three physical production hosts.
+The final 5/16/19 MiB Bot, mixed-size soak, cross-client ACK proof and
+Telethon stress are opt-in and must be checked at the exact later SHA.
+Never confuse test-channel E2E success with a production signoff.
 
 ## Implementation inventory
 

@@ -196,3 +196,26 @@ channel ID into an issue, PR, workflow YAML or shell command arguments.
 To minimize exposed diagnostics, tests also verify that every Bot workflow
 loads the target from `secrets`, installs a mask *before* checkout, and
 never uses `vars.TELEDRIVE_E2E_BOT_CHAT_ID`.
+
+
+## 2026-10-14 dedicated P1 evidence ledger
+
+- [x] Multiworker **test-channel** PostgreSQL + three independent worker
+  processes: [run 38537359663](https://github.com/babico/TeleDrive/actions/runs/38537359663)
+  on `243d691` succeeded. No claim of three physical production hosts.
+- [x] Standard seven-workflow CI baseline: `fc582f4` passed including
+  actual User and Bot Telegram roundtrip. Bot ran 20 tests; 5 opt-in
+  cases were skipped and do **not** count as live acceptance.
+- [ ] Current-SHA real Bot 5/16/19 MiB, 12-object mixed-size soak,
+  independent original-channel lost-ACK proof and Telethon size matrix.
+  Confirm from non-skipped job logs after explicit dispatch/commit marker.
+- [ ] Two physically independent app hosts, shared durable SQL, at least
+  one hour of approved load and naturally occurring 429 evidence. Do not
+  deliberately flood Telegram to manufacture an HTTP 429.
+- [ ] Production-representative restored SQL archive + original Telegram
+  channel, original keys and authenticated independent full/Range readback.
+- [ ] Authorized production legacy migration comparison and final read
+  cutover approval; never auto-delete source files or Telegram messages.
+
+These are separate acceptance receipts. No CI runner can replace
+operator access to original production media or real deployment hosts.

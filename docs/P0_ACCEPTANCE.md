@@ -1,8 +1,11 @@
 # P0 acceptance contract — supported release scope
 
-Date: 2026-10-13. Target: `feature/docker-webui-multiaccount`.
-This document is about a **bounded, explicitly tested** release candidate,
-not a claim of complete S3 protocol or Cyberduck compatibility.
+Original P0 acceptance baseline: 2026-10-13, now integrated into `main`
+via PR #4/#5. On 2026-10-14 commit `fc582f4`, the seven mandatory
+standard CI workflows all passed. This is the supported and explicitly
+tested release **scope**, not AWS S3-complete support, an operator-signed
+production deployment or a version-tagged binary release. Older commit
+references below are historical evidence, not the current branch head.
 
 ## Verified on previous commits
 

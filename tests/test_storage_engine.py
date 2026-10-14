@@ -341,3 +341,66 @@ def test_abandoned_writer_cannot_commit_after_database_restart(store, tmp_path):
             now + 3602, writer_token="original-worker",
         )
     assert store.interrupted() == [(ident, "failed")]
+
+
+@pytest.mark.parametrize("size", [
+    pytest.param(5 * 1024 * 1024 + 1, id="5MiB-plus-one"),
+    pytest.param(16 * 1024 * 1024 + 37, id="16MiB-plus-37"),
+    pytest.param(19 * 1024 * 1024 + 7, id="19MiB-plus-7"),
+])
+def test_large_single_telegram_chunk_survives_sql_restart_and_range_checks(
+    tmp_path, size
+):
+    """Real SQL + independent byte transport at live Bot download boundaries.
+
+    Regression for the 19 MiB + 7 byte live-E2E error: a hardcoded 19 MiB
+    chunk size accidentally produced two messages, so single-chunk tests
+    must use the complete payload size and assert the exact journal record.
+    """
+    payload = os.urandom(size)
+    source = tmp_path / "near-bot-cap.bin"
+    source.write_bytes(payload)
+    backend = MemoryTelegram()
+    db_url = str(tmp_path / "near-cap.db")
+    db = connect_database(db_url)
+    try:
+        engine = TelegramObjectStorage(
+            ManifestStore(db), backend, chunk_size=size,
+            scratch_directory=tmp_path,
+        )
+        item = execute(engine.put_file("boundary", "single-chunk", source))
+        refs = engine.manifests.parts(item.id)
+        assert backend.uploads == 1
+        assert len(refs) == 1
+        assert refs[0].offset == 0
+        assert refs[0].ordinal == 0
+        assert refs[0].size == size
+        assert refs[0].sha256 == hashlib.sha256(payload).hexdigest()
+    finally:
+        db.close()
+    source.unlink()
+
+    reopened = connect_database(db_url)
+    try:
+        restored = TelegramObjectStorage(
+            ManifestStore(reopened), backend, chunk_size=size,
+            scratch_directory=tmp_path,
+        )
+        target = tmp_path / "restored-near-cap.bin"
+        execute(restored.download_to_path(item.id, target))
+        assert target.read_bytes() == payload
+
+        async def read_range(start, end):
+            return b"".join([
+                block async for block in restored.iter_bytes(
+                    item.id, start=start, end=end,
+                )
+            ])
+
+        for start, end in (
+            (0, 1), (size // 2, size // 2 + 29),
+            (size - 33, size), (size, size),
+        ):
+            assert execute(read_range(start, end)) == payload[start:end]
+    finally:
+        reopened.close()
