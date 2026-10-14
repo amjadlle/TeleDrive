@@ -606,9 +606,10 @@ class BotApiChunkTransport:
                 except BotApiRateLimited as exc:
                     # Propagate the server's explicit non-acceptance window
                     # across all workers before any retry or failure exit.
-                    self.index.impose_shared_cooldown(
-                        self.account, self.chat_id, exc.retry_after,
-                    )
+                    if self._min_upload_interval > 0:
+                        self.index.impose_shared_cooldown(
+                            self.account, self.chat_id, exc.retry_after,
+                        )
                     self._next_upload = time.monotonic() + max(
                         self._min_upload_interval, exc.retry_after,
                     )
