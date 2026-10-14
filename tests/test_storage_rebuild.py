@@ -132,7 +132,7 @@ def test_invalid_second_object_never_exposes_partial_database(tmp_path):
     destination = tmp_path / "no-half-catalog.db"
     with pytest.raises(ValueError, match="hash/length"):
         asyncio.run(restore_isolated_catalog_batch(
-            [first, second], TelegramSource({100: b"good", 999: b"tampered"}),
+            [first, second], TelegramSource({100: b"good", 999: b"changed"}),
             destination,
         ))
     assert not destination.exists()
