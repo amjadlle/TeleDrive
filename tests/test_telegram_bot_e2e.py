@@ -763,6 +763,7 @@ def test_live_bot_rejected_429_then_remote_chunk_sha_and_sql_restart():
                     chunk_size=128 * 1024, scratch_directory=root,
                 ).put_file("ci-429", "retry/boundary.bin", source)
                 assert injected.rejections == 1
+                assert BotFileIndex(database).total_explicit_429_observations() >= 1
                 # Exactly one refused attempt, two confirmed channel posts.
                 assert injected.attempts == 3
                 refs = ManifestStore(database).parts(obj.id)
@@ -781,6 +782,7 @@ def test_live_bot_rejected_429_then_remote_chunk_sha_and_sql_restart():
 
                 database.close()
                 database = connect_database(str(db_path))
+                assert BotFileIndex(database).total_explicit_429_observations() >= 1
                 source.unlink()
                 # Cleanup must use this reopened BotFileIndex, not the
                 # transport bound to the closed pre-restart connection.

@@ -971,9 +971,11 @@ def test_live_sql_serializes_six_independent_bot_send_workers_and_429(env_name):
 
     first, second = connect_database(url), connect_database(url)
     try:
+        original_count = BotFileIndex(second).total_explicit_429_observations()
         BotFileIndex(first).impose_shared_cooldown(
             account, chat, 30, now_ms=t,
         )
+        assert BotFileIndex(second).total_explicit_429_observations() == original_count + 1
         assert BotFileIndex(second).reserve_send_slot(
             account, chat, 0.9, now_ms=t,
         ) == 30
@@ -1009,9 +1011,11 @@ def test_live_sql_429_observed_after_another_process_reserves_slot(env_name):
             account, chat_id, 1.5, now_ms=t,
         ) == 1.5
         assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 0
+        initial_429 = second.total_explicit_429_observations()
         first.impose_shared_cooldown(
             account, chat_id, 17, now_ms=t,
         )
+        assert second.total_explicit_429_observations() == initial_429 + 1
         assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 17
         assert first.shared_cooldown_wait(
             account, chat_id, now_ms=t + 17000,
@@ -1022,6 +1026,7 @@ def test_live_sql_429_observed_after_another_process_reserves_slot(env_name):
         first.impose_shared_cooldown(
             account, chat_id, 3, now_ms=t,
         )
+        assert second.total_explicit_429_observations() == initial_429 + 2
         assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 17
         assert second.shared_cooldown_wait(
             account + "-other", chat_id, now_ms=t,

@@ -1249,3 +1249,18 @@ checked on their own exact SHA.
   never infer message ownership from an incomplete SQL table set.
 - Real-SQL + authenticated HTTP regressions validate the error status
   and enforce the exact generic response without exposing peer IDs.
+
+
+## P1 SQL- and real-Telegram-backed 429 evidence checks (2026-10-14)
+
+- Native PostgreSQL 17 / MySQL 8.4 rate-limit integration tests now assert
+  the per-channel transactional 429 evidence counter is shared across
+  connections and counts each **definitive rejection** without shortening
+  the newest shared cooldown. CI's injected 429 values are explicitly
+  synthetic and are never proof of a natural production 429.
+- The real Bot API E2E combines a safely injected first 429 with actual
+  successful Telegram sends, SHA/Ranges and reopened SQLite, additionally
+  asserting the 429 metric survives that restart. Neither test floods
+  Telegram intentionally. The actual multi-host production acceptance
+  still requires an authorized operator to observe genuine 429 behavior
+  on the original deployment.
