@@ -20,6 +20,9 @@ on:
       - "tests/test_storage_*.py"
       - "tests/test_bot_storage.py"
       - "tests/test_bot_receipt_reconcile.py"
+      - "tests/test_telegram_dr_rehearsal.py"
+      - "tests/test_legacy_cutover_acceptance.py"
+      - "tests/test_bot_rate_slots.py"
       - "tests/test_s3_*.py"
       - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/P0_ACCEPTANCE.md"
@@ -39,6 +42,9 @@ on:
       - "tests/test_storage_*.py"
       - "tests/test_bot_storage.py"
       - "tests/test_bot_receipt_reconcile.py"
+      - "tests/test_telegram_dr_rehearsal.py"
+      - "tests/test_legacy_cutover_acceptance.py"
+      - "tests/test_bot_rate_slots.py"
       - "tests/test_s3_*.py"
       - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/P0_ACCEPTANCE.md"
@@ -116,6 +122,9 @@ jobs:
             tests/test_storage_catalog.py \
             tests/test_bot_storage.py \
             tests/test_bot_receipt_reconcile.py \
+            tests/test_telegram_dr_rehearsal.py \
+            tests/test_legacy_cutover_acceptance.py \
+            tests/test_bot_rate_slots.py \
             tests/test_s3_gateway.py \
             tests/test_s3_credentials.py \
             tests/test_s3_admin.py \
