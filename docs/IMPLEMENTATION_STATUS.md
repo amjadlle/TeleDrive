@@ -1033,3 +1033,45 @@ Do not mark P1 fully finished until those distinct production receipts exist.
 - Production acceptance requires original production secrets, owner file
   ID evidence, true separate hosts, an isolated real backup restore and
   explicit legacy read switchover. CI cannot fabricate these receipts.
+
+## P1 distributed cooldown + cutover race closure (2026-10-14)
+
+- The shared SQL Bot pacing implementation previously allocated future send
+  slots but did not re-check a newly arriving Telegram 429 after a different
+  worker had reserved a slot. A new independently indexed
+  `storage_bot_chat_cooldowns` SQL journal tracks the maximum verified
+  `retry_after` until timestamp. Each paced Bot transport rechecks it
+  **after its slot wait and immediately before the HTTP send**. The reservation
+  and cooldown journal updates are now committed atomically, or both roll
+  back. This prevents an old scheduled slot from bypassing a newer rejection
+  under normal synchronized-clock operation; hosts still must share SQL and
+  synchronize wall clocks.
+- Tests cover separate database handles, invalid rate limits, account/channel
+  separation, a late rejection after another worker's reservation, simulated
+  worker sleep/recheck, concurrent native PostgreSQL/MySQL sessions and a
+  real SQLite trigger that fails the second 429 journal write. The latter
+  proves no partial cooldown/slot SQL commit becomes visible.
+- `reconcile_bot_receipt(... apply=True)` now requires the **original SQL
+  pre-send fence to still exist inside the atomic receipt transaction**.
+  A stale operator proof cannot recreate a receipt after another worker
+  cleared/reconciled the fence. New tests deliberately remove the fence while
+  independent Telegram bytes are being checked and assert no file-ID row or
+  synthetic ACK is persisted.
+- `verify_legacy_cutover` now bounds the initial source inventory to
+  `max_files + 1` entries instead of materializing the whole directory and
+  scans eligible filenames again after the Telegram readback. A source
+  addition/removal during the acceptance window invalidates the entire
+  report. Tests inject a new file during media download and exercise the
+  finite scan cap.
+- Existing production-oriented operator verification tools and the
+  `docs/P1_PRODUCTION_ACCEPTANCE.md` runbook remain in place. This closes
+  additional **technical race conditions**, not the operator-owned evidence
+  for production credentials, real physical multi-host/long-duration soak,
+  actual production backup recovery or authorized live read cutover.
+- The private Bot test peer is referenced exclusively through
+  `secrets.TELEDRIVE_E2E_BOT_CHAT_ID`, with explicit pre-step masking.
+  Until an authorized repository operator migrates the former Actions
+  variable into a Secret, live Bot workflows must intentionally fail at
+  configuration. **Never restore the old unmasked variable as a fallback.**
+  Telethon user-session E2E remains independent and continues to exercise
+  real non-production Telegram data.
