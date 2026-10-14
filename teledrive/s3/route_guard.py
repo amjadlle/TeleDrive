@@ -110,6 +110,21 @@ def validate_s3_query(method: str, bucket: str, object_path: bool, params) -> No
         else:
             allowed = frozenset()
 
+    # A recognized ListObjects cursor in the wrong API dialect is an
+    # InvalidArgument (400), not an unsupported AWS extension (501).
+    # This preserves AWS CLI/boto3 V1/V2 cursor error contracts.
+    if (bucket and not object_path and method == "GET"
+            and not (real & (_BUCKET_CONTROL | {"versions", "uploads"}))):
+        if ("list-type" not in real
+                and real & {"continuation-token", "start-after"}):
+            raise S3QueryError(
+                "InvalidArgument", "V2 cursor requires list-type=2", 400,
+            )
+        if "list-type" in real and "marker" in real:
+            raise S3QueryError(
+                "InvalidArgument", "V1 marker cannot be used with V2 listing", 400,
+            )
+
     forbidden = real - allowed
     if forbidden:
         # Fail closed: no unexpected list, create, overwrite, delete or
