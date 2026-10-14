@@ -13,6 +13,7 @@ import time
 import xml.etree.ElementTree as ET
 
 import boto3
+import pytest
 from botocore.config import Config
 from teledrive.s3.credentials import S3CredentialStore
 from teledrive.s3.tagging import ObjectTagStore, validate_tags, TaggingError
