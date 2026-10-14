@@ -994,3 +994,9 @@ def test_offline_inventory_reconciliation_is_required_in_ci():
         commands = "\n".join(step.get("run", "")
             for job in workflow(name)["jobs"].values() for step in job["steps"])
         assert "tests/test_telegram_inventory_reconcile.py" in commands
+
+def test_bucket_versioning_controls_are_exercised_in_all_storage_ci():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        commands = "\n".join(s.get("run", "") for job in workflow(name)["jobs"].values()
+                             for s in job["steps"])
+        assert "tests/test_s3_bucket_versioning.py" in commands

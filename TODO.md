@@ -20,6 +20,7 @@
 - [ ] Extend trustworthy recovery of unknown original Telegram history beyond candidate markers without inventing bucket/key, full SHA-256 or missing version metadata.
 - [x] Align S3 documentation with CRC64NVME integration-test coverage; retain explicit limits for other checksum modes.
 - [x] Count Bot file IDs without journal/receipt evidence in non-destructive GC audits.
+- [x] Implement signed Get/PutBucketVersioning with strictly Enabled semantics, scoped permissions and real boto3 compatibility tests.
 - [ ] Complete tested S3 capabilities beyond the documented subset (for example lifecycle, policies, SSE and currently unsupported checksum modes).
 - [ ] Establish longer-duration real-environment capacity benchmarks on owner-controlled infrastructure.
 

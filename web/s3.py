@@ -37,6 +37,8 @@ from teledrive.s3.write_conditions import check_write_precondition, WritePrecond
 from teledrive.s3.tagging import ObjectTagStore, BucketTagStore, TaggingError, validate_tags
 from teledrive.s3.cors import (BucketCORSStore, CORSError, MAX_CORS_XML_BYTES,
     parse_cors_xml, cors_xml, matching_rule, response_cors_headers)
+from teledrive.s3.versioning import (VersioningError, MAX_VERSIONING_XML_BYTES,
+    parse_versioning_xml, versioning_xml)
 from teledrive.s3.object_metadata import (
     ObjectMetadataStore, ObjectMetadataError, parse_object_metadata, signed_header_names,
     STANDARD_HEADERS,
@@ -551,6 +553,14 @@ async def _handle(request: Request):
             return _error("InvalidArgument", "Ambiguous versioned tagging selector", 400)
         is_bucket_tagging = bool(bucket and not separator and "tagging" in request.query_params)
         is_bucket_cors = bool(bucket and not separator and "cors" in request.query_params)
+        is_bucket_versioning = bool(bucket and not separator and "versioning" in request.query_params)
+        if is_bucket_versioning and (
+            len(request.query_params.getlist("versioning")) != 1
+            or request.query_params.get("versioning") != ""
+            or any(name != "versioning" and not name.startswith("X-Amz-")
+                   for name in request.query_params)
+        ):
+            return _error("InvalidArgument", "Invalid bucket versioning selector", 400)
         if (is_object_tagging or is_bucket_tagging) and any(
             k in request.query_params for k in ("uploads", "uploadId")
         ):
@@ -587,6 +597,11 @@ async def _handle(request: Request):
                 "PUT": "s3:PutBucketCORS",
                 "DELETE": "s3:PutBucketCORS",
             }.get(request.method)
+        elif is_bucket_versioning:
+            action = {
+                "GET": "s3:GetBucketVersioning",
+                "PUT": "s3:PutBucketVersioning",
+            }.get(request.method)
         elif bucket and not separator and "location" in request.query_params:
             action = "s3:GetBucketLocation" if request.method == "GET" else None
         elif mpu_start or mpu_part or mpu_complete:
@@ -606,7 +621,7 @@ async def _handle(request: Request):
         # Unknown control-plane query operations must not be misinterpreted as
         # ordinary object reads/writes (e.g. ?tagging, ?versioning, ?acl).
         unsupported = {
-            "acl", "versioning", "versions", "lifecycle", "policy",
+            "acl", "versions", "lifecycle", "policy",
             "notification", "replication",
             "retention", "legal-hold", "logging",
             "encryption", "object-lock", "publicAccessBlock", "versionId",
@@ -777,6 +792,25 @@ async def _handle(request: Request):
                         ET.SubElement(deleted, "DeleteMarkerVersionId").text = marker
                 return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml", status_code=200)
+            if is_bucket_versioning:
+                if bucket not in catalog.list_buckets():
+                    return _error("NoSuchBucket", "Bucket does not exist", 404)
+                if request.method == "GET":
+                    return Response(versioning_xml(), media_type="application/xml")
+                if request.method == "PUT":
+                    payload = bytearray()
+                    async for block in request.stream():
+                        payload.extend(block)
+                        if len(payload) > MAX_VERSIONING_XML_BYTES:
+                            raise VersioningError("MalformedXML",
+                                                  "Versioning XML exceeds 16 KiB")
+                    _verify_upload_sha256(
+                        request, hashlib.sha256(payload).digest(),
+                        crc64nvme_value=crc64nvme(payload),
+                    )
+                    parse_versioning_xml(bytes(payload))
+                    return Response(status_code=200)
+                return _error("NotImplemented", "Unsupported bucket versioning method", 501)
             if is_bucket_cors:
                 if bucket not in catalog.list_buckets():
                     return _error("NoSuchBucket", "Bucket does not exist", 404)
@@ -1554,6 +1588,8 @@ async def _handle(request: Request):
             response.headers["Connection"] = "close"
         return response
     except BatchDeleteError as exc:
+        return _error(exc.code, str(exc), exc.status)
+    except VersioningError as exc:
         return _error(exc.code, str(exc), exc.status)
     except CORSError as exc:
         return _error(exc.code, str(exc), exc.status)

@@ -69,7 +69,7 @@ jobs:
             tests/test_storage_versions.py \
             tests/test_storage_ops_health.py tests/test_host_soak.py tests/test_acceptance_cli.py \
             tests/test_storage_gc_retention.py tests/test_gc_reference_planner.py \
-            tests/test_s3_version_reads.py \
+            tests/test_s3_version_reads.py tests/test_s3_bucket_versioning.py \
             tests/test_s3_delete_markers.py \
             tests/test_s3_version_listing.py \
             tests/test_s3_version_tagging.py \
