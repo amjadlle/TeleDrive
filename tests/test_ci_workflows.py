@@ -1072,3 +1072,9 @@ def test_todo_has_real_markdown_checklist_line_breaks_and_s3_tagging_contract():
     import json
     rows = json.loads((ROOT / "teledrive/s3/operation_manifest.json").read_text())["operations"]
     assert next(x["status"] for x in rows if x["name"] == "PutBucketTagging") == "supported"
+
+def test_bucket_tagging_promoted_contract_is_required_in_both_regression_ci():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        text = "\n".join(step.get("run", "")
+            for job in workflow(name)["jobs"].values() for step in job["steps"])
+        assert "tests/test_s3_tagging.py" in text
