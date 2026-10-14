@@ -380,25 +380,59 @@ def test_e2e_chat_bootstrap_rejects_invalid_private_channel_before_write(
     assert not writes
 
 
-def test_e2e_chat_id_migration_delete_does_not_echo_old_variable(
-    monkeypatch, capsys,
+@pytest.mark.parametrize("present,delete_success", [
+    (True, True), (True, False), (False, True),
+])
+def test_e2e_chat_variable_cleanup_never_logs_unmasked_value(
+    present, delete_success, monkeypatch, capsys,
 ):
     from scripts import setup_telegram_e2e as setup
     from subprocess import CompletedProcess
+    import json
 
     calls = []
     sample_id = "-100" + "987654321012"
-    monkeypatch.setattr(
-        setup.subprocess, "run",
-        lambda cmd, **kwargs: (
-            calls.append((cmd, kwargs)),
-            CompletedProcess(cmd, 1, stdout=b"", stderr=sample_id.encode()),
-        )[1],
-    )
-    setup.remove_public_bot_chat_variable("some-owner/some-repo")
+    names = ([{"name": "TELEDRIVE_E2E_BOT_CHAT_ID"}] if present
+             else [{"name": "AN_UNRELATED_VARIABLE"}])
+
+    def mock_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        if cmd[:3] == ["gh", "variable", "list"]:
+            return CompletedProcess(cmd, 0, stdout=json.dumps(names).encode(),
+                                    stderr=sample_id.encode())
+        assert cmd[:3] == ["gh", "variable", "delete"]
+        return CompletedProcess(cmd, 0 if delete_success else 1,
+                                stdout=b"", stderr=sample_id.encode())
+
+    monkeypatch.setattr(setup.subprocess, "run", mock_run)
+    if present and not delete_success:
+        with pytest.raises(RuntimeError, match="could not be deleted"):
+            setup.remove_public_bot_chat_variable("some-owner/some-repo")
+    else:
+        setup.remove_public_bot_chat_variable("some-owner/some-repo")
     assert calls[0][0] == [
-        "gh", "variable", "delete", "TELEDRIVE_E2E_BOT_CHAT_ID",
-        "--repo", "some-owner/some-repo",
+        "gh", "variable", "list", "--repo", "some-owner/some-repo",
+        "--json", "name",
     ]
-    assert calls[0][1]["capture_output"] is True
+    assert all(kwargs["capture_output"] for _, kwargs in calls)
+    assert (len(calls) == 2) == present
+    assert sample_id not in capsys.readouterr().out
     assert sample_id not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("kind", ["permission", "malformed-json", "wrong-shape"])
+def test_e2e_chat_variable_cleanup_fails_closed_on_unverifiable_state(
+    kind, monkeypatch,
+):
+    from scripts import setup_telegram_e2e as setup
+    from subprocess import CompletedProcess
+    if kind == "permission":
+        result = CompletedProcess([], 1, stdout=b"", stderr=b"denied")
+    elif kind == "malformed-json":
+        result = CompletedProcess([], 0, stdout=b"not-json", stderr=b"")
+    else:
+        result = CompletedProcess([], 0, stdout=b'{"name":"x"}', stderr=b"")
+    monkeypatch.setattr(setup.subprocess, "run",
+                        lambda cmd, **kw: result)
+    with pytest.raises(RuntimeError, match="Actions variable"):
+        setup.remove_public_bot_chat_variable("some-owner/some-repo")
