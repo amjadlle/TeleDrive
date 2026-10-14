@@ -315,3 +315,90 @@ def test_telegram_setup_writes_bot_target_as_secret_and_avoids_value_output():
     assert "def secure_existing_bot_chat_id(" in content
     assert '["gh", "variable", "delete"' in content
     assert "--secure-bot-chat-id" in content
+
+
+def test_telethon_optional_numeric_target_uses_secret_not_public_variable():
+    """A numeric user-session peer ID needs masking as much as a Bot peer."""
+    raw = (WORKFLOWS / "telegram-storage-e2e.yml").read_text("utf-8")
+    job = workflow("telegram-storage-e2e.yml")["jobs"]["telegram-roundtrip"]
+    assert job["env"]["TELEDRIVE_E2E_TARGET"] == "${{ secrets.TELEDRIVE_E2E_TARGET }}"
+    assert "vars.TELEDRIVE_E2E_TARGET" not in raw
+    assert job["steps"][0]["name"] == "Mask optional Telegram user target"
+    assert "::add-mask::$TELEDRIVE_E2E_TARGET" in job["steps"][0]["run"]
+    assert job["steps"][1]["name"] == "Checkout"
+
+
+def test_e2e_chat_bootstrap_migration_hides_value_and_removes_old_variable(
+    monkeypatch, capsys,
+):
+    from scripts import setup_telegram_e2e as setup
+
+    example_private_peer = "-100" + "987654321012"
+    observed = {}
+    monkeypatch.setattr(setup, "require_github_cli", lambda repo: None)
+    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: example_private_peer)
+    monkeypatch.setattr(
+        setup, "store_secret",
+        lambda repo, key, value: observed.update(
+            {"repository": repo, "name": key, "private_value": value}
+        ),
+    )
+    monkeypatch.setattr(
+        setup, "remove_public_bot_chat_variable",
+        lambda repo: observed.update({"removed_variable_from": repo}),
+    )
+    setup.secure_existing_bot_chat_id("some-owner/some-repo")
+    assert observed == {
+        "repository": "some-owner/some-repo",
+        "name": "TELEDRIVE_E2E_BOT_CHAT_ID",
+        "private_value": example_private_peer,
+        "removed_variable_from": "some-owner/some-repo",
+    }
+    captured = capsys.readouterr()
+    assert example_private_peer not in captured.out + captured.err
+    assert "Saved GitHub Actions secret" in captured.out
+
+
+@pytest.mark.parametrize("bad", [
+    "", "not-a-channel", "123456789", "-100", "-100NOTNUMERIC",
+    "-1001111", "-10012345678901234567890",
+])
+def test_e2e_chat_bootstrap_rejects_invalid_private_channel_before_write(
+    bad, monkeypatch,
+):
+    from scripts import setup_telegram_e2e as setup
+
+    writes = []
+    monkeypatch.setattr(setup, "require_github_cli", lambda repo: None)
+    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: bad)
+    monkeypatch.setattr(
+        setup, "store_secret",
+        lambda *args: writes.append(args),
+    )
+    with pytest.raises(ValueError, match="numeric private channel"):
+        setup.secure_existing_bot_chat_id("some-owner/some-repo")
+    assert not writes
+
+
+def test_e2e_chat_id_migration_delete_does_not_echo_old_variable(
+    monkeypatch, capsys,
+):
+    from scripts import setup_telegram_e2e as setup
+    from subprocess import CompletedProcess
+
+    calls = []
+    sample_id = "-100" + "987654321012"
+    monkeypatch.setattr(
+        setup.subprocess, "run",
+        lambda cmd, **kwargs: (
+            calls.append((cmd, kwargs)),
+            CompletedProcess(cmd, 1, stdout=b"", stderr=sample_id.encode()),
+        )[1],
+    )
+    setup.remove_public_bot_chat_variable("some-owner/some-repo")
+    assert calls[0][0] == [
+        "gh", "variable", "delete", "TELEDRIVE_E2E_BOT_CHAT_ID",
+        "--repo", "some-owner/some-repo",
+    ]
+    assert calls[0][1]["capture_output"] is True
+    assert sample_id not in capsys.readouterr().err
