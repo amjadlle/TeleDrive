@@ -9,14 +9,14 @@ on:
 permissions:
   contents: read
 
-# Bot uploads must not compete with the regular live Bot E2E suite.
-concurrency:
-  group: teledrive-live-bot-${{ github.ref }}
-  cancel-in-progress: false
-
+# Job-level concurrency: an explicitly skipped opt-in on ordinary pushes
+# must never evict a pending regular Bot E2E from GitHub's one-pending slot.
 jobs:
   three-process-telegram:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[p1-live-multiworker]') }}
+    concurrency:
+      group: teledrive-live-bot-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
