@@ -1124,13 +1124,15 @@ Do not mark P1 fully finished until those distinct production receipts exist.
 - Database, Desktop, Storage API and release-verification workflows now run
   on every configured push, and database/desktop/storage CI run on every PR;
   narrow path filters no longer let acceptance evidence come from older SHAs.
-- Telegram Bot E2E, Telethon user E2E and explicit PostgreSQL multiworker Bot
-  E2E now share one repository-scoped concurrency group across branch names.
-  Live writes already in progress are not cancelled; pending GitHub Actions
-  runs may be replaced, so count only completed, successful current-SHA runs.
+- Telegram Bot E2E and explicit PostgreSQL Bot multiworker E2E share one
+  repository-scoped concurrency group across branches. Telethon user E2E has
+  its **own** repository-scoped group, so the GitHub one-pending-run limit
+  cannot cancel the mandatory User E2E while Bot E2E is queued.
+  Live writes already in progress are not cancelled. Pending Bot runs may
+  be replaced by newer runs; count only completed current-SHA checks.
 - `tests/test_ci_workflows.py` now guards unfiltered workflows, checks every
-  test module is listed in at least one workflow, and asserts all three live
-  E2E workloads share the protected-channel scheduling group.
+  test module is listed in at least one workflow, and verifies that Bot and
+  multiworker share the group while mandatory User E2E cannot be evicted.
 - The prior `dde5a03` Bot E2E retry 38525688266 (attempt 2) passed after
   migrating `TELEDRIVE_E2E_BOT_CHAT_ID` from a variable to an Actions Secret.
   This is live **dedicated test-channel** evidence, not production signoff.
