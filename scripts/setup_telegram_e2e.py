@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import json
 import shutil
 import subprocess
 import sys
@@ -54,21 +55,32 @@ def store_secret(repo: str, name: str, value: str) -> None:
 
 
 def remove_public_bot_chat_variable(repo: str) -> None:
-    """Best-effort removal of the legacy, UNMASKED Actions variable.
+    """Verify removal of the legacy unmasked variable without reading values.
 
-    This function never outputs the variable value. GitHub CLI exits nonzero
-    when the variable is already absent; a privileged operator may need to
-    remove it separately if deletion fails.
+    Only variable *names* are retrieved. Fail closed on permission errors
+    rather than claiming that the previously public value was removed.
     """
-    command = ["gh", "variable", "delete", "TELEDRIVE_E2E_BOT_CHAT_ID",
-               "--repo", repo]
-    result = subprocess.run(command, capture_output=True, check=False)
-    if result.returncode:
-        print(
-            "WARNING: Verify that the old Actions variable "
-            "TELEDRIVE_E2E_BOT_CHAT_ID is deleted in repository Settings.",
-            file=sys.stderr,
-        )
+    name = "TELEDRIVE_E2E_BOT_CHAT_ID"
+    list_command = ["gh", "variable", "list", "--repo", repo, "--json", "name"]
+    listed = subprocess.run(list_command, capture_output=True, check=False)
+    if listed.returncode:
+        raise RuntimeError("Cannot inspect legacy Actions variable names")
+    try:
+        rows = json.loads(listed.stdout)
+        if not isinstance(rows, list) or any(
+            not isinstance(entry, dict) or not isinstance(entry.get("name"), str)
+            for entry in rows
+        ):
+            raise ValueError("Malformed variable list")
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("Cannot verify legacy Actions variable list") from exc
+    if any(entry["name"] == name for entry in rows):
+        command = ["gh", "variable", "delete", name, "--repo", repo]
+        removed = subprocess.run(command, capture_output=True, check=False)
+        if removed.returncode:
+            raise RuntimeError(
+                "Legacy unmasked Actions variable could not be deleted"
+            )
 
 
 def secure_existing_bot_chat_id(repo: str) -> None:
