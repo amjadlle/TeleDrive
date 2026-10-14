@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import BigInteger, Column, Integer, Index, MetaData, String, Table, and_, case, func, insert, select, delete, update
+from sqlalchemy.exc import IntegrityError as SQLIntegrityError, OperationalError as SQLOperationalError
 
 from .manifest import ChunkReference, chunks
 
@@ -178,41 +179,40 @@ class BotFileIndex:
             _bot_chat_slots.c.account == account,
             _bot_chat_slots.c.chat_id == chat_id,
         )
-        # The insert can race across workers. Roll back only the failed
-        # transaction, then reserve on the now-existing row.
-        exists = self.db.connection.execute(
-            select(_bot_chat_slots.c.account).where(*predicate)
-        ).first()
-        if exists is None:
+        # Begin with a WRITE, not a read: concurrent SQLite workers must
+        # not upgrade a stale WAL snapshot to a writer. On PostgreSQL and
+        # MySQL the UPDATE takes the row lock for the entire reservation.
+        for attempt in range(12):
             try:
+                row = self.db.connection.execute(update(_bot_chat_slots).where(
+                    *predicate
+                ).values(next_allowed_ms=case(
+                    (_bot_chat_slots.c.next_allowed_ms > timestamp,
+                     _bot_chat_slots.c.next_allowed_ms + gap),
+                    else_=timestamp + gap,
+                )))
+                if row.rowcount == 1:
+                    next_ms = self.db.connection.execute(select(
+                        _bot_chat_slots.c.next_allowed_ms
+                    ).where(*predicate)).scalar_one()
+                    self.db.commit()
+                    return max(0.0, (int(next_ms) - gap - timestamp) / 1000)
+                # First reservation for this pair. If another worker won
+                # the unique insert, rollback and retry the UPDATE.
                 self.db.connection.execute(insert(_bot_chat_slots).values(
                     account=account, chat_id=chat_id,
-                    next_allowed_ms=timestamp,
+                    next_allowed_ms=timestamp + gap,
                 ))
                 self.db.commit()
-            except BaseException:
+                return 0.0
+            except (SQLIntegrityError, SQLOperationalError):
                 self.db.connection.rollback()
-                # Do not hide a SQL outage as an upload attempt. The row
-                # must exist after a valid concurrent insertion.
-                if self.db.connection.execute(
-                    select(_bot_chat_slots.c.account).where(*predicate)
-                ).first() is None:
-                    raise
-        result = self.db.connection.execute(update(_bot_chat_slots).where(
-            *predicate
-        ).values(next_allowed_ms=case(
-            (_bot_chat_slots.c.next_allowed_ms > timestamp,
-             _bot_chat_slots.c.next_allowed_ms + gap),
-            else_=timestamp + gap,
-        )))
-        if result.rowcount != 1:
-            self.db.connection.rollback()
-            raise BotApiError("Bot API shared rate slot could not be reserved")
-        next_ms = self.db.connection.execute(select(
-            _bot_chat_slots.c.next_allowed_ms
-        ).where(*predicate)).scalar_one()
-        self.db.commit()
-        return max(0.0, (int(next_ms) - gap - timestamp) / 1000)
+                if attempt == 11:
+                    raise BotApiError(
+                        "Shared Bot rate reservation failed after bounded retries"
+                    ) from None
+                time.sleep(0.015 * (attempt + 1))
+        raise BotApiError("Shared Bot rate reservation could not finish")
 
     def impose_shared_cooldown(self, account: str, chat_id: int,
                                retry_after: int, *,
