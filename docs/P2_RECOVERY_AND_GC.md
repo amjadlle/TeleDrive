@@ -100,3 +100,4 @@ evidence outside GitHub.
 Version-aware physical GC, lifecycle, bucket policies, server-side encryption,
 unimplemented SDK corner cases and broader client testing remain outside
 the tested v1.0.7 P0/P1 release scope.
+\nDevelopment-only endurance workflow: [06 · Endurance | Offline 60m Capacity Soak](../.github/workflows/p2-capacity-soak.yml) runs an isolated SQLite/real storage-engine, synthetic Telegram 60–110 minute loop with SHA-verified recovery, durable manifest accumulation and roundtrip p50/p95. It is manual so ordinary commits do not consume an hour of CI quota. It does **not** replace physical host, natural 429 or original Telegram acceptance.\n
