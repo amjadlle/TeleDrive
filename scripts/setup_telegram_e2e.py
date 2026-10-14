@@ -59,7 +59,9 @@ def store_secret(repo: str, name: str, value: str) -> None:
 
 def legacy_bot_chat_variable_names(repo: str) -> set[str]:
     """Read only Actions variable names; never expose their stored values."""
-    command = ["gh", "variable", "list", "--repo", repo, "--json", "name"]
+    # gh defaults to 30 results; the protected target must not hide on page 2.
+    command = ["gh", "variable", "list", "--repo", repo, "--json", "name",
+               "--limit", "1000"]
     listed = subprocess.run(command, capture_output=True, check=False)
     if listed.returncode:
         raise RuntimeError("Cannot inspect legacy Actions variable names")
