@@ -214,6 +214,29 @@ class BotFileIndex:
         self.db.commit()
         return max(0.0, (int(next_ms) - gap - timestamp) / 1000)
 
+    def impose_shared_cooldown(self, account: str, chat_id: int,
+                               retry_after: int, *,
+                               now_ms: int | None = None) -> None:
+        """Propagate a definite Telegram 429 to all SQL-sharing workers."""
+        if (type(retry_after) is not int or not 1 <= retry_after <= 3600
+                or not account or type(chat_id) is not int or not chat_id):
+            raise ValueError("Invalid Bot 429 cooldown")
+        timestamp = int(time.time() * 1000) if now_ms is None else now_ms
+        if type(timestamp) is not int or timestamp < 0:
+            raise ValueError("Invalid Bot 429 timestamp")
+        until = timestamp + retry_after * 1000
+        row = self.db.connection.execute(update(_bot_chat_slots).where(
+            _bot_chat_slots.c.account == account,
+            _bot_chat_slots.c.chat_id == chat_id,
+        ).values(next_allowed_ms=case(
+            (_bot_chat_slots.c.next_allowed_ms < until, until),
+            else_=_bot_chat_slots.c.next_allowed_ms,
+        )))
+        if row.rowcount != 1:
+            self.db.connection.rollback()
+            raise BotApiError("Bot API shared cooldown row missing")
+        self.db.commit()
+
     def get_send_intent(self, *, account: str, chat_id: int,
                         object_id: str, ordinal: int) -> dict | None:
         """Exact keyed read of an unresolved send for external proof."""
@@ -581,6 +604,11 @@ class BotApiChunkTransport:
                     }, source=path)
                     break
                 except BotApiRateLimited as exc:
+                    # Propagate the server's explicit non-acceptance window
+                    # across all workers before any retry or failure exit.
+                    self.index.impose_shared_cooldown(
+                        self.account, self.chat_id, exc.retry_after,
+                    )
                     self._next_upload = time.monotonic() + max(
                         self._min_upload_interval, exc.retry_after,
                     )
