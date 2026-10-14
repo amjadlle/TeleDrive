@@ -102,13 +102,14 @@ def test_no_native_restore_to_same_host_even_different_database(tmp_path):
 def test_bot_ack_wizard_never_uses_apply(monkeypatch, tmp_path):
     session = tmp_path / "session"
     session.write_text("string-session")
+    session.chmod(0o600)
     monkeypatch.setattr(w, "yes", lambda *args, **kwargs: True)
     answers = iter(["account", "object-id", "0", "12345"])
     monkeypatch.setattr(w, "ask", lambda *args, **kwargs: next(answers))
     def secret(label):
         if "kanal" in label:
             return "-1001234567890"
-        if "SQL" in label:
+        if "SQL" in label or "veritabanı" in label:
             return "/tmp/disposable-staging.db"
         if "Telegram message" in label:
             return "12345"
