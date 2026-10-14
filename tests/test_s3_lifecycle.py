@@ -128,3 +128,59 @@ def test_real_boto3_lifecycle_control_api(service):
     finally:
         server.should_exit=True
         thread.join(timeout=10)
+
+
+def test_aborted_multipart_retains_original_telegram_part_and_manifest(service):
+    """Lifecycle revokes a session but preserves immutable remote references."""
+    import hashlib
+    from sqlalchemy import func, select
+    from teledrive.storage.manifest import ChunkReference, chunks, objects
+    from teledrive.s3.multipart import parts as multipart_parts, uploads
+
+    assert signed(service, "PUT", "/lifecycle-ci").status_code == 200
+    assert signed(service, "PUT", "/lifecycle-ci?lifecycle",
+                  xml(days=1)).status_code == 200
+    db = service[3]()
+    try:
+        cat = BucketCatalog(ManifestStore(db))
+        now = int(time.time())
+        old = now - 14 * 86400
+        payload = b"immutable multipart reference"
+        digest = hashlib.sha256(payload).hexdigest()
+        identifier = cat.manifests.begin("lifecycle-ci", "upload/staged", len(payload), old)
+        cat.manifests.append(identifier, ChunkReference(
+            ordinal=0, offset=0, size=len(payload), sha256=digest,
+            account="ci-original", chat_id=-100666555444, message_id=901,
+        ), old)
+        cat.manifests.finish(identifier, digest, old)
+        multipart = MultipartStore(cat)
+        upload_id = multipart.initiate("lifecycle-ci", "upload/staged", "owner", now=old)
+        multipart.record_part(
+            upload_id, "lifecycle-ci", "upload/staged", "owner",
+            number=1, object_id=identifier,
+            etag=hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+        )
+        lifecycle = BucketLifecycleStore(cat)
+        assert lifecycle.apply_due(now=now) == 1
+        assert db.connection.execute(select(uploads.c.state).where(
+            uploads.c.id == upload_id)).scalar_one() == "aborted"
+        assert db.connection.execute(select(func.count()).select_from(
+            multipart_parts).where(multipart_parts.c.upload_id == upload_id)).scalar_one() == 1
+        assert db.connection.execute(select(func.count()).select_from(
+            chunks).where(chunks.c.object_id == identifier)).scalar_one() == 1
+        assert db.connection.execute(select(objects.c.status).where(
+            objects.c.id == identifier)).scalar_one() == "ready"
+        assert cat.manifests.get(identifier).sha256 == digest
+        assert cat.manifests.parts(identifier)[0].message_id == 901
+        assert lifecycle.apply_due(now=now) == 0
+    finally:
+        db.close()
+    assert service[2].uploads == service[2].downloads == 0
+
+
+def test_bucket_delete_cleans_lifecycle_config_before_bucket_recreation(service):
+    assert signed(service, "PUT", "/empty-lifecycle").status_code == 200
+    assert signed(service, "PUT", "/empty-lifecycle?lifecycle", xml()).status_code == 200
+    assert signed(service, "DELETE", "/empty-lifecycle").status_code == 204
+    assert signed(service, "PUT", "/empty-lifecycle").status_code == 200
+    assert signed(service, "GET", "/empty-lifecycle?lifecycle").status_code == 404
