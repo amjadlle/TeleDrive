@@ -29,10 +29,18 @@ jobs:
       TELEDRIVE_E2E_API_ID: ${{ secrets.TELEDRIVE_E2E_API_ID }}
       TELEDRIVE_E2E_API_HASH: ${{ secrets.TELEDRIVE_E2E_API_HASH }}
       TELEDRIVE_E2E_SESSION: ${{ secrets.TELEDRIVE_E2E_SESSION }}
-      TELEDRIVE_E2E_TARGET: ${{ vars.TELEDRIVE_E2E_TARGET }}
+      TELEDRIVE_E2E_TARGET: ${{ secrets.TELEDRIVE_E2E_TARGET }}
       TELEDRIVE_E2E_CHANNEL_NAME: ${{ secrets.TELEDRIVE_E2E_CHANNEL_NAME }}
       TELEDRIVE_E2E_STRESS: ${{ ((github.event_name == 'workflow_dispatch' && inputs.run_stress) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[p1-live-size]'))) && '1' || '0' }}
     steps:
+      # Numeric Telegram peers must be masked before Python or any
+      # diagnostic command runs, never sourced from visible repo vars.
+      - name: Mask optional Telegram user target
+        shell: bash
+        run: |
+          if [[ -n "$TELEDRIVE_E2E_TARGET" ]]; then
+            echo "::add-mask::$TELEDRIVE_E2E_TARGET"
+          fi
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
