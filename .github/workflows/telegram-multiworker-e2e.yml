@@ -1,0 +1,62 @@
+name: Telegram Multiworker PostgreSQL E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/docker-webui-multiaccount
+
+permissions:
+  contents: read
+
+# Bot uploads must not compete with the regular live Bot E2E suite.
+concurrency:
+  group: teledrive-live-bot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  three-process-telegram:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[p1-live-multiworker]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: teledrive
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: teledrive
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U teledrive -d teledrive"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DB_TEST_POSTGRES_URL: postgresql+psycopg://teledrive:test-password@127.0.0.1:5432/teledrive
+      TELEDRIVE_E2E_BOT_TOKEN: ${{ secrets.TELEDRIVE_E2E_BOT_TOKEN }}
+      TELEDRIVE_E2E_BOT_CHAT_ID: ${{ vars.TELEDRIVE_E2E_BOT_CHAT_ID }}
+      TELEDRIVE_E2E_MULTIWORKER: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Configure dedicated live Bot credentials
+        run: |
+          if [[ -z "$TELEDRIVE_E2E_BOT_TOKEN" || -z "$TELEDRIVE_E2E_BOT_CHAT_ID" ]]; then
+            echo "::error::Dedicated test Bot credentials are required."
+            exit 1
+          fi
+      - name: Install application, DB driver and test runtime
+        run: |
+          python -m pip install -e .
+          python -m pip install pytest "psycopg[binary]>=3.2,<4"
+          python -m pip check
+      - name: Three independent SQL workers and real Telegram byte restoration
+        run: python -m pytest -vv tests/test_telegram_bot_multiworker_e2e.py
