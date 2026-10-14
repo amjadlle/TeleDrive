@@ -219,3 +219,21 @@ never uses `vars.TELEDRIVE_E2E_BOT_CHAT_ID`.
 
 These are separate acceptance receipts. No CI runner can replace
 operator access to original production media or real deployment hosts.
+
+
+## Verified dedicated-channel live test evidence (2026-10-14)
+
+- Bot run 38537902913 at `900ab491`: 25 passed, zero skipped with
+  multipart 5/16/19 MiB, mixed-size soak and cross-client ACK proof enabled.
+- Telethon run 38537902676 at `900ab491`: 14 passed, zero skipped with
+  large-size user-session stress enabled.
+- 3-process real PostgreSQL + test Telegram Bot run 38537359663 at
+  `243d691`: one live multiworker test passed; no production hosts.
+- Seven standard workflows passed together on `900ab491`, providing a
+  coherent code/CI signoff distinct from external operator acceptance.
+
+Still not production-accepted: original channel Bot lost-ACK provenance,
+a real one-hour physically separate host run with naturally occurring
+429s, original production DB/Telegram restore and authorized legacy read
+cutover. Do not conflate isolated test-channel evidence with operator
+production signoff or authorize physical GC from this report.

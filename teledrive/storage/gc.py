@@ -60,7 +60,21 @@ class StorageGCInventory:
                    objects.c.updated_at <= now - min_age_seconds)
             .order_by(objects.c.updated_at, objects.c.id).limit(limit)
         ).all()
-        has_parts = inspect(self.db.engine).has_table("storage_multipart_parts")
+        inspector = inspect(self.db.engine)
+        has_parts = inspector.has_table("storage_multipart_parts")
+        # A Bot send can be accepted but crash before the ordinary manifest
+        # chunk journal. Neither a missing chunk row nor an old FAILED state
+        # makes this Telegram message safe to delete.
+        has_intents = inspector.has_table("storage_bot_send_intents")
+        has_receipts = inspector.has_table("storage_bot_upload_receipts")
+        if has_intents != has_receipts:
+            # An incomplete migration is an unknown ownership graph, not
+            # permission to label any media as unreferenced.
+            raise RuntimeError("Bot reconciliation metadata incomplete")
+        if has_intents:
+            from teledrive.storage.bot_api_adapter import (
+                _bot_send_intents, _bot_receipts,
+            )
         result = []
         for ident, bucket, key, updated_at in found:
             count = db.execute(select(func.count()).select_from(chunks).where(
@@ -83,11 +97,24 @@ class StorageGCInventory:
             part_refs = db.execute(
                 select(func.count()).select_from(parts).where(parts.c.object_id == ident)
             ).scalar_one() if has_parts else 0
+            unresolved_bot_intents = (
+                db.execute(select(func.count()).select_from(_bot_send_intents)
+                           .where(_bot_send_intents.c.object_id == ident)).scalar_one()
+                if has_intents else 0
+            )
+            durable_bot_receipts = (
+                db.execute(select(func.count()).select_from(_bot_receipts)
+                           .where(_bot_receipts.c.object_id == ident)).scalar_one()
+                if has_receipts else 0
+            )
             result.append({
                 "object_id": ident, "bucket": bucket, "key": key,
                 "updated_at": int(updated_at), "journaled_chunks": int(count),
+                "unresolved_bot_intents": int(unresolved_bot_intents),
+                "durable_bot_receipts": int(durable_bot_receipts),
                 "reference_blocked": bool(
                     head_refs or alias_refs or history_refs or part_refs
+                    or unresolved_bot_intents or durable_bot_receipts
                 ),
                 "remote_history_scan_required": True,
                 "approved_for_deletion": False, "dry_run": True,

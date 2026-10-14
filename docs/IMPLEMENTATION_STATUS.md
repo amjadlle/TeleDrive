@@ -1191,3 +1191,29 @@ The previous merged head `fc582f4` passed all seven standard CI workflows.
 Its regular dedicated Bot run 38535792504 had 20 passed and 5 opt-in skipped.
 It is **not** an opt-in stress signoff. The later campaign runs must be
 checked on their own exact SHA.
+
+
+## P1 final live acceptance verified; P2 GC safety kickoff (2026-10-14)
+
+- The exact `main` SHA `900ab491efbe8d1b6c94e616afaa7df7f0372120`
+  passed all seven mandatory standard workflows. Bot E2E run
+  [38537902913](https://github.com/babico/TeleDrive/actions/runs/38537902913)
+  ran with `TELEDRIVE_E2E_MULTIPART=1`,
+  `TELEDRIVE_E2E_SOAK=1`, `TELEDRIVE_E2E_CROSS_CLIENT=1`:
+  **25 passed, zero skipped**, including 5/16/19 MiB Bot upload/download
+  and the bounded twelve-object mixed-size test. Telethon user run
+  [38537902676](https://github.com/babico/TeleDrive/actions/runs/38537902676)
+  ran with stress enabled: **14 passed**. Separate three-process real
+  PostgreSQL/Bot E2E run
+  [38537359663](https://github.com/babico/TeleDrive/actions/runs/38537359663)
+  passed on `243d691`.
+- This closes the dedicated **CI/staging test-channel** P1 evidence.
+  Operator production receipts (physical hosts, one-hour real load with
+  naturally occurring 429, original-production-media restore and final
+  legacy cutover) remain explicitly open and cannot be self-certified.
+- P2 physical-GC **preview only** now blocks old FAILED-object candidates
+  when the Bot has a pre-send unknown-outcome intent or a durable ACK receipt
+  that has not yet been attached to an immutable manifest. Partial Bot
+  reconciliation SQL schema fails closed. A 0-journaled-chunk report never
+  authorizes remote deletion; all existing no-delete safety guarantees remain.
+  Real physical Telegram garbage collection is still disabled.
