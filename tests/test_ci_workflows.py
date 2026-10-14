@@ -869,10 +869,16 @@ def test_canonical_docs_and_generated_release_notes():
 
 def test_explicit_dependencies_and_isolated_docker_build_contexts():
     """Keep desktop GUI out of production API image and keep CI Docker isolated."""
-    desktop = (ROOT / "requirements/desktop.txt").read_text("utf-8")
-    server = (ROOT / "requirements/server.txt").read_text("utf-8")
-    assert "PySide6" in desktop and "fastapi" not in desktop.lower()
-    assert "fastapi" in server.lower() and "PySide6" not in server
+    desktop = [line.strip().lower() for line in
+               (ROOT / "requirements/desktop.txt").read_text("utf-8").splitlines()
+               if line.strip() and not line.lstrip().startswith("#")]
+    server = [line.strip().lower() for line in
+              (ROOT / "requirements/server.txt").read_text("utf-8").splitlines()
+              if line.strip() and not line.lstrip().startswith("#")]
+    assert any(line.startswith("pyside6") for line in desktop)
+    assert not any(line.startswith("fastapi") for line in desktop)
+    assert any(line.startswith("fastapi") for line in server)
+    assert not any(line.startswith("pyside6") for line in server)
     web = (ROOT / "Dockerfile").read_text("utf-8")
     isolated = (ROOT / ".github/ci/fault-injection/Dockerfile").read_text("utf-8")
     compose = (ROOT / ".github/ci/fault-injection/compose.yml").read_text("utf-8")
