@@ -17,6 +17,7 @@ from sqlalchemy import insert
 
 from teledrive.db import connect_database
 from teledrive.storage.catalog import BucketCatalog
+from teledrive.storage.recovery import RemoteChunk
 from teledrive.storage.manifest import (
     ChunkReference, ManifestStore, chunks, objects,
 )
@@ -90,6 +91,17 @@ async def restore_isolated_catalog(
     count = 0
     with tempfile.TemporaryDirectory(prefix="teledrive-rebuild-") as tmp:
         for ref in refs:
+            # A matching file hash does not by itself prove that the original
+            # account actually sent the claimed TeleDrive message. Require
+            # an independent remote marker/ownership probe for every chunk.
+            if not hasattr(transport, "probe"):
+                raise ValueError("Original Telegram ownership probe is required")
+            proof = await transport.probe(RemoteChunk(
+                ref.account, ref.chat_id, ref.message_id, ref.ordinal,
+                ref.sha256[:16],
+            ), object_id=plan["object_id"])
+            if proof != "verified":
+                raise ValueError("Original Telegram message ownership unproven")
             chunk_path = Path(tmp) / f"chunk-{ref.ordinal}"
             await transport.download(ref, chunk_path)
             if not chunk_path.is_file() or chunk_path.is_symlink():

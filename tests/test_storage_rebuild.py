@@ -16,6 +16,9 @@ def sha(data): return hashlib.sha256(data).hexdigest()
 
 class TelegramSource:
     def __init__(self, chunks): self.chunks = chunks; self.reads = 0
+    async def probe(self, chunk, *, object_id):
+        return "verified"
+
     async def download(self, ref, destination):
         self.reads += 1
         destination.write_bytes(self.chunks[ref.message_id])
@@ -85,4 +88,15 @@ def test_rebuild_rejects_unproven_identity_metadata(tmp_path, mutation):
     with pytest.raises((ValueError, TypeError)):
         asyncio.run(restore_isolated_catalog(
             plan, TelegramSource({100:b"hello"}), dest))
+    assert not dest.exists()
+
+
+def test_rebuild_rejects_unverified_remote_ownership_even_with_correct_bytes(tmp_path):
+    plan = make_plan([b"exact-bytes"])
+    class WrongOwner(TelegramSource):
+        async def probe(self, chunk, *, object_id):
+            return "mismatch"
+    dest = tmp_path / "blocked.db"
+    with pytest.raises(ValueError, match="ownership"):
+        asyncio.run(restore_isolated_catalog(plan, WrongOwner({100:b"exact-bytes"}), dest))
     assert not dest.exists()
