@@ -119,6 +119,8 @@ def _reject_unimplemented_write_options(request: Request) -> None:
         "x-amz-website-redirect-location", "x-amz-object-lock-mode",
         "x-amz-object-lock-retain-until-date", "x-amz-object-lock-legal-hold",
         "x-amz-request-payer", "x-amz-trailer",
+        "x-amz-bypass-governance-retention", "x-amz-mfa",
+        "x-amz-expected-bucket-owner", "x-amz-checksum-mode",
         "x-amz-decoded-content-length",
     }
     # The S3 gateway is permanently private and has exactly one storage
@@ -802,8 +804,15 @@ async def _handle(request: Request):
             finally:
                 staged.unlink(missing_ok=True)
         owner = verify_header_signature(request, store.resolve, action)
-        if request.method in {"PUT", "POST"}:
-            _reject_unimplemented_write_options(request)
+        # Every signed S3 method must reject unsupported retention, SSE,
+        # requester-payer and governance semantics, including GET/HEAD/DELETE.
+        # Ignoring those headers can turn a supposedly protected delete into
+        # an ordinary tombstone or pretend to verify a requested checksum.
+        _reject_unimplemented_write_options(request)
+        if request.method == "DELETE" and any(
+            name in request.headers for name in ("x-amz-copy-source", "x-amz-tagging")
+        ):
+            raise SigV4Error("NotImplemented", "Unsupported S3 delete headers")
         inline_tags = _initial_tags(request, owner, store) if (
             separator and request.method == "PUT" and not is_object_tagging
         ) else None

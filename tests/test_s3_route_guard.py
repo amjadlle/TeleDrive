@@ -145,3 +145,29 @@ def test_unknown_parameter_is_rejected_before_object_transport():
     with pytest.raises(S3QueryError) as denied:
         validate_s3_query("DELETE", "source", False, QueryParams("policy"))
     assert denied.value.code == "NotImplemented"
+
+
+@pytest.mark.parametrize("method,headers", [
+    ("DELETE", {"x-amz-bypass-governance-retention": "true"}),
+    ("DELETE", {"x-amz-mfa": "123456 123456"}),
+    ("DELETE", {"x-amz-expected-bucket-owner": "123456789012"}),
+    ("DELETE", {"x-amz-copy-source": "/guard-bucket/asset.bin"}),
+    ("DELETE", {"x-amz-tagging": "class=archive"}),
+    ("GET", {"x-amz-checksum-mode": "ENABLED"}),
+    ("HEAD", {"x-amz-request-payer": "requester"}),
+    ("GET", {"x-amz-server-side-encryption-customer-algorithm": "AES256"}),
+])
+def test_unsupported_header_contract_does_not_change_or_expose_object(
+    service, method, headers,
+):
+    assert signed(service, "PUT", "/guard-bucket").status_code == 200
+    assert signed(service, "PUT", "/guard-bucket/asset.bin",
+                  b"protected-content").status_code == 200
+    before = service[2].uploads
+    forbidden = signed(
+        service, method, "/guard-bucket/asset.bin",
+        extra_headers=headers,
+    )
+    assert forbidden.status_code == 501, (method, headers, forbidden.text)
+    assert signed(service, "GET", "/guard-bucket/asset.bin").content == b"protected-content"
+    assert service[2].uploads == before
