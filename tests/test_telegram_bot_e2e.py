@@ -1218,11 +1218,47 @@ def test_live_bot_accepted_upload_lost_ack_is_fenced_until_proven():
                 await real.download_file(remote_meta["file_path"], remote_path)
                 assert remote_path.read_bytes() == payload[:part_size]
                 assert hashlib.sha256(remote_path.read_bytes()).hexdigest() == checksum
-                index.put_receipt(
-                    transport.account, int(chat), int(acknowledged["message_id"]),
-                    file_id, object_id=object_id, ordinal=0,
-                    checksum=checksum, size=part_size,
-                )
+                if os.getenv("TELEDRIVE_E2E_CROSS_CLIENT") == "1":
+                    # An independent authenticated user must prove the
+                    # original channel post and its bytes. Bot getFile alone
+                    # cannot list historical channel messages after ACK loss.
+                    from telethon import TelegramClient
+                    from telethon.sessions import StringSession
+                    from teledrive.storage.receipt_reconcile import reconcile_bot_receipt
+
+                    api_id = os.getenv("TELEDRIVE_E2E_API_ID", "")
+                    api_hash = os.getenv("TELEDRIVE_E2E_API_HASH", "")
+                    session = os.getenv("TELEDRIVE_E2E_SESSION", "")
+                    if not all((api_id, api_hash, session)):
+                        pytest.fail("Cross-client ACK proof requested without user session")
+                    user = TelegramClient(StringSession(session), int(api_id), api_hash)
+                    try:
+                        await user.connect()
+                        assert await user.is_user_authorized()
+                        await user.get_dialogs()  # populate StringSession entities
+                        evidence = await reconcile_bot_receipt(
+                            index, real, user, account=transport.account,
+                            chat_id=int(chat), object_id=object_id, ordinal=0,
+                            message_id=int(acknowledged["message_id"]),
+                            file_id=file_id, apply=False,
+                        )
+                        assert evidence["verified"] and not evidence["applied"]
+                        assert index.unresolved_count() == 1
+                        applied = await reconcile_bot_receipt(
+                            index, real, user, account=transport.account,
+                            chat_id=int(chat), object_id=object_id, ordinal=0,
+                            message_id=int(acknowledged["message_id"]),
+                            file_id=file_id, apply=True,
+                        )
+                        assert applied["verified"] and applied["applied"]
+                    finally:
+                        await user.disconnect()
+                else:
+                    index.put_receipt(
+                        transport.account, int(chat), int(acknowledged["message_id"]),
+                        file_id, object_id=object_id, ordinal=0,
+                        checksum=checksum, size=part_size,
+                    )
                 assert index.unresolved_count() == 0
                 completed = await TelegramObjectStorage(
                     ManifestStore(db), transport, chunk_size=part_size,
