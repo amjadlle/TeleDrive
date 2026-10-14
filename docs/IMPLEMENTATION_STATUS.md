@@ -129,7 +129,7 @@ An incorrect SHA, incomplete drill, duplicate host identity, invalid media proof
 
 ### 4.1 Physical Telegram garbage collection: disabled
 
-**Implemented safeguards:** `StorageGCInventory` performs retention/reference previews; `RecoveryManager.cleanup` checks SQL heads, published and removed history, copy aliases, multipart references, send intents and Bot receipts. The Telethon ownership probe also checks account/channel/marker identity.
+**Implemented safeguards:** `StorageGCInventory` performs retention/reference previews with a fail-closed, fingerprinted SQL graph covering HEADs, published/removed versions, transitive copy aliases, multipart parts, writer fences and Bot intents/receipts; `RecoveryManager.cleanup` checks SQL heads, published and removed history, copy aliases, multipart references, send intents and Bot receipts. The Telethon ownership probe also checks account/channel/marker identity.
 
 **Not yet authorized/complete:** transactional version-aware mark/sweep across concurrent writers, a complete writer barrier, independently verified media backups, complete ownership audit, explicit two-person deletion approval and a tested disaster-recovery alternative. Deleted Telegram **message IDs cannot simply be restored from SQL**. Automatic physical GC in WebUI/API remains disabled. Unknown Bot ACKs and ambiguous ownership must stay protected.
 

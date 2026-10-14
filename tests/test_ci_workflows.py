@@ -977,3 +977,14 @@ def test_public_markdown_is_english_structured_and_locally_linked():
     knowledge = (ROOT / "website/public/knowledge.md").read_text("utf-8")
     assert "github.com/babico/TeleDrive" in knowledge
     assert "TeleDrive-Setup-1.0.6" not in knowledge
+
+def test_gc_references_and_live_inventory_are_ci_gates():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        all_commands = "\\n".join(
+            step.get("run", "")
+            for job in workflow(name)["jobs"].values() for step in job["steps"]
+        )
+        assert "tests/test_gc_reference_planner.py" in all_commands
+    user = workflow("live-telegram-user.yml")["jobs"]["telegram-roundtrip"]
+    assert any("tests/test_telegram_history_live_e2e.py" in s.get("run", "")
+               for s in user["steps"])

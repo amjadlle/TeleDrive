@@ -51,11 +51,12 @@ class StorageGCInventory:
     def preview_failed_retention(self, *, now: int,
                                  min_age_seconds: int = 7 * 86400,
                                  limit: int = 100) -> list[dict]:
-        """Inspect aged FAILED journals without authorizing Telegram deletion."""
+        """Read-only mark-phase report, never a Telegram deletion authorization."""
         if min_age_seconds < 86400 or not 1 <= limit <= 1000:
             raise ValueError("Unsafe GC retention parameters")
-        from teledrive.storage.catalog import published_versions
-        from teledrive.s3.multipart import parts
+        from .gc_safety import GCReferenceGuard
+        guard = GCReferenceGuard(self.manifests)
+        guard.validate_schema()
         db = self.db.connection
         found = db.execute(
             select(objects.c.id, objects.c.bucket, objects.c.object_key,
@@ -64,62 +65,15 @@ class StorageGCInventory:
                    objects.c.updated_at <= now - min_age_seconds)
             .order_by(objects.c.updated_at, objects.c.id).limit(limit)
         ).all()
-        inspector = inspect(self.db.engine)
-        has_parts = inspector.has_table("storage_multipart_parts")
-        # A Bot send can be accepted but crash before the ordinary manifest
-        # chunk journal. Neither a missing chunk row nor an old FAILED state
-        # makes this Telegram message safe to delete.
-        has_intents = inspector.has_table("storage_bot_send_intents")
-        has_receipts = inspector.has_table("storage_bot_upload_receipts")
-        if has_intents != has_receipts:
-            # An incomplete migration is an unknown ownership graph, not
-            # permission to label any media as unreferenced.
-            raise RuntimeError("Bot reconciliation metadata incomplete")
-        if has_intents:
-            from teledrive.storage.bot_api_adapter import (
-                _bot_send_intents, _bot_receipts,
-            )
         result = []
         for ident, bucket, key, updated_at in found:
             count = db.execute(select(func.count()).select_from(chunks).where(
                 chunks.c.object_id == ident
             )).scalar_one()
-            head_refs = db.execute(select(func.count()).select_from(heads).where(
-                heads.c.object_id == ident
-            )).scalar_one()
-            alias_refs = db.execute(
-                select(func.count()).select_from(object_aliases).where(
-                    or_(object_aliases.c.object_id == ident,
-                        object_aliases.c.source_object_id == ident)
-                )
-            ).scalar_one()
-            history_refs = db.execute(
-                select(func.count()).select_from(published_versions).where(
-                    published_versions.c.object_id == ident
-                )
-            ).scalar_one()
-            part_refs = db.execute(
-                select(func.count()).select_from(parts).where(parts.c.object_id == ident)
-            ).scalar_one() if has_parts else 0
-            unresolved_bot_intents = (
-                db.execute(select(func.count()).select_from(_bot_send_intents)
-                           .where(_bot_send_intents.c.object_id == ident)).scalar_one()
-                if has_intents else 0
-            )
-            durable_bot_receipts = (
-                db.execute(select(func.count()).select_from(_bot_receipts)
-                           .where(_bot_receipts.c.object_id == ident)).scalar_one()
-                if has_receipts else 0
-            )
             result.append({
                 "object_id": ident, "bucket": bucket, "key": key,
                 "updated_at": int(updated_at), "journaled_chunks": int(count),
-                "unresolved_bot_intents": int(unresolved_bot_intents),
-                "durable_bot_receipts": int(durable_bot_receipts),
-                "reference_blocked": bool(
-                    head_refs or alias_refs or history_refs or part_refs
-                    or unresolved_bot_intents or durable_bot_receipts
-                ),
+                **guard.evidence(ident),
                 "remote_history_scan_required": True,
                 "approved_for_deletion": False, "dry_run": True,
             })

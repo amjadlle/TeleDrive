@@ -13,6 +13,7 @@
 
 ## 2. Engineering backlog
 
+- [x] Test non-destructive GC SQL graph guards (including removed versions and writer fences) and real test-channel history inventory automatically in CI.
 - [ ] Implement full version-aware, writer-fenced physical garbage collection **only after** sealed independent payload backup, ownership/alias/retention checks, an actual restore drill and explicit two-person approval.
 - [x] Add a bounded, read-only marker inventory for one owner-authorized Telegram channel, with private output and synthetic regression coverage; candidate hints are not recovery proofs.
 - [ ] Extend trustworthy recovery of unknown original Telegram history beyond candidate markers without inventing bucket/key, full SHA-256 or missing version metadata.
