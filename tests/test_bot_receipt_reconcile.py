@@ -168,3 +168,52 @@ def test_reconciliation_refuses_bad_numeric_identifiers_before_bot_api(tmp_path)
         assert idx.unresolved_count() == 1
     finally:
         db.close()
+
+def test_operator_proof_fails_closed_if_original_fence_disappears_during_readback(
+    tmp_path, monkeypatch,
+):
+    """Two real remote reads are not permission to resurrect a cleared fence."""
+    db, index, body, args = new_index(tmp_path)
+    try:
+        user = FakeUser(body)
+        original = user.download_media
+
+        async def remove_fence_while_fetching_channel(message, *, file):
+            result = await original(message, file=file)
+            index.clear_rejected_send(
+                args["account"], args["chat_id"], args["object_id"],
+                args["ordinal"], hashlib.sha256(body).hexdigest(), len(body),
+            )
+            return result
+
+        monkeypatch.setattr(user, "download_media", remove_fence_while_fetching_channel)
+        with pytest.raises(BotApiError, match="intent disappeared"):
+            asyncio.run(reconcile_bot_receipt(
+                index, FakeBot(body), user, **args, apply=True,
+            ))
+        assert index.unresolved_count() == 0
+        with pytest.raises(FileNotFoundError):
+            index.get("bot-proof", -10043210, 11)
+    finally:
+        db.close()
+
+
+def test_strict_bot_receipt_recovery_refuses_missing_intent(tmp_path):
+    db, index, body, args = new_index(tmp_path)
+    try:
+        digest = hashlib.sha256(body).hexdigest()
+        index.clear_rejected_send(
+            args["account"], args["chat_id"], args["object_id"],
+            args["ordinal"], digest, len(body),
+        )
+        with pytest.raises(BotApiError, match="intent disappeared"):
+            index.put_receipt(
+                args["account"], args["chat_id"], args["message_id"],
+                args["file_id"], object_id=args["object_id"],
+                ordinal=args["ordinal"], checksum=digest,
+                size=len(body), require_intent=True,
+            )
+        with pytest.raises(FileNotFoundError):
+            index.get("bot-proof", -10043210, 11)
+    finally:
+        db.close()
