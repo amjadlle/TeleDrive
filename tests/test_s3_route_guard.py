@@ -171,3 +171,43 @@ def test_unsupported_header_contract_does_not_change_or_expose_object(
     assert forbidden.status_code == 501, (method, headers, forbidden.text)
     assert signed(service, "GET", "/guard-bucket/asset.bin").content == b"protected-content"
     assert service[2].uploads == before
+
+
+def test_real_sha256_checksum_mode_readback_for_aws_cli_and_sdk(service):
+    """SDK-requested checksum headers bind the actual immutable object bytes."""
+    import base64
+    import hashlib
+
+    assert signed(service, "PUT", "/guard-bucket").status_code == 200
+    blob = b"checksum-bound-exact-plaintext" * 17
+    put = signed(service, "PUT", "/guard-bucket/checksummed", blob)
+    assert put.status_code == 200, put.text
+    version = put.headers["x-amz-version-id"]
+    encoded = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii")
+    for method, path in (
+        ("GET", "/guard-bucket/checksummed"),
+        ("HEAD", "/guard-bucket/checksummed"),
+        ("GET", "/guard-bucket/checksummed?versionId=" + version),
+    ):
+        reply = signed(service, method, path,
+                       extra_headers={"x-amz-checksum-mode": "ENABLED"})
+        assert reply.status_code == 200, reply.text
+        assert reply.headers["x-amz-checksum-sha256"] == encoded
+        assert reply.headers["x-amz-checksum-type"] == "FULL_OBJECT"
+        if method == "GET":
+            assert reply.content == blob
+    assert signed(service, "GET", "/guard-bucket/checksummed").headers.get(
+        "x-amz-checksum-sha256"
+    ) is None
+
+    for method, path, mode, expected in (
+        ("GET", "/guard-bucket/checksummed", "BAD", 400),
+        ("PUT", "/guard-bucket/checksummed", "ENABLED", 501),
+        ("DELETE", "/guard-bucket/checksummed", "ENABLED", 501),
+        ("GET", "/guard-bucket", "ENABLED", 501),
+    ):
+        result = signed(service, method, path, extra_headers={
+            "x-amz-checksum-mode": mode,
+        })
+        assert result.status_code == expected, result.text
+    assert signed(service, "GET", "/guard-bucket/checksummed").content == blob

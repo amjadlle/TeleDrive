@@ -78,7 +78,8 @@ def _error(code: str, message: str, status: int) -> Response:
 
 
 def _headers(item, etag: str | None = None,
-             metadata: dict[str, str] | None = None) -> dict[str, str]:
+             metadata: dict[str, str] | None = None,
+             *, checksum_mode: bool = False) -> dict[str, str]:
     headers = {
         "ETag": '"' + (etag or item.sha256) + '"',
         "Content-Length": str(item.size),
@@ -87,6 +88,14 @@ def _headers(item, etag: str | None = None,
         "Last-Modified": http_last_modified(item.created_at),
         "x-amz-version-id": item.id,
     }
+    if checksum_mode:
+        # The immutable manifest stores the digest of the FULL plaintext
+        # object, independently of ETag/part layout. This is a real SHA-256,
+        # not an invented checksum or AWS multipart checksum composition.
+        headers["x-amz-checksum-sha256"] = base64.b64encode(
+            bytes.fromhex(item.sha256)
+        ).decode("ascii")
+        headers["x-amz-checksum-type"] = "FULL_OBJECT"
     for name, value in (metadata or {}).items():
         # HTTP header names are case-insensitive. Do not emit both
         # Content-Type (the default) and content-type (persisted metadata):
@@ -120,7 +129,7 @@ def _reject_unimplemented_write_options(request: Request) -> None:
         "x-amz-object-lock-retain-until-date", "x-amz-object-lock-legal-hold",
         "x-amz-request-payer", "x-amz-trailer",
         "x-amz-bypass-governance-retention", "x-amz-mfa",
-        "x-amz-expected-bucket-owner", "x-amz-checksum-mode",
+        "x-amz-expected-bucket-owner",
         "x-amz-decoded-content-length",
     }
     # The S3 gateway is permanently private and has exactly one storage
@@ -812,6 +821,18 @@ async def _handle(request: Request):
         # Ignoring those headers can turn a supposedly protected delete into
         # an ordinary tombstone or pretend to verify a requested checksum.
         _reject_unimplemented_write_options(request)
+        checksum_mode = request.headers.get("x-amz-checksum-mode")
+        if checksum_mode is not None:
+            # AWS CLI/botocore send ENABLED by default for standard downloads.
+            # Only object GET/HEAD can use the manifest's full-object digest.
+            if (request.method not in {"GET", "HEAD"} or not separator
+                    or is_object_attributes or is_object_tagging
+                    or mpu_list or mpu_abort or mpu_part or mpu_complete):
+                raise SigV4Error(
+                    "NotImplemented", "ChecksumMode unsupported on this S3 operation",
+                )
+            if checksum_mode != "ENABLED":
+                raise SigV4Error("InvalidArgument", "Unknown checksum mode")
         if request.method == "DELETE" and any(
             name in request.headers for name in ("x-amz-copy-source", "x-amz-tagging")
         ):
@@ -1677,7 +1698,10 @@ async def _handle(request: Request):
         if precondition == 412:
             return _error("PreconditionFailed", "Object precondition failed", 412)
         if request.method == "HEAD":
-            return Response(status_code=200, headers=_headers(item, item_etag, http_properties))
+            return Response(status_code=200, headers=_headers(
+                item, item_etag, http_properties,
+                checksum_mode=(checksum_mode == "ENABLED"),
+            ))
         start, end, partial = _range(request.headers.get("range"), item.size)
         transport = storage_bot_transport(db)
         scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
@@ -1695,7 +1719,8 @@ async def _handle(request: Request):
                 db.close()
 
         retain = True
-        headers = _headers(item, item_etag, http_properties)
+        headers = _headers(item, item_etag, http_properties,
+                           checksum_mode=(checksum_mode == "ENABLED"))
         headers["Content-Length"] = str(end - start)
         if partial:
             headers["Content-Range"] = f"bytes {start}-{end-1}/{item.size}"
