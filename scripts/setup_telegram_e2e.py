@@ -8,8 +8,8 @@ Prerequisites:
 
 Telethon asks for a login code on first sign-in, and for 2FA only if enabled.
 The StringSession and test channel ID are never printed or written to disk.
-Use --secure-bot-chat-id to migrate an existing unmasked Actions variable
-to a repository secret without repeating Telegram user login.
+Use --secure-bot-chat-id to move the existing unmasked Actions variable
+into a repository secret without disclosing the value or logging in to Telegram.
 """
 
 from __future__ import annotations
@@ -84,16 +84,35 @@ def remove_public_bot_chat_variable(repo: str) -> None:
 
 
 def secure_existing_bot_chat_id(repo: str) -> None:
-    """One-time no-Telegram-login migration; never prints the entered ID."""
+    """One-time non-echoing migration from Actions variable to Secret.
+
+    Read the existing variable only into Python's captured subprocess
+    stdout, never the operator terminal. If the variable is already gone,
+    prompt for the peer ID using getpass rather than a CLI argument.
+    """
     import re
 
     require_github_cli(repo)
-    chat_id = getpass.getpass("Telegram test channel ID (hidden): ").strip()
+    fetched = subprocess.run(
+        ["gh", "variable", "get", "TELEDRIVE_E2E_BOT_CHAT_ID", "--repo", repo],
+        capture_output=True,
+        check=False,
+    )
+    if fetched.returncode == 0:
+        try:
+            chat_id = fetched.stdout.decode("utf-8").strip()
+        except UnicodeDecodeError as exc:
+            raise ValueError("Invalid stored private channel ID") from exc
+    else:
+        chat_id = getpass.getpass(
+            "Telegram test channel ID (hidden, old variable unavailable): "
+        ).strip()
     if not re.fullmatch(r"-100[0-9]{5,16}", chat_id):
         raise ValueError("Bot target must be a numeric private channel ID")
     store_secret(repo, "TELEDRIVE_E2E_BOT_CHAT_ID", chat_id)
-    print("Saved GitHub Actions secret: TELEDRIVE_E2E_BOT_CHAT_ID")
     remove_public_bot_chat_variable(repo)
+    print("Saved GitHub Actions secret: TELEDRIVE_E2E_BOT_CHAT_ID")
+    print("Verified that the previous unmasked variable is absent.")
 
 
 async def find_channel(client: TelegramClient, title: str) -> list:
