@@ -1075,3 +1075,24 @@ Do not mark P1 fully finished until those distinct production receipts exist.
   configuration. **Never restore the old unmasked variable as a fallback.**
   Telethon user-session E2E remains independent and continues to exercise
   real non-production Telegram data.
+
+
+## P1 masked live-CI migration hardening (2026-10-14)
+
+- The dedicated Bot E2E peer remains an Actions **Secret**, masked before
+  checkout; deliberately fail closed when `TELEDRIVE_E2E_BOT_CHAT_ID` is
+  missing. Do not restore the unmasked variable as a fallback.
+- The secure setup migration now differentiates absent variables from failed
+  variable reads using a names-only query. It lists variables again after
+  deletion rather than trusting a successful delete process return code.
+  An unreadable or re-created unmasked variable aborts without echoing its ID.
+- Three new migration regressions exercise unreadable-but-existing values,
+  hidden input when absent, and re-creation after deletion. Existing tests
+  now require a successful post-delete re-list and no peer ID in output.
+- The explicit opt-in live Bot size matrix adds a 19 MiB + 7 byte single
+  Telegram document upload/getFile/restart/readback/checksum/range test, below
+  the cloud Bot API 20 MiB download limit. This test is not run by default.
+- This is **implementation and test coverage**, not a completed production
+  acceptance. The repository Secret migration, real multi-host Telegram soak,
+  production-representative DR and authorized legacy cutover still require
+  external operator evidence. Latest-SHA CI signoff must be checked again.
