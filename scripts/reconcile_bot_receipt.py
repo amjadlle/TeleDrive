@@ -23,9 +23,12 @@ async def run(args) -> dict:
     from telethon.sessions import StringSession
 
     bot_token = os.environ.get("TELEDRIVE_BOT_TOKEN", "")
-    api_id = os.environ.get("TELEDRIVE_E2E_API_ID", "")
-    api_hash = os.environ.get("TELEDRIVE_E2E_API_HASH", "")
-    session = os.environ.get("TELEDRIVE_E2E_SESSION", "")
+    api_id = (os.environ.get("TELEDRIVE_RECONCILE_API_ID")
+              or os.environ.get("TELEDRIVE_E2E_API_ID", ""))
+    api_hash = (os.environ.get("TELEDRIVE_RECONCILE_API_HASH")
+                or os.environ.get("TELEDRIVE_E2E_API_HASH", ""))
+    session = (os.environ.get("TELEDRIVE_RECONCILE_SESSION")
+               or os.environ.get("TELEDRIVE_E2E_SESSION", ""))
     if not (bot_token and api_id and api_hash and session):
         raise ValueError("Missing Bot/user Telegram environment credentials")
     db = connect_database(args.database)
@@ -55,11 +58,14 @@ def main() -> int:
     parser.add_argument("--object-id", required=True)
     parser.add_argument("--ordinal", type=int, required=True)
     parser.add_argument("--message-id", type=int, required=True)
-    parser.add_argument("--file-id", required=True,
+    parser.add_argument("--file-id",
                         help="File ID from independently retained original Bot evidence")
     parser.add_argument("--apply", action="store_true",
                         help="Commit verified receipt; default only reads Telegram/SQL")
     args = parser.parse_args()
+    args.file_id = args.file_id or os.environ.get("TELEDRIVE_RECONCILE_FILE_ID", "")
+    if not args.file_id:
+        parser.error("Provide an independently retained Bot file ID by env or flag")
     try:
         result = asyncio.run(run(args))
     except Exception as exc:
