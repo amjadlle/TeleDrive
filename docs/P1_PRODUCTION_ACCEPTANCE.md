@@ -251,3 +251,24 @@ downloaded fails the report even when its original mtime and size are
 restored. The verifier still NEVER mutates the source, SQL, or Telegram.
 Physical quiescence and a separately held cutover lease remain mandatory;
 repeat verification immediately before authorized read switchover.
+
+
+## Durable, privacy-preserving actual Bot 429 evidence counter
+
+The shared Bot SQL cooldown transaction now also increments
+`storage_bot_429_observations.observations` per Bot account/channel
+when and only when the caller observes an explicit Telegram 429 with
+validated `retry_after`. Operator-authenticated
+`GET /api/v1/admin/storage/health` exposes the **aggregate**
+`bot_explicit_429_total` without revealing Bot tokens, account aliases,
+numeric Telegram peer IDs or file IDs. A new installation starts at 0;
+in-place schema creation does not rewrite the preexisting cooldown table.
+Compare counts before/after a real physically separated one-hour soak;
+a stable counter does not prove that a natural 429 happened. Synthetic 429
+unit tests and separate test-channel CI are never production soak receipts.
+
+The counter update, shared cooldown and send-slot fence are one SQL
+transaction; if journal persistence fails all three roll back and the
+operator must not claim observed 429 evidence. A live worker still refuses
+unsafe unknown-outcome retransmission; this metric is never a retry
+authorization. Physical production soak remains operator-owned.

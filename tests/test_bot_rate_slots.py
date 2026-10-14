@@ -323,3 +323,55 @@ def test_zero_interval_actual_429_is_committed_across_sql_connections(tmp_path):
     finally:
         second.close()
         first.close()
+
+
+def test_explicit_429_counter_is_atomic_and_survives_sql_restart(tmp_path):
+    """A genuine Bot 429 observation survives independent SQL workers."""
+    path = str(tmp_path / "durable-429-evidence.db")
+    db1 = connect_database(path)
+    db2 = connect_database(path)
+    try:
+        first, second = BotFileIndex(db1), BotFileIndex(db2)
+        assert first.total_explicit_429_observations() == 0
+        first.reserve_send_slot("a", -100501, 0, now_ms=1000)
+        second.reserve_send_slot("a", -100502, 0, now_ms=1000)
+        first.impose_shared_cooldown("a", -100501, 8, now_ms=1000)
+        assert second.total_explicit_429_observations() == 1
+        second.impose_shared_cooldown("a", -100502, 5, now_ms=2000)
+        first.impose_shared_cooldown("a", -100501, 1, now_ms=3000)
+        assert first.total_explicit_429_observations() == 3
+    finally:
+        db2.close()
+        db1.close()
+    reopened = connect_database(path)
+    try:
+        assert BotFileIndex(reopened).total_explicit_429_observations() == 3
+    finally:
+        reopened.close()
+
+
+def test_explicit_429_counter_failure_rolls_back_cooldown_and_send_slot(tmp_path):
+    """No success-looking 429 metric after a failed shared-SQL transaction."""
+    path = str(tmp_path / "failed-metric.db")
+    db = connect_database(path)
+    try:
+        index = BotFileIndex(db)
+        index.reserve_send_slot("bot", -100905, 0, now_ms=1000)
+        db.connection.exec_driver_sql(
+            "CREATE TRIGGER reject_metric BEFORE INSERT "
+            "ON storage_bot_429_observations "
+            "BEGIN SELECT RAISE(ABORT, 'test failed rate evidence'); END"
+        )
+        db.commit()
+        with pytest.raises(Exception, match="Shared Bot cooldown failed"):
+            index.impose_shared_cooldown("bot", -100905, 15, now_ms=1000)
+        assert index.total_explicit_429_observations() == 0
+        assert index.shared_cooldown_wait("bot", -100905, now_ms=1000) == 0
+        assert index.reserve_send_slot("bot", -100905, 0, now_ms=1000) == 0
+        db.connection.exec_driver_sql("DROP TRIGGER reject_metric")
+        db.commit()
+        index.impose_shared_cooldown("bot", -100905, 15, now_ms=1000)
+        assert index.total_explicit_429_observations() == 1
+        assert index.shared_cooldown_wait("bot", -100905, now_ms=1000) == 15
+    finally:
+        db.close()

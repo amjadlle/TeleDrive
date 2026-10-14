@@ -93,6 +93,18 @@ _bot_chat_cooldowns = Table(
     Column("cooldown_until_ms", BigInteger, nullable=False),
 )
 
+# A durable, non-secret observation counter helps an operator distinguish
+# a genuinely exercised production 429 window from purely synthetic tests.
+# Keeping this separate from the preexisting cooldown table is migration-safe.
+_bot_429_observations = Table(
+    "storage_bot_429_observations", _bot_metadata,
+    Column("account", String(255), primary_key=True),
+    Column("chat_id", BigInteger, primary_key=True),
+    Column("observations", BigInteger, nullable=False),
+    Column("last_observed_ms", BigInteger, nullable=False),
+    Column("last_retry_after_seconds", Integer, nullable=False),
+)
+
 
 class BotApiError(RuntimeError):
     """Safe error: never includes Bot API token, URL or Telegram response text."""
@@ -269,6 +281,33 @@ class BotFileIndex:
                         account=account, chat_id=chat_id,
                         cooldown_until_ms=until,
                     ))
+                # The counter is an observation of a verified Telegram 429,
+                # not proof that an upload was accepted. Serialize it with
+                # the same SQL writer transaction as the rate-limit fence.
+                observed = self.db.connection.execute(
+                    update(_bot_429_observations).where(
+                        _bot_429_observations.c.account == account,
+                        _bot_429_observations.c.chat_id == chat_id,
+                    ).values(
+                        observations=_bot_429_observations.c.observations + 1,
+                        last_observed_ms=case(
+                            (_bot_429_observations.c.last_observed_ms < timestamp,
+                             timestamp),
+                            else_=_bot_429_observations.c.last_observed_ms,
+                        ),
+                        last_retry_after_seconds=case(
+                            (_bot_429_observations.c.last_observed_ms <= timestamp,
+                             retry_after),
+                            else_=_bot_429_observations.c.last_retry_after_seconds,
+                        ),
+                    )
+                )
+                if observed.rowcount != 1:
+                    self.db.connection.execute(insert(_bot_429_observations).values(
+                        account=account, chat_id=chat_id,
+                        observations=1, last_observed_ms=timestamp,
+                        last_retry_after_seconds=retry_after,
+                    ))
                 self.db.commit()
                 return
             except (SQLIntegrityError, SQLOperationalError):
@@ -281,6 +320,18 @@ class BotFileIndex:
             except BaseException:
                 self.db.connection.rollback()
                 raise
+
+    def total_explicit_429_observations(self) -> int:
+        """Non-sensitive SQL-wide count of definite Bot 429 rejections.
+
+        Compare readings at the beginning and end of a real-host soak.
+        Synthetic tests must never be presented as production 429 evidence.
+        """
+        value = self.db.connection.execute(
+            select(func.coalesce(func.sum(_bot_429_observations.c.observations), 0))
+        ).scalar_one()
+        self.db.commit()
+        return int(value)
 
     def shared_cooldown_wait(self, account: str, chat_id: int, *,
                              now_ms: int | None = None) -> float:

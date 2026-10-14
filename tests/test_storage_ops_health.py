@@ -231,3 +231,28 @@ def test_operator_unresolved_bot_inventory_requires_auth_and_has_no_side_effects
         ).scalar_one() == 0
     finally:
         db.close()
+
+
+def test_operator_health_exposes_only_aggregate_explicit_429_total(admin):
+    """Cross-host 429 evidence has no chat IDs, account aliases, or tokens."""
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+
+    client, url, _ = admin
+    conn = connect_database(url)
+    try:
+        index = BotFileIndex(conn)
+        index.reserve_send_slot("private-429-account", -100987654321, 0,
+                                now_ms=1000)
+        index.impose_shared_cooldown(
+            "private-429-account", -100987654321, 9, now_ms=1000,
+        )
+        assert index.total_explicit_429_observations() == 1
+    finally:
+        conn.close()
+    endpoint = "/api/v1/admin/storage/health"
+    assert client.get(endpoint).status_code in (401, 403)
+    response = client.get(endpoint, auth=("testadmin", "secure-auth-password"))
+    assert response.status_code == 200, response.text
+    assert response.json()["bot_explicit_429_total"] == 1
+    for sensitive in ("private-429-account", "-100987654321", "bot_token"):
+        assert sensitive not in response.text

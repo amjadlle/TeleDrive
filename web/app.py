@@ -1102,6 +1102,7 @@ def storage_operations_health(_: None = Depends(require_auth)):
         bot_index = BotFileIndex(conn)
         unjournaled_bot_acks = bot_index.unjournaled_count()
         unresolved_bot_sends = bot_index.unresolved_count()
+        explicit_bot_429_count = bot_index.total_explicit_429_observations()
         states = {state: int(count) for state, count in counts}
         alerts = []
         if unresolved_bot_sends:
@@ -1149,6 +1150,7 @@ def storage_operations_health(_: None = Depends(require_auth)):
             "stale_multipart_sample_count": len(completing),
             "unjournaled_bot_ack_count": unjournaled_bot_acks,
             "unresolved_bot_send_count": unresolved_bot_sends,
+            "bot_explicit_429_total": explicit_bot_429_count,
             "samples_truncated": truncated,
             "telegram_messages_retained": gc.total_telegram_messages,
             "live_object_heads": gc.live_object_heads,
