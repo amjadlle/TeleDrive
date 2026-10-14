@@ -179,3 +179,84 @@ def test_legacy_cutover_large_directory_cap_never_reads_telegram(tmp_path):
         assert remote.uploads == 0 and remote.deletions == 0
     finally:
         db.close()
+
+
+def test_cutover_detects_late_same_size_edit_even_with_original_mtime(tmp_path):
+    """A second file's Telegram read must not mask a late edit to the first."""
+    import os
+
+    db, queue, cfg, src, _, remote = scenario(tmp_path, sizes=(65537, 65537))
+    try:
+        for _ in range(2):
+            assert asyncio.run(queue.run_next(
+                remote, allowed_root=src, scratch_directory=src,
+                chunk_size=32768,
+            ))["state"] == "done"
+        assert asyncio.run(inspect(cfg, queue, remote, src))["verified"]
+        original = src / "document-0.bin"
+        stamp = original.stat()
+        source_before = original.read_bytes()
+        uploads_before = remote.uploads
+        real_download = remote.download
+        changed = False
+
+        async def edit_earlier_source(ref, destination):
+            nonlocal changed
+            # The first file has three 32KiB chunks. Only mutate it when
+            # the second file starts its independent Telegram readback.
+            if not changed and ref.message_id >= 4:
+                changed = True
+                original.write_bytes(b"Q" * len(source_before))
+                os.utime(
+                    original, ns=(stamp.st_atime_ns, stamp.st_mtime_ns),
+                )
+            await real_download(ref, destination)
+
+        remote.download = edit_earlier_source
+        report = asyncio.run(inspect(cfg, queue, remote, src))
+        assert changed
+        assert not report["verified"]
+        assert report["inconsistent"] >= 1
+        assert original.stat().st_size == stamp.st_size
+        assert original.stat().st_mtime_ns == stamp.st_mtime_ns
+        assert remote.uploads == uploads_before and remote.deletions == 0
+    finally:
+        db.close()
+
+
+def test_cutover_never_follows_last_second_symlink_outside_root(
+    tmp_path, monkeypatch,
+):
+    """A file swapped after identity check must never be opened via symlink."""
+    import teledrive.storage.cutover_acceptance as acceptance
+
+    db, queue, cfg, src, _, remote = scenario(tmp_path, sizes=(65537,))
+    outside = tmp_path / "outside-secret"
+    outside.write_bytes(b"outside root: forbidden")
+    try:
+        assert asyncio.run(queue.run_next(
+            remote, allowed_root=src, scratch_directory=src,
+            chunk_size=32768,
+        ))["state"] == "done"
+        original = acceptance._regular_source
+        path = src / "document-0.bin"
+        triggered = False
+
+        def swap_before_open(source):
+            nonlocal triggered
+            if not triggered:
+                triggered = True
+                path.unlink()
+                path.symlink_to(outside)
+            return original(source)
+
+        monkeypatch.setattr(acceptance, "_regular_source", swap_before_open)
+        before_uploads = remote.uploads
+        report = asyncio.run(inspect(cfg, queue, remote, src))
+        assert triggered
+        assert not report["verified"]
+        assert report["inconsistent"] >= 1
+        assert remote.uploads == before_uploads
+        assert remote.deletions == 0
+    finally:
+        db.close()

@@ -15,10 +15,41 @@ from typing import Any
 from sqlalchemy import select
 
 from teledrive.storage.catalog import BucketCatalog
-from teledrive.storage.engine import TelegramObjectStorage
+from teledrive.storage.engine import TelegramObjectStorage, _regular_source
 from teledrive.storage.jobs import (
     StorageUploadJobs, UploadJobError, _source_identity, jobs,
 )
+
+def _revision(info: os.stat_result) -> tuple[int, int, int, int]:
+    return (
+        int(info.st_dev), int(info.st_ino),
+        int(info.st_size), int(info.st_mtime_ns),
+    )
+
+
+def _hash_same_source_revision(
+    source: Path, root: Path, expected: os.stat_result,
+) -> str:
+    """Hash the exact regular-file inode without ever following final symlinks.
+
+    A concurrent rename/symlink replacement between path validation and open
+    must not cause verification to read arbitrary files outside source root.
+    """
+    resolved, initial = _source_identity(source, root)
+    if resolved != source or _revision(initial) != _revision(expected):
+        raise UploadJobError("Legacy source revision changed before checksum")
+    with _regular_source(source) as handle:
+        if _revision(os.fstat(handle.fileno())) != _revision(expected):
+            raise UploadJobError("Legacy source revision changed during open")
+        digest = hashlib.sha256()
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+        if _revision(os.fstat(handle.fileno())) != _revision(expected):
+            raise UploadJobError("Legacy source revision changed while hashing")
+    resolved, final = _source_identity(source, root)
+    if resolved != source or _revision(final) != _revision(expected):
+        raise UploadJobError("Legacy source revision changed after checksum")
+    return digest.hexdigest()
 
 
 async def verify_legacy_cutover(
@@ -52,6 +83,7 @@ async def verify_legacy_cutover(
     total = excluded = verified = queued = inconsistent = 0
     truncated = False
     initial_paths = []
+    verified_revisions: dict[str, tuple[os.stat_result, str]] = {}
     # Materialize at most max_files + 1 eligible entries. The original
     # sorted(os.walk(...)) scanned an unbounded number of paths into RAM
     # before noticing its max_files cap.
@@ -94,14 +126,8 @@ async def verify_legacy_cutover(
                 if live_head.id != task["object_id"] or live_head.size != before.st_size:
                     inconsistent += 1
                     continue
-                digest = hashlib.sha256()
-                with source.open("rb") as stream:
-                    while block := stream.read(1024 * 1024):
-                        digest.update(block)
-                after = _source_identity(source, root)[1]
-                if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-                        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-                        or live_head.sha256 != digest.hexdigest()):
+                source_sha = _hash_same_source_revision(source, root, before)
+                if live_head.sha256 != source_sha:
                     inconsistent += 1
                     continue
                 remote_hash = hashlib.sha256()
@@ -111,13 +137,12 @@ async def verify_legacy_cutover(
                     received += len(chunk)
                 final_stat = _source_identity(source, root)[1]
                 if (received != before.st_size
-                        or remote_hash.hexdigest() != digest.hexdigest()
-                        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-                        != (final_stat.st_dev, final_stat.st_ino,
-                            final_stat.st_size, final_stat.st_mtime_ns)):
+                        or remote_hash.hexdigest() != source_sha
+                        or _revision(before) != _revision(final_stat)):
                     inconsistent += 1
                     continue
                 verified += 1
+                verified_revisions[raw_path] = (before, source_sha)
             except (OSError, ValueError, FileNotFoundError):
                 inconsistent += 1
     if not truncated:
@@ -132,6 +157,18 @@ async def verify_legacy_cutover(
                     break
         if not truncated and after_paths != baseline:
             inconsistent += len(after_paths.symmetric_difference(baseline))
+        if not truncated:
+            # Paths staying constant is NOT sufficient. An earlier verified
+            # source may be modified while a later file is downloaded, then
+            # have its original mtime restored. Independently re-hash EVERY
+            # verified source at the end, when all Telegram reads are done.
+            for raw_path, (original_stat, source_sha) in verified_revisions.items():
+                try:
+                    source = Path(raw_path)
+                    if _hash_same_source_revision(source, root, original_stat) != source_sha:
+                        inconsistent += 1
+                except (OSError, ValueError, FileNotFoundError):
+                    inconsistent += 1
 
     return {
         "verified": total > 0 and not truncated and total == verified

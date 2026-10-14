@@ -237,3 +237,17 @@ a real one-hour physically separate host run with naturally occurring
 429s, original production DB/Telegram restore and authorized legacy read
 cutover. Do not conflate isolated test-channel evidence with operator
 production signoff or authorize physical GC from this report.
+
+
+## Late source-mutation and symlink-swap protection (2026-10-14)
+
+The read-only cutover verifier now binds every local SHA-256 to the exact
+regular-file descriptor, checking device/inode/size/mtime **before open, on
+the opened descriptor, after hashing, and after re-resolving the root**.
+An attacker racing final-component symlinks cannot redirect verification to
+an outside file. After all Telegram readbacks, it re-hashes every verified
+source revision again: a file changing while a later Telegram object is
+downloaded fails the report even when its original mtime and size are
+restored. The verifier still NEVER mutates the source, SQL, or Telegram.
+Physical quiescence and a separately held cutover lease remain mandatory;
+repeat verification immediately before authorized read switchover.
