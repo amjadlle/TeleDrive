@@ -759,3 +759,43 @@ def test_docker_fault_config_has_every_required_runtime_upload_field():
     assert "for node in web-a web-b" in harness
     assert 'load_config("/config/config.yaml")' in harness
     assert 'exec -T "$node"' in harness
+
+
+def test_disposable_docker_dev_acceptance_has_real_restart_and_restore_gates():
+    """Verify the acceptance runner does not regress into metadata-only mocks."""
+    runner = (ROOT / "scripts" / "run_docker_fault_injection.sh").read_text(
+        encoding="utf-8",
+    )
+    cases = (ROOT / "scripts" / "docker_fault_scenarios.py").read_text(
+        encoding="utf-8",
+    )
+    assert 'kill -s SIGKILL web-a' in runner
+    assert '"${COMPOSE[@]}" restart postgres' in runner
+    assert '"${COMPOSE[@]}" run -T --rm scenarios restarted' in runner
+    assert '"${COMPOSE[@]}" run -T --rm scenarios restored' in runner
+    assert '"${COMPOSE[@]}" run -T --rm scenarios acceptance' in runner
+    assert '{"seed", "restarted", "restored", "acceptance"}' in runner
+    assert 'docker_removed' in runner and 'and docker_removed' in runner
+    assert 'checks_count") == 13' in runner
+    assert '"DEV-13"' in cases and '"DEV-11"' in cases
+    assert 'InterruptedDownload' in cases
+    assert 'raise TimeoutError("injected transport disconnect")' in cases
+    assert 'missing.replace(media)' in cases
+    assert 'tempfile' not in runner or 'docker compose' in runner
+
+
+def test_disposable_dev_acceptance_does_not_require_live_telegram_credentials():
+    """No production secret may be mounted inside disposable Compose."""
+    compose = (ROOT / "docker-compose.fault-ci.yml").read_text(
+        encoding="utf-8",
+    )
+    runner = (ROOT / "scripts" / "run_docker_fault_injection.sh").read_text(
+        encoding="utf-8",
+    )
+    for private in ("TELEDRIVE_E2E_SESSION", "TELEDRIVE_BOT_TOKEN",
+                    "TELEDRIVE_STORAGE_BOT_CHAT_ID"):
+        assert private not in compose
+    assert 'if [[ -n "${TELEDRIVE_BOT_TOKEN:-}"' in runner
+    assert 'down -v --remove-orphans' in runner
+    assert 'production_acceptance_signed_off": False' in runner
+

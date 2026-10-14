@@ -27,28 +27,46 @@ cleanup() {
     echo "DOCKER FAULT hata tanısı: yalnızca rastgele izole container logları:" >&2
     "${COMPOSE[@]}" logs --no-color --tail=35 web-a web-b postgres scenarios >&2 || :
   fi
-  "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || :
-  python3 - "$WORKSPACE/scenario/evidence" "$REPORT" "$rc" <<'PY'
+  local docker_removed="false"
+  if "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1; then
+    docker_removed="true"
+  else
+    rc=1
+    echo "İzole Compose projesi tam temizlenemedi; manuel kontrol gerekli." >&2
+  fi
+  python3 - "$WORKSPACE/scenario/evidence" "$REPORT" "$rc" "$docker_removed" <<'PY'
 import json, os, pathlib, sys
 evidence, target, rc = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), int(sys.argv[3])
+docker_removed = sys.argv[4] == "true"
 receipts = {}
-for stage in ("seed", "restored"):
+required = {"seed", "restarted", "restored", "acceptance"}
+for stage in sorted(required):
     p = evidence / (stage + ".json")
     if p.is_file():
         receipts[stage] = json.loads(p.read_text(encoding="utf-8"))
+complete = (
+    rc == 0
+    and docker_removed
+    and set(receipts) == required
+    and all(r.get("verified") is True for r in receipts.values())
+    and receipts["acceptance"].get("all_checks_verified") is True
+    and receipts["acceptance"].get("checks_count") == 13
+)
 payload = {"mode": "disposable-docker-development",
-           "result": "PASS" if rc == 0 and set(receipts) == {"seed", "restored"} else "FAIL",
+           "result": "PASS" if complete else "FAIL",
            "stages": receipts, "production_acceptance_signed_off": False,
            "real_telegram_tested": False, "legacy_cutover_required": False,
-           "docker_project_removed": True, "production_data_used": False}
+           "docker_project_removed": docker_removed, "production_data_used": False}
 fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
 with os.fdopen(fd, "w") as output:
     json.dump(payload, output, indent=2, sort_keys=True)
     output.write("\n")
 print("DOCKER FAULT:", payload["result"], "| rapor:", target)
 PY
-  if [[ "$WORKSPACE" == "${TMPDIR:-/tmp}"/teledrive-p1-disposable.* ]]; then
+  if [[ "$docker_removed" == "true" && "$WORKSPACE" == "${TMPDIR:-/tmp}"/teledrive-p1-disposable.* ]]; then
     rm -rf -- "$WORKSPACE"
+  else
+    echo "İzole test workspace saklandı: Docker teardown doğrulanmadı." >&2
   fi
   exit "$rc"
 }
@@ -85,6 +103,15 @@ for node in web-a web-b; do
 done
 echo "DOCKER FAULT: 5MiB+ karışık boyut, sentetik 429/kayıp ACK, gerçek SQL/HTTP."
 "${COMPOSE[@]}" run -T --rm scenarios seed
+
+# Kill a real Web process and restart the shared PostgreSQL container.
+# No production service or global Docker volume is touched.
+echo "DOCKER FAULT: web-a SIGKILL + ortak PostgreSQL restart uygulanıyor."
+"${COMPOSE[@]}" kill -s SIGKILL web-a
+"${COMPOSE[@]}" restart postgres
+"${COMPOSE[@]}" up -d --wait postgres web-a web-b
+"${COMPOSE[@]}" run -T --rm scenarios restarted
+
 BACKUP="$WORKSPACE/scenario/evidence/native-postgres.dump"
 "${COMPOSE[@]}" exec -T postgres pg_dump -U teledrive -d teledrive_dev -Fc > "$BACKUP"
 test -s "$BACKUP"
@@ -102,4 +129,6 @@ fi
 "${COMPOSE[@]}" exec -T postgres pg_restore -U teledrive -d teledrive_restore --exit-on-error < "$BACKUP"
 echo "DOCKER FAULT: bağımsız restore, SHA/Range ve medya bozulma enjeksiyonu."
 "${COMPOSE[@]}" run -T --rm scenarios restored
+echo "DOCKER FAULT: DEV-01..13 acceptance doğrulanıyor."
+"${COMPOSE[@]}" run -T --rm scenarios acceptance
 echo "DOCKER FAULT: PASS; yalnızca izole Compose projesi temizleniyor."

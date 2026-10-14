@@ -48,6 +48,9 @@ oluşturur. İçinde:
 | DEV-08 | Kopuk/bozuk SQL yedeği | Kopyası kasıtlı bozulan arşiv native pg_restore tarafından reddedilir |
 | DEV-09 | Bozuk Telegram media chunk | Download fail-closed, yarım çıktı yayımlanmaz, medya onarılınca tekrar okunur |
 | DEV-10 | İzinli yaşam döngüsü | Projeye özel Docker volume ve container'lar temizlenir; üretim ortamı değiştirilmez |
+| DEV-11 | Gerçek SIGKILL + PostgreSQL restart | web-a gerçek container SIGKILL, PostgreSQL restart, HEAD/429/ACK/readback tekrar kontrol edilir |
+| DEV-12 | Eksik media + yarıda kopan indirme | Chunk kaybolur veya ikinci chunk'ta timeout olur; sağlam hedef korunur, sonra remote restore ile SHA geçer |
+| DEV-13 | Birleşik P1 DEV kabul raporu | Dört kanıt dosyası ve 13 kapı doğrulanmadan PASS olmaz; Compose cleanup sonucu doğrulanır |
 
 Bu testler *Docker motoru, gerçek PostgreSQL ve gerçek Web API* kullanır;
 ancak Telegram upload/download **simüle edilir**. Gerçek Telegram
@@ -111,3 +114,31 @@ karşılaştırır; değişen şema ile senaryonun sessizce ayrışmasını önl
 
 Bu düzeltmeler hiçbir üretim servisini başlatmaz veya gerçek Telegram
 kanalına bağlanmaz; tamamı rastgele adlandırılmış Docker DEV ortamındadır.
+
+### DEV-11, DEV-12 ve DEV-13: otomatik sıfır kurulum kabulü
+
+Yeni gerçek Docker aşamaları: seed -> web-a SIGKILL + PostgreSQL restart ->
+restarted -> native PostgreSQL dump/corruption/restore -> restored ->
+acceptance -> izole Compose down -v. Bunlar yalnızca benzersiz test projesini
+etkiler. Host makinesindeki production container/volume temizlenmez.
+
+DEV-11: iki gerçek TeleDrive Web prosesinin ortak SQL bağlantısı, önceki
+manifest HEAD, kayıp ACK fence, sentetik 429 ve medya checksum bilgileri
+SIGKILL/SQL restart sonrası yeni test prosesinden tekrar okunur.
+
+DEV-12: bozuk uzak media, eksik Telegram-simülasyon mesajı ve ikinci
+parçada transport timeout kontrol edilir. Her arızada mevcut sağlam hedef
+korunur ve remote media onarılınca SHA/Range tekrar geçer.
+
+DEV-13: seed.json, restarted.json, restored.json ve acceptance.json
+makine tarafından denetlenir. checks_count=13; silme devre dışı.
+Teardown başarısız olursa rapor PASS olamaz.
+
+Çalıştırma: python scripts/p1_acceptance_wizard.py
+Alternatif: bash scripts/run_docker_fault_injection.sh
+Rapor: .docker-fault-evidence/docker-fault-<random>.json (0600).
+
+Github Actions: TeleDrive Docker Fault Injection CI; başarı için
+workflow result=success ve artifact'te dört DEV kanıtı bulunmalı.
+Bu simüle testlerin hiçbiri gerçek Telegram/üretim multi-host kabulü
+veya legacy cutover imzası değildir.
