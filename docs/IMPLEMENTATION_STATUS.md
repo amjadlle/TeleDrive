@@ -1117,3 +1117,23 @@ Do not mark P1 fully finished until those distinct production receipts exist.
 - Production physical multi-host rate-limit acceptance is still open:
   SQL-sharing deterministic tests and one process on CI do not substitute
   for an independently evidenced one-hour deployment soak.
+
+
+## P1 CI end-to-end audit: all-SHA and live channel isolation (2026-10-14)
+
+- Database, Desktop, Storage API and release-verification workflows now run
+  on every configured push, and database/desktop/storage CI run on every PR;
+  narrow path filters no longer let acceptance evidence come from older SHAs.
+- Telegram Bot E2E, Telethon user E2E and explicit PostgreSQL multiworker Bot
+  E2E now share one repository-scoped concurrency group across branch names.
+  Live writes already in progress are not cancelled; pending GitHub Actions
+  runs may be replaced, so count only completed, successful current-SHA runs.
+- `tests/test_ci_workflows.py` now guards unfiltered workflows, checks every
+  test module is listed in at least one workflow, and asserts all three live
+  E2E workloads share the protected-channel scheduling group.
+- The prior `dde5a03` Bot E2E retry 38525688266 (attempt 2) passed after
+  migrating `TELEDRIVE_E2E_BOT_CHAT_ID` from a variable to an Actions Secret.
+  This is live **dedicated test-channel** evidence, not production signoff.
+- Revalidate the seven standard checks at the newest SHA. True physical
+  multi-host 429 soak, production-representative DR and authorized legacy
+  cutover remain operator-controlled acceptance gates.
