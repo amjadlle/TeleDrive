@@ -182,8 +182,8 @@ class BotFileIndex:
                 or not 0 <= interval_seconds <= 60):
             raise ValueError("Invalid Bot API channel rate interval")
         gap = int(interval_seconds * 1000 + 0.5)
-        if gap == 0:
-            return 0.0
+        # Even when local pacing is disabled, allocate a SQL slot row:
+        # a definitive Telegram 429 must remain visible to every worker.
         timestamp = int(time.time() * 1000) if now_ms is None else now_ms
         if type(timestamp) is not int or timestamp < 0:
             raise ValueError("Invalid shared Bot time")
@@ -673,17 +673,16 @@ class BotApiChunkTransport:
                 pause = max(shared_wait, self._next_upload - time.monotonic(), 0.0)
                 if pause:
                     await asyncio.sleep(pause)
-                # A different worker may receive an explicit Telegram 429
-                # while this process is sleeping for its SQL-reserved slot.
-                # Never let a stale reservation bypass that newer cooldown.
-                if self._min_upload_interval > 0:
-                    while True:
-                        backoff = self.index.shared_cooldown_wait(
-                            self.account, self.chat_id,
-                        )
-                        if not backoff:
-                            break
-                        await asyncio.sleep(backoff)
+                # A different worker may receive Telegram 429 after we
+                # reserved this slot. Enforce the server cooldown even for
+                # transports with min_upload_interval=0 (no local pacing).
+                while True:
+                    backoff = self.index.shared_cooldown_wait(
+                        self.account, self.chat_id,
+                    )
+                    if not backoff:
+                        break
+                    await asyncio.sleep(backoff)
                 try:
                     message = await self.api.call("sendDocument", {
                         "chat_id": self.chat_id,
@@ -693,10 +692,9 @@ class BotApiChunkTransport:
                 except BotApiRateLimited as exc:
                     # Propagate the server's explicit non-acceptance window
                     # across all workers before any retry or failure exit.
-                    if self._min_upload_interval > 0:
-                        self.index.impose_shared_cooldown(
-                            self.account, self.chat_id, exc.retry_after,
-                        )
+                    self.index.impose_shared_cooldown(
+                        self.account, self.chat_id, exc.retry_after,
+                    )
                     self._next_upload = time.monotonic() + max(
                         self._min_upload_interval, exc.retry_after,
                     )
