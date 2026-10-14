@@ -39,6 +39,8 @@ from teledrive.s3.cors import (BucketCORSStore, CORSError, MAX_CORS_XML_BYTES,
     parse_cors_xml, cors_xml, matching_rule, response_cors_headers)
 from teledrive.s3.versioning import (VersioningError, MAX_VERSIONING_XML_BYTES,
     parse_versioning_xml, versioning_xml)
+from teledrive.s3.public_access import (PublicAccessError, MAX_PUBLIC_ACCESS_XML_BYTES,
+    parse_public_access_xml, public_access_xml)
 from teledrive.s3.object_metadata import (
     ObjectMetadataStore, ObjectMetadataError, parse_object_metadata, signed_header_names,
     STANDARD_HEADERS,
@@ -202,6 +204,26 @@ def _verify_upload_sha256(
         if "content-md5" in signed_header_names(request):
             return
     raise SigV4Error("XAmzContentSHA256Mismatch", "Signed upload checksum mismatch")
+
+
+def _verify_bucket_control_payload(request: Request, body: bytes) -> None:
+    """Exact signed checksum policy for small S3 bucket-control XML payloads."""
+    import zlib
+    for header, actual in (
+        ("x-amz-checksum-crc32", zlib.crc32(body) & 0xffffffff),
+        ("x-amz-checksum-crc32c", crc32c(body)),
+    ):
+        declared = request.headers.get(header)
+        if declared is not None and not hmac.compare_digest(
+            declared, base64.b64encode(actual.to_bytes(4, "big")).decode(),
+        ):
+            raise SigV4Error("BadDigest", "Bucket XML checksum mismatch")
+    _verify_upload_sha256(
+        request, hashlib.sha256(body).digest(),
+        md5_digest=hashlib.md5(body, usedforsecurity=False).digest(),
+        sha1_digest=hashlib.sha1(body, usedforsecurity=False).digest(),
+        crc64nvme_value=crc64nvme(body),
+    )
 
 
 def _initial_tags(request: Request, owner: str, credentials: S3CredentialStore):
@@ -554,6 +576,14 @@ async def _handle(request: Request):
         is_bucket_tagging = bool(bucket and not separator and "tagging" in request.query_params)
         is_bucket_cors = bool(bucket and not separator and "cors" in request.query_params)
         is_bucket_versioning = bool(bucket and not separator and "versioning" in request.query_params)
+        is_public_access_block = bool(bucket and not separator and "publicAccessBlock" in request.query_params)
+        if is_public_access_block and (
+            len(request.query_params.getlist("publicAccessBlock")) != 1
+            or request.query_params.get("publicAccessBlock") != ""
+            or any(name != "publicAccessBlock" and not name.startswith("X-Amz-")
+                   for name in request.query_params)
+        ):
+            return _error("InvalidArgument", "Invalid public access control selector", 400)
         if is_bucket_versioning and (
             len(request.query_params.getlist("versioning")) != 1
             or request.query_params.get("versioning") != ""
@@ -602,6 +632,11 @@ async def _handle(request: Request):
                 "GET": "s3:GetBucketVersioning",
                 "PUT": "s3:PutBucketVersioning",
             }.get(request.method)
+        elif is_public_access_block:
+            action = {
+                "GET": "s3:GetBucketPublicAccessBlock",
+                "PUT": "s3:PutBucketPublicAccessBlock",
+            }.get(request.method)
         elif bucket and not separator and "location" in request.query_params:
             action = "s3:GetBucketLocation" if request.method == "GET" else None
         elif mpu_start or mpu_part or mpu_complete:
@@ -618,6 +653,8 @@ async def _handle(request: Request):
             return _error("NotImplemented", "This multipart operation is unsupported", 501)
         # A selector on an object path must never silently degrade to a
         # regular object operation (particularly an unexpected DELETE).
+        if "publicAccessBlock" in request.query_params and not is_public_access_block:
+            return _error("NotImplemented", "Public access control is bucket-only", 501)
         if "versioning" in request.query_params and not is_bucket_versioning:
             return _error("NotImplemented", "Bucket versioning is a bucket-only operation", 501)
         if action is None or (separator and "partNumber" in request.query_params and not mpu_part):
@@ -628,7 +665,7 @@ async def _handle(request: Request):
             "acl", "versions", "lifecycle", "policy",
             "notification", "replication",
             "retention", "legal-hold", "logging",
-            "encryption", "object-lock", "publicAccessBlock", "versionId",
+            "encryption", "object-lock", "versionId",
         }
         if any(parameter in request.query_params and (
             (parameter != "versionId" or not (is_version_read or is_version_tagging or is_version_delete))
@@ -796,6 +833,22 @@ async def _handle(request: Request):
                         ET.SubElement(deleted, "DeleteMarkerVersionId").text = marker
                 return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml", status_code=200)
+            if is_public_access_block:
+                if bucket not in catalog.list_buckets():
+                    return _error("NoSuchBucket", "Bucket does not exist", 404)
+                if request.method == "GET":
+                    return Response(public_access_xml(), media_type="application/xml")
+                if request.method == "PUT":
+                    payload = bytearray()
+                    async for block in request.stream():
+                        payload.extend(block)
+                        if len(payload) > MAX_PUBLIC_ACCESS_XML_BYTES:
+                            raise PublicAccessError("MalformedXML",
+                                                    "Public access XML exceeds 16 KiB")
+                    _verify_bucket_control_payload(request, bytes(payload))
+                    parse_public_access_xml(bytes(payload))
+                    return Response(status_code=200)
+                return _error("NotImplemented", "Unsupported public access method", 501)
             if is_bucket_versioning:
                 if bucket not in catalog.list_buckets():
                     return _error("NoSuchBucket", "Bucket does not exist", 404)
@@ -808,33 +861,7 @@ async def _handle(request: Request):
                         if len(payload) > MAX_VERSIONING_XML_BYTES:
                             raise VersioningError("MalformedXML",
                                                   "Versioning XML exceeds 16 KiB")
-                    # Boto3 may use Content-MD5 or a modern default SDK
-                    # CRC32 checksum for bucket control-plane requests.
-                    # Every advertised checksum must match exact XML bytes.
-                    import zlib
-                    crc_headers = {
-                        "x-amz-checksum-crc32": zlib.crc32(payload) & 0xffffffff,
-                        "x-amz-checksum-crc32c": crc32c(payload),
-                    }
-                    for name, value in crc_headers.items():
-                        declared = request.headers.get(name)
-                        if declared is not None and not hmac.compare_digest(
-                            declared, base64.b64encode(
-                                value.to_bytes(4, "big"),
-                            ).decode("ascii"),
-                        ):
-                            raise VersioningError("BadDigest",
-                                                  "Bucket versioning checksum mismatch")
-                    _verify_upload_sha256(
-                        request, hashlib.sha256(payload).digest(),
-                        md5_digest=hashlib.md5(
-                            payload, usedforsecurity=False,
-                        ).digest(),
-                        sha1_digest=hashlib.sha1(
-                            payload, usedforsecurity=False,
-                        ).digest(),
-                        crc64nvme_value=crc64nvme(payload),
-                    )
+                    _verify_bucket_control_payload(request, bytes(payload))
                     parse_versioning_xml(bytes(payload))
                     return Response(status_code=200)
                 return _error("NotImplemented", "Unsupported bucket versioning method", 501)
@@ -1615,6 +1642,8 @@ async def _handle(request: Request):
             response.headers["Connection"] = "close"
         return response
     except BatchDeleteError as exc:
+        return _error(exc.code, str(exc), exc.status)
+    except PublicAccessError as exc:
         return _error(exc.code, str(exc), exc.status)
     except VersioningError as exc:
         return _error(exc.code, str(exc), exc.status)

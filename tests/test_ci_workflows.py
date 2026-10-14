@@ -1000,3 +1000,9 @@ def test_bucket_versioning_controls_are_exercised_in_all_storage_ci():
         commands = "\n".join(s.get("run", "") for job in workflow(name)["jobs"].values()
                              for s in job["steps"])
         assert "tests/test_s3_bucket_versioning.py" in commands
+
+def test_immutable_public_access_controls_have_actual_s3_regression_coverage():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        commands = "\n".join(s.get("run", "") for j in workflow(name)["jobs"].values()
+                             for s in j["steps"])
+        assert "tests/test_s3_public_access_block.py" in commands

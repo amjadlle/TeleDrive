@@ -35,6 +35,7 @@ PERMISSIONS = frozenset({
     "s3:GetBucketTagging", "s3:PutBucketTagging", "s3:DeleteBucketTagging",
     "s3:GetBucketCORS", "s3:PutBucketCORS",
     "s3:GetBucketVersioning", "s3:PutBucketVersioning",
+    "s3:GetBucketPublicAccessBlock", "s3:PutBucketPublicAccessBlock",
 })
 DEFAULT_PERMISSIONS = tuple(sorted(PERMISSIONS))
 

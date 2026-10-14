@@ -24,7 +24,7 @@
 
 - **State and durability:** SQLAlchemy with SQLite/PostgreSQL/MySQL integration testing, immutable object/chunk manifests, SHA-256 verification, ranged reads, fencing and persistent job history.
 - **API and credentials:** separately scoped REST Bearer credentials and S3 SigV4 credentials, signed request checks, conditional writes, restricted administrative operations and fail-closed unsupported inputs.
-- **Supported S3 subset:** object/bucket operations, a bounded multipart implementation, conditional operations, selected versioning (including safe always-Enabled bucket versioning controls), tags, copies, CORS and presigned requests. Tested clients include boto3, AWS CLI and rclone.
+- **Supported S3 subset:** object/bucket operations, a bounded multipart implementation, conditional operations, selected versioning (including safe always-Enabled controls), fixed all-private Public Access Block, tags, copies, CORS and presigned requests. Tested clients include boto3, AWS CLI and rclone.
 - **Not complete S3:** arbitrary AWS lifecycle and bucket policy behavior, SSE, every checksum mode, full delete-marker semantics and untested client combinations are not warranted.
 - **Telegram transports:** dedicated test-channel Bot API and user MTProto scenarios plus a shared PostgreSQL multiworker scenario. Credentials and private test channel are isolated from production.
 - **Backups:** native PostgreSQL/MySQL backups and separate SQL restore rehearsals, plus disposable Docker fault injection. These exercises do not certify recovery of the owner's original Telegram account or channel.
