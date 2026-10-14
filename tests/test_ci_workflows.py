@@ -416,8 +416,8 @@ def test_e2e_chat_variable_cleanup_never_logs_unmasked_value(
     ]
     assert all(kwargs["capture_output"] for _, kwargs in calls)
     assert (len(calls) == 2) == present
-    assert sample_id not in capsys.readouterr().out
-    assert sample_id not in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert sample_id not in captured.out + captured.err
 
 
 @pytest.mark.parametrize("kind", ["permission", "malformed-json", "wrong-shape"])
