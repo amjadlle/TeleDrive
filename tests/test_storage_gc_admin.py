@@ -111,3 +111,24 @@ def test_admin_gc_audit_counts_unjournaled_ack_and_ambiguous_bot_send(admin):
     assert inventory["eligible_for_deletion"] == 0
     assert inventory["dry_run"] is True
     assert inventory["physical_deletion_enabled"] is False
+
+
+def test_gc_audit_counts_stray_file_ids_without_implicitly_authorizing_deletion(admin):
+    """An older Bot file_id without a receipt/journal is still remote media."""
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+    client, url, _ = admin
+    db = connect_database(url)
+    try:
+        index = BotFileIndex(db)
+        index.put("ci-bot", -100123456, 883, "ci-only-opaque-file-id")
+    finally:
+        db.close()
+    response = client.get("/api/v1/admin/storage/gc-audit",
+                          auth=("testadmin", "secure-auth-password"))
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["unattributed_bot_file_ids"] == 1
+    assert report["total_telegram_messages"] == 1
+    assert report["eligible_for_deletion"] == 0
+    assert report["physical_deletion_enabled"] is False
+    assert "ci-only-opaque-file-id" not in response.text

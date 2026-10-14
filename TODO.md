@@ -18,6 +18,8 @@
 - [x] Add a bounded, read-only marker inventory for one owner-authorized Telegram channel, with private output and synthetic regression coverage; candidate hints are not recovery proofs.
 - [x] Compare history candidates against independently supplied bucket/key, full SHA and message identity; real CI performs isolated byte-verified restore of its own Telegram test fixture.
 - [ ] Extend trustworthy recovery of unknown original Telegram history beyond candidate markers without inventing bucket/key, full SHA-256 or missing version metadata.
+- [x] Align S3 documentation with CRC64NVME integration-test coverage; retain explicit limits for other checksum modes.
+- [x] Count Bot file IDs without journal/receipt evidence in non-destructive GC audits.
 - [ ] Complete tested S3 capabilities beyond the documented subset (for example lifecycle, policies, SSE and currently unsupported checksum modes).
 - [ ] Establish longer-duration real-environment capacity benchmarks on owner-controlled infrastructure.
 

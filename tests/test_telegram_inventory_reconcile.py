@@ -130,3 +130,30 @@ def test_empty_object_is_not_supported_by_marker_inventory():
     answer = reconcile_inventory(inventory, [plan])
     assert answer["matches"][0]["result"] == "unproven_empty_object"
     assert not answer["all_plans_match"]
+
+
+def test_strict_external_manifest_preflight_blocks_cli_before_telegram(tmp_path, monkeypatch):
+    """A mismatch must never connect to Telegram or create a destination DB."""
+    import sys
+    import json
+    from scripts import rebuild_from_telegram as cli
+
+    plan, inventory = inputs()
+    inventory["candidate_objects"][0]["chunks"][0]["message_id"] += 100
+    plan_path = tmp_path / "plan.json"
+    inventory_path = tmp_path / "inventory.json"
+    destination = tmp_path / "must-not-create.sqlite"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+    monkeypatch.setenv("TELEDRIVE_REBUILD_API_ID", "123")
+    monkeypatch.setenv("TELEDRIVE_REBUILD_API_HASH", "ci-fake-api-hash")
+    monkeypatch.setenv("TELEDRIVE_REBUILD_SESSION", "ci-fake-session")
+    monkeypatch.setattr(sys, "argv", [
+        "rebuild_from_telegram.py", "--plan", str(plan_path),
+        "--inventory", str(inventory_path), "--new-database",
+        str(destination), "--account", "ci", "--target", "ci-target",
+    ])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert not destination.exists()

@@ -39,6 +39,8 @@ class GCInventory:
     unjournaled_bot_receipts: int = 0
     # A pending pre-send intent MAY correspond to a Telegram message.
     unresolved_bot_intents: int = 0
+    # File IDs not backed by a chunk journal or ACK receipt remain unknown media.
+    unattributed_bot_file_ids: int = 0
 
 
 class StorageGCInventory:
@@ -160,9 +162,13 @@ class StorageGCInventory:
             raise RuntimeError("Bot reconciliation metadata incomplete")
         unresolved_bot_intents = 0
         unjournaled_bot_receipts = 0
+        unattributed_bot_file_ids = 0
+        has_files = inspector.has_table("storage_bot_file_ids")
+        if has_intents and not has_files:
+            raise RuntimeError("Bot file index schema incomplete")
         if has_intents:
             from teledrive.storage.bot_api_adapter import (
-                _bot_send_intents, _bot_receipts,
+                _bot_send_intents, _bot_receipts, _bot_files,
             )
             unresolved_bot_intents = int(connection.execute(
                 select(func.count()).select_from(_bot_send_intents)
@@ -175,6 +181,35 @@ class StorageGCInventory:
                         chunks.c.message_id == _bot_receipts.c.message_id,
                     ))
                 ).where(chunks.c.object_id.is_(None))
+            ).scalar_one())
+            # File IDs can survive old or partially migrated Bot operations.
+            # A file_id with neither immutable journal nor durable receipt
+            # is still a known remote asset, never automatically collectible.
+            unclaimed = _bot_files.outerjoin(chunks, and_(
+                _bot_files.c.account == chunks.c.account,
+                _bot_files.c.chat_id == chunks.c.chat_id,
+                _bot_files.c.message_id == chunks.c.message_id,
+            )).outerjoin(_bot_receipts, and_(
+                _bot_files.c.account == _bot_receipts.c.account,
+                _bot_files.c.chat_id == _bot_receipts.c.chat_id,
+                _bot_files.c.message_id == _bot_receipts.c.message_id,
+            ))
+            unattributed_bot_file_ids = int(connection.execute(
+                select(func.count()).select_from(unclaimed).where(
+                    chunks.c.object_id.is_(None),
+                    _bot_receipts.c.object_id.is_(None),
+                )
+            ).scalar_one())
+        elif has_files:
+            from teledrive.storage.bot_api_adapter import _bot_files
+            unattributed_bot_file_ids = int(connection.execute(
+                select(func.count()).select_from(_bot_files.outerjoin(
+                    chunks, and_(
+                        _bot_files.c.account == chunks.c.account,
+                        _bot_files.c.chat_id == chunks.c.chat_id,
+                        _bot_files.c.message_id == chunks.c.message_id,
+                    )
+                )).where(chunks.c.object_id.is_(None))
             ).scalar_one())
 
         # Roots with no current refs can still be historical versions; do not
@@ -195,6 +230,7 @@ class StorageGCInventory:
             total_manifests=len(all_objects),
             total_telegram_messages=(
                 len(message_identities) + unjournaled_bot_receipts
+                + unattributed_bot_file_ids
             ),
             live_object_heads=len(head_ids),
             copy_aliases=len(aliases),
@@ -203,4 +239,5 @@ class StorageGCInventory:
             eligible_for_deletion=0,
             unjournaled_bot_receipts=unjournaled_bot_receipts,
             unresolved_bot_intents=unresolved_bot_intents,
+            unattributed_bot_file_ids=unattributed_bot_file_ids,
         )
