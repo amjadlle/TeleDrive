@@ -186,3 +186,48 @@ def test_nonmatching_second_remote_owner_fails_the_entire_batch(tmp_path):
         asyncio.run(restore_isolated_catalog_batch(
             [first, second], OwnerMismatch({100:b"first", 301:b"second"}), target))
     assert not target.exists()
+
+
+def test_second_sql_publication_error_leaves_no_visible_database(tmp_path, monkeypatch):
+    """Publishing object one cannot expose half of object two."""
+    from teledrive.storage.rebuild import restore_isolated_catalog_batch
+    first = make_plan([b"one"])
+    second = make_plan([b"two"])
+    second["key"] = "original/other"
+    second["chunks"][0]["message_id"] = 301
+    original_publish = BucketCatalog.publish
+    invocations = 0
+
+    def break_second(self, identifier, *, now, expected_generation=None,
+                     expected_object_id=None):
+        nonlocal invocations
+        invocations += 1
+        if invocations == 2:
+            raise RuntimeError("Simulated SQL publishing failure")
+        return original_publish(
+            self, identifier, now=now,
+            expected_generation=expected_generation,
+            expected_object_id=expected_object_id,
+        )
+
+    monkeypatch.setattr(BucketCatalog, "publish", break_second)
+    destination = tmp_path / "no-partial-publish.db"
+    with pytest.raises(RuntimeError, match="SQL publishing"):
+        asyncio.run(restore_isolated_catalog_batch(
+            [first, second], TelegramSource({100: b"one", 301: b"two"}),
+            destination,
+        ))
+    assert invocations == 2
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".teledrive-rebuild-*"))
+
+
+def test_reconstructed_catalog_is_private_on_disk(tmp_path):
+    from teledrive.storage.rebuild import restore_isolated_catalog_batch
+    import stat
+    plan = make_plan([b"private"])
+    destination = tmp_path / "private-rebuild.db"
+    asyncio.run(restore_isolated_catalog_batch(
+        [plan], TelegramSource({100: b"private"}), destination,
+    ))
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600

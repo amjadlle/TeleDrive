@@ -208,11 +208,13 @@ async def restore_isolated_catalog_batch(plans: list[dict], transport,
         with sqlite3.connect(f"file:{staging}?mode=ro", uri=True) as audit:
             if audit.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise ValueError("Staging SQLite integrity check failed")
+        # Protect original message coordinates while staging is still private.
+        # chmod AFTER publication would briefly expose the recovered catalog.
+        os.chmod(staging, 0o600)
         try:
             os.link(staging, destination, follow_symlinks=False)
         except FileExistsError as exc:
             raise FileExistsError("An existing database must not be overwritten") from exc
-        os.chmod(destination, 0o600)
     return {
         "verified": True, "isolated_database_created": True,
         "object_count": len(validated),

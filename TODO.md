@@ -20,7 +20,7 @@ Date: 2026-10-14. Primary objective: close the **supported P0/P1 development sco
 - [x] Recheck SQL HEAD/version/alias/multipart/Bot ACK references before recovery cleanup; add regression tests.
 - [ ] Authorize **physical** version-aware Telegram GC only with a sealed independent payload backup, complete ownership proof, two-person approval and a tested replacement/recovery plan. It remains disabled.
 - [ ] P2 advanced S3 lifecycle/policies/SSE/full SDK parity.
-- [x] Add owner-proofed single-object Telegram rebuild into a new isolated SQLite catalog and negative tests.
+- [x] Add owner-proofed Telegram rebuild with **atomic 1–128 object batches**, exact message/SHA evidence, pre-publication 0600 permissions, and rollback-on-staging-error tests.
 - [ ] Full original-channel history discovery, safe migration and long-duration physical-host capacity benchmarks (requires owner-held data/hosts).
 - [x] Add dual-attested, fail-closed offline production-evidence verifier for soak/original-media DR/cutover reports.
 - [ ] Conduct **actual** 1h+ physical multi-host soak, original-channel DR and owner-approved legacy cutover (or signed no-legacy exemption) on a real installation.

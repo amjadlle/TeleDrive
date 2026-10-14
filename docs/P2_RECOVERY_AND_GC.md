@@ -104,3 +104,5 @@ the tested v1.0.7 P0/P1 release scope.
 ### Atomic multi-object rebuild (unreleased development)
 
 The recovery plan may also be a JSON object of the form `{"objects": [<complete original object plans>]}`, with 1–128 independently verified objects, up to 4,096 chunks and 1 GiB total content. Every bucket/key, object UUID and Telegram message identity must be unique. All remote objects and their byte-level proofs are validated **before** the staging SQLite database is created. The database is committed and integrity-checked privately; an exclusive filesystem link publishes the complete catalog atomically without overwriting existing SQL. Any failed object leaves no published output database. Original published version history is **not** inferred from Telegram captions.
+
+The staged recovered SQLite catalog is permissioned `0600` before publishing its pathname; SQL errors during construction leave no destination file. This is a **new** isolated database, never a write-back to the original installation.
