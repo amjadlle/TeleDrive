@@ -135,6 +135,65 @@ def test_tampered_or_truncated_chunk_fails_closed(store, tmp_path, replacement):
     assert not (tmp_path / "out").exists()
 
 
+def test_transient_corrupt_telegram_read_retries_only_immutable_download(
+    store, tmp_path
+):
+    class FlakyTelegram(MemoryTelegram):
+        def __init__(self):
+            super().__init__()
+            self.corrupt_once = True
+
+        async def download(self, reference, destination):
+            await super().download(reference, destination)
+            if reference.ordinal == 1 and self.corrupt_once:
+                self.corrupt_once = False
+                # Same size but different content exercises SHA, not length.
+                data = destination.read_bytes()
+                destination.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+
+    backend = FlakyTelegram()
+    engine = TelegramObjectStorage(store, backend, chunk_size=4)
+    payload = b"0123456789AB"
+    source = tmp_path / "original"
+    source.write_bytes(payload)
+    obj = execute(engine.put_file("bucket", "key", source))
+    initial_uploads = backend.uploads
+    source.unlink()
+    restored = tmp_path / "restored"
+    execute(engine.download_to_path(obj.id, restored))
+    assert restored.read_bytes() == payload
+    assert backend.uploads == initial_uploads  # Never resend after a bad read
+    assert backend.downloads == 4  # Three chunks plus one SHA retry
+    assert not list(tmp_path.glob(".teledrive-*"))
+    # A second, independently checked Range read uses the same SQL identity.
+    async def fetch_range():
+        return b"".join([block async for block in engine.iter_bytes(
+            obj.id, start=3, end=9, block_size=2
+        )])
+    assert execute(fetch_range()) == payload[3:9]
+
+
+def test_persistent_same_size_remote_corruption_exhausts_bounded_retries(
+    store, tmp_path
+):
+    backend = MemoryTelegram()
+    engine = TelegramObjectStorage(store, backend, chunk_size=4)
+    source = tmp_path / "original"
+    source.write_bytes(b"abcdefgh")
+    obj = execute(engine.put_file("bucket", "key", source))
+    first = store.parts(obj.id)[0]
+    key = (first.account, first.chat_id, first.message_id)
+    backend.data[key] = b"ABCD"  # Same length, wrong digest.
+    output = tmp_path / "existing"
+    output.write_bytes(b"precious-existing-file")
+    with pytest.raises(IntegrityError, match="checksum mismatch"):
+        execute(engine.download_to_path(obj.id, output))
+    assert backend.downloads == 3
+    assert backend.uploads == 2  # Read retries are never Telegram sends
+    assert output.read_bytes() == b"precious-existing-file"
+    assert not list(tmp_path.glob(".teledrive-*"))
+
+
 def test_failed_upload_is_hidden_but_journaled_for_reconciliation(store, tmp_path):
     backend = MemoryTelegram()
     backend.fail_on_upload = 2

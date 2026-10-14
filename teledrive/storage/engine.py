@@ -323,12 +323,24 @@ class TelegramObjectStorage:
                 if part.offset + part.size <= start:
                     continue
                 target = root / f"read-{part.ordinal:08d}"
-                await self.transport.download(part, target)
-                if not target.is_file() or target.is_symlink():
-                    raise IntegrityError("Telegram chunk missing or unsafe")
-                size, sha = _digest_file(target)
-                if size != part.size or sha != part.sha256:
-                    raise IntegrityError("Telegram chunk checksum mismatch")
+                # Telegram's remote file endpoint can occasionally return
+                # incorrect bytes on an otherwise successful HTTPS response.
+                # A GET may safely be repeated; a send MUST NOT be. Never
+                # expose any bytes until the independently journaled digest
+                # validates. Re-read the same immutable message, boundedly,
+                # and fail closed if every attempt disagrees with the manifest.
+                for attempt in range(3):
+                    target.unlink(missing_ok=True)
+                    await self.transport.download(part, target)
+                    if not target.is_file() or target.is_symlink():
+                        raise IntegrityError("Telegram chunk missing or unsafe")
+                    size, sha = _digest_file(target)
+                    if size == part.size and sha == part.sha256:
+                        break
+                    target.unlink(missing_ok=True)
+                    if attempt == 2:
+                        raise IntegrityError("Telegram chunk checksum mismatch")
+                    await asyncio.sleep(0.25 * (attempt + 1))
                 local_start = max(0, start - part.offset)
                 local_end = min(part.size, end - part.offset)
                 with _regular_source(target) as file:
