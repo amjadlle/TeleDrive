@@ -246,8 +246,8 @@
     },
     {
       "name": "GetBucketPolicyStatus",
-      "status": "unsupported",
-      "workstream": "P2-C"
+      "status": "partial",
+      "workstream": "implemented"
     },
     {
       "name": "GetBucketEncryption",

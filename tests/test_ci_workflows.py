@@ -1033,7 +1033,7 @@ def test_real_s3_lifecycle_has_single_process_schedule_and_ci():
 
 def test_s3_compatibility_matrix_cannot_relabel_safe_lifecycle_as_full_aws():
     specs = (ROOT / "docs/S3_SPECS.md").read_text()
-    assert "**Inventory totals:** 6 supported, 31 partial, 79 unsupported;" in specs
+    assert "**Inventory totals:** 6 supported, 32 partial, 78 unsupported;" in specs
     for action in (
         "GetBucketLifecycleConfiguration", "PutBucketLifecycleConfiguration",
         "DeleteBucketLifecycle",
@@ -1050,3 +1050,9 @@ def test_s3_fail_closed_116_operation_manifest_suite_is_required():
         commands = "\n".join(s.get("run", "")
             for job in workflow(name)["jobs"].values() for s in job["steps"])
         assert "tests/test_s3_route_guard.py" in commands
+
+def test_private_bucket_policy_status_regression_is_mandatory():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        source = "\n".join(s.get("run", "")
+            for job in workflow(name)["jobs"].values() for s in job["steps"])
+        assert "tests/test_s3_policy_status.py" in source

@@ -19,7 +19,7 @@ from teledrive.s3.route_guard import validate_s3_query, S3QueryError
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL_SELECTORS = (
-    "acl", "policy", "policyStatus", "website", "notification",
+    "acl", "policy", "website", "notification",
     "notificationConfiguration", "logging", "replication", "encryption",
     "object-lock", "retention", "legal-hold", "publicAccessBlock-malformed",
     "ownershipControls", "accelerate", "requestPayment", "select",
@@ -131,7 +131,7 @@ def test_116_operation_manifest_exactly_matches_reviewed_spec():
     actual = {item["name"]: item["status"] for item in data["operations"]}
     assert expected == actual
     assert Counter(actual.values()) == {
-        "supported":6, "partial":31, "unsupported":79,
+        "supported":6, "partial":32, "unsupported":78,
     }
     assert set(item["workstream"] for item in data["operations"]) >= {
         "implemented", "P2-C", "P2-B", "P2-D", "P2-E", "P2-F", "P3-G", "P3-H",

@@ -584,6 +584,7 @@ async def _handle(request: Request):
         is_bucket_versioning = bool(bucket and not separator and "versioning" in request.query_params)
         is_public_access_block = bool(bucket and not separator and "publicAccessBlock" in request.query_params)
         is_bucket_lifecycle = bool(bucket and not separator and "lifecycle" in request.query_params)
+        is_bucket_policy_status = bool(bucket and not separator and "policyStatus" in request.query_params)
         if is_bucket_lifecycle and (
             len(request.query_params.getlist("lifecycle")) != 1
             or request.query_params.get("lifecycle") != ""
@@ -657,6 +658,8 @@ async def _handle(request: Request):
                 "PUT": "s3:PutLifecycleConfiguration",
                 "DELETE": "s3:PutLifecycleConfiguration",
             }.get(request.method)
+        elif is_bucket_policy_status:
+            action = "s3:GetBucketPolicyStatus" if request.method == "GET" else None
         elif bucket and not separator and "location" in request.query_params:
             action = "s3:GetBucketLocation" if request.method == "GET" else None
         elif mpu_start or mpu_part or mpu_complete:
@@ -862,6 +865,13 @@ async def _handle(request: Request):
                         ET.SubElement(deleted, "DeleteMarkerVersionId").text = marker
                 return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml", status_code=200)
+            if is_bucket_policy_status:
+                if bucket not in catalog.list_buckets():
+                    return _error("NoSuchBucket", "Bucket does not exist", 404)
+                # Public grants and bucket policies cannot be enabled through
+                # this private-only gateway. This is NOT a bucket policy engine.
+                return Response(_xml("PolicyStatus", [("IsPublic", "false")]),
+                                media_type="application/xml")
             if is_bucket_lifecycle:
                 if bucket not in catalog.list_buckets():
                     return _error("NoSuchBucket", "Bucket not found", 404)

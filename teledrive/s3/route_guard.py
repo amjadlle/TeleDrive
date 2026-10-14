@@ -27,11 +27,12 @@ _BUCKET_GET_MULTIPART = frozenset({
 })
 _BUCKET_CONTROL = frozenset({
     "location", "cors", "tagging", "versioning", "publicAccessBlock", "lifecycle",
+    "policyStatus",
 })
 _OBJECT_CONTROL = frozenset({"tagging", "attributes", "uploads", "uploadId", "versionId"})
 _EMPTY_FLAG = frozenset({
     "location", "cors", "tagging", "versioning", "publicAccessBlock",
-    "lifecycle", "uploads", "versions", "delete", "attributes",
+    "lifecycle", "policyStatus", "uploads", "versions", "delete", "attributes",
 })
 # No upper/lower-case folding for S3 query fields: AWS subresources are
 # case-sensitive. A misspelled control may not be silently ignored.
@@ -72,6 +73,7 @@ def validate_s3_query(method: str, bucket: str, object_path: bool, params) -> No
                 "versioning": {"GET", "PUT"},
                 "publicAccessBlock": {"GET", "PUT"},
                 "lifecycle": {"GET", "PUT", "DELETE"},
+                "policyStatus": {"GET"},
             }
             allowed = frozenset({selector}) if method in methods[selector] else frozenset()
         elif method == "GET":

@@ -102,7 +102,7 @@ jobs:
             tests/test_s3_cors.py \
             tests/test_s3_object_attributes.py \
             tests/test_s3_sigv4_defense.py \
-            tests/test_s3_fail_closed.py tests/test_s3_route_guard.py \
+            tests/test_s3_fail_closed.py tests/test_s3_route_guard.py tests/test_s3_policy_status.py \
             tests/test_s3_contract.py \
             tests/test_s3_permissions.py \
             tests/test_storage_gc_audit.py \

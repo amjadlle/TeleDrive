@@ -13,7 +13,7 @@
 | ❌ Unsupported | No supported TeleDrive contract; do not rely on that AWS method. It may be rejected as NotImplemented (501) **or** require additional fail-closed routing tests; do not assume every selector currently returns the same error. |
 | Not verified | Client, deployment configuration or optional parameter is untested; never upgrade an operation's status merely because another client happens to succeed. |
 
-**Inventory totals:** 6 supported, 31 partial, 79 unsupported; **116 AWS S3 operations**. Count operations, not request permutations. Partial operations are **not** fully supported. These statuses describe development code and tests, not a fresh CI run or independently validated production setup.
+**Inventory totals:** 6 supported, 32 partial, 78 unsupported; **116 AWS S3 operations**. Count operations, not request permutations. Partial operations are **not** fully supported. These statuses describe development code and tests, not a fresh CI run or independently validated production setup.
 
 **Machine-readable inventory:** [116-operation JSON manifest](../teledrive/s3/operation_manifest.json) is checked against every row of this matrix in [fail-closed route tests](../tests/test_s3_route_guard.py). Supported AWS subresources are explicitly allowlisted before the signer, SQL and Telegram transports can mutate data; unknown selectors cannot silently become normal bucket/object operations. This addresses a P2-0 subtask, **not** the entire protocol parity gate.\n\n**Implementation evidence:** [gateway router](../web/s3.py), [S3 protocol modules](../teledrive/s3/), [S3 tests](../tests/), [CI guide](CI_WORKFLOWS.md), [implementation/production status](IMPLEMENTATION_STATUS.md). On a new code SHA, rerun its own CI rather than recycling a historical green status. No new test execution was performed solely to prepare this inventory.
 
@@ -35,7 +35,7 @@
 | Versioning and delete markers | Each publish retains a version; GET/HEAD and tags may select a published VersionId, list versions and delete markers. Only **Enabled** accepted for Get/PutBucketVersioning; no Suspended/null-version/MFADelete semantics. DeleteObjects cannot select individual VersionIds. | [versioning](../teledrive/s3/versioning.py), [version/read/delete tests](../tests/test_s3_bucket_versioning.py), [marker tests](../tests/test_s3_delete_markers.py) |
 | Bucket/object tags | Validated bucket/object tagging with selected version-specific operations and permissions. | [tagging](../teledrive/s3/tagging.py), [tag tests](../tests/test_s3_tagging.py) |
 | Bucket CORS | Restricted origin/method/header CORS rules, max **100** rules, **64 KiB** config. CORS is not authentication. | [CORS](../teledrive/s3/cors.py), [tests](../tests/test_s3_cors.py) |
-| Public access | **Private only.** Get/PutPublicAccessBlock expose/accept all four values as true. Non-private ACLs and public bucket policies are **not** supported. | [public access module](../teledrive/s3/public_access.py), [tests](../tests/test_s3_public_access_block.py) |
+| Public access | **Private only.** Get/PutPublicAccessBlock expose/accept all four values as true. GetBucketPolicyStatus is read-only and always IsPublic=false because public grants/policies cannot be configured. Non-private ACLs and public bucket policies are **not** supported. | [public access module](../teledrive/s3/public_access.py), [tests](../tests/test_s3_public_access_block.py) |
 | Multipart | Durable staged parts, up to **10,000** part numbers, minimum **5 MiB** for non-final completed parts, size/part limits, guarded completion and abort. Failed/aborted/unused Telegram chunks remain protected until approved GC. | [multipart](../teledrive/s3/multipart.py), [tests](../tests/test_s3_multipart.py), [recovery tests](../tests/test_s3_recovery.py) |
 | Copy | Metadata-level local bucket/key and selected source-VersionId copy; signed source, permissions, metadata/tag directives and ETag source preconditions. No UploadPartCopy, presigned CopyObject or ranged source copy. | [gateway copy route](../web/s3.py), [tests](../tests/test_s3_copy.py), [version copy](../tests/test_s3_version_copy.py) |
 | Unsupported write semantics | SSE-S3/SSE-KMS/SSE-C, retention/Object Lock, public ACLs, non-STANDARD tiers, request-payer, aws-chunked/trailer semantics and select copy conditions **must not be silently acknowledged**. | [fail-closed write checks](../web/s3.py), [tests](../tests/test_s3_fail_closed.py) |
@@ -81,6 +81,7 @@ The following operations have a routed implementation. Every qualification in th
 | [GetBucketVersioning](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html) | 🟡 Partial | Always Enabled; not AWS unversioned/suspended states. |
 | [PutBucketVersioning](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketVersioning.html) | 🟡 Partial | Idempotent Enabled only; rejects Suspended and MFADelete. |
 | [GetPublicAccessBlock](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetPublicAccessBlock.html) | 🟡 Partial | Fixed all-four-fields true, no public mode. |
+| [GetBucketPolicyStatus](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketPolicyStatus.html) | 🟡 Partial | Read-only IsPublic=false for the enforced private-only gateway; no bucket policy engine or public ACLs. |
 | [PutPublicAccessBlock](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html) | 🟡 Partial | Accepts only all-four-fields true; cannot weaken privacy. |
 
 | [GetBucketLifecycleConfiguration](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLifecycleConfiguration.html) | 🟡 Partial | Read a private bucket's bounded, prefix-scoped AbortIncompleteMultipartUpload-only rules; no AWS expiration/transition support. |
@@ -108,7 +109,6 @@ Keep private-by-default security. Define either a tested private-only compatibil
 | [GetBucketPolicy](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketPolicy.html) | ❌ Unsupported | P2-C |
 | [PutBucketPolicy](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketPolicy.html) | ❌ Unsupported | P2-C |
 | [DeleteBucketPolicy](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketPolicy.html) | ❌ Unsupported | P2-C |
-| [GetBucketPolicyStatus](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketPolicyStatus.html) | ❌ Unsupported | P2-C |
 
 ### P2-B — Encryption and immutable retention
 
