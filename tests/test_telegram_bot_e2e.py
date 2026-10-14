@@ -401,14 +401,15 @@ def test_live_bot_real_payload_size_matrix_and_sql_restart(size, chunk_size):
 
 @pytest.mark.skipif(
     os.getenv("TELEDRIVE_E2E_MULTIPART") != "1",
-    reason="5/16 MiB real Bot API download-boundary stress is explicitly opt-in",
+    reason="5/16/19 MiB real Bot API download-boundary stress is explicitly opt-in",
 )
 @pytest.mark.parametrize("size", [
     pytest.param(5 * 1024 * 1024 + 1, id="5MiB-plus-one"),
     pytest.param(16 * 1024 * 1024 + 37, id="16MiB-plus-37"),
+    pytest.param(19 * 1024 * 1024 + 7, id="19MiB-plus-7-near-download-limit"),
 ])
 def test_live_bot_large_single_chunk_roundtrip_below_download_cap(size):
-    """Real Telegram large-chunk path: verify a single 5/16 MiB Bot document.
+    """Real Telegram large-chunk path: verify single 5/16/19 MiB documents.
 
     Bot file downloads are capped at 20 MiB; these cases deliberately stay
     below that limit while crossing S3's 5 MiB multipart part boundary.
