@@ -840,6 +840,16 @@ def test_definitive_429_rejection_clears_intent_for_safe_retry(tmp_path):
         # Advance the simulated cooldown without sleeping for 61s in a
         # deterministic offline test. This remote now accepts the request.
         transport._next_upload = 0.0
+        # Advance the durable multi-process chat cooldown as well; the
+        # rejection itself must retain a shared 61-second backoff, but
+        # this offline test must not actually sleep that long.
+        from sqlalchemy import update
+        from teledrive.storage.bot_api_adapter import _bot_chat_slots
+        db.connection.execute(update(_bot_chat_slots).where(
+            _bot_chat_slots.c.account == "bot",
+            _bot_chat_slots.c.chat_id == api.chat_id,
+        ).values(next_allowed_ms=0))
+        db.commit()
         run(transport.upload(
             source, object_id="explicit-rejection", ordinal=0, checksum=digest,
         ))
