@@ -113,8 +113,8 @@ An actual PASS requires the complete four-stage evidence and `stages.acceptance.
 - The Web `/api/health` endpoint alone does not validate full configuration; fault tests use the actual `load_config` parser, including `sleep_min_seconds`, `sleep_max_seconds`, `max_files_per_run` and `max_files_per_day`.
 - `tests/test_unified_service.py` verifies REST-to-S3, S3-to-REST, local-job-to-S3 data visibility and the shared generation/catalog. The Security workflow checks both listeners **inside one container**.
 - Live Bot, User and Multiworker E2E are distinct from synthetic fault tests. A generated 429 is not a measured production rate limit.
-- Normal Security and Storage CI run adversarial GC reference-graph tests. The live User MTProto E2E job creates one owned Telegram marker fixture, validates bounded read-only history inventory, then cleans up only its own fixture. This does not exercise production garbage collection.
-- Offline marker inventory tests cover bounded Telegram history reads, forged/non-media messages, scan truncation, duplicate ordinals and private non-overwriting reports; discovery is not a recovery plan or full historic inventory.
+- Normal Security and Storage CI run adversarial GC reference-graph tests. The live User MTProto E2E job creates one owned Telegram marker fixture, validates bounded read-only history inventory, reconciles independently known marker coordinates, creates a fresh isolated catalog after full byte/SHA verification, then cleans up only its own fixture. This does not exercise production garbage collection.
+- Offline marker inventory and independent-plan reconciliation tests cover bounded Telegram history reads, forged/non-media messages, scan truncation, duplicate ordinals and private non-overwriting reports; discovery is not a recovery plan or full historic inventory.
 - Offline capacity soak tests real SQLite operations, durable synthetic media, SQL restarts and historical readback. It does not exercise original Telegram media, independent physical hosts or real-world long-term Telegram behavior.
 
 ## 5. Source layout and related guides

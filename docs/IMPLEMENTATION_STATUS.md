@@ -163,6 +163,8 @@ python scripts/inventory_telegram_history.py \
   --output /secure/isolated-history-candidates.json
 ~~~
 
+**Independent manifest reconciliation:** `teledrive.storage.reconcile_inventory.reconcile_inventory` compares bounded marker candidates with separately provided, already independently verified recovery plans. Wrong object IDs, ordinals, Telegram account/chat/message coordinates and SHA-prefixes fail closed. `scripts/rebuild_from_telegram.py --inventory /secure/candidates.json` optionally makes this check a prerequisite to full payload byte verification. CI also tests a real channel-marker upload, read-only discovery, independent manifest reconciliation and a new isolated SQLite restore with original Telegram bytes. A match is **not** by itself a verified restore.
+
 **Limits:** inventory markers are **unverified candidates**, not an importable rebuild plan. They do not prove the original bucket/key mapping, complete chunk SHA-256 or sizes, whole-object hash, historical versions, or the existence of messages outside the scanned window/channel. Actual isolated reconstruction still requires independent metadata and byte-level verification. Automated discovery without trustworthy independent metadata is still open work. Bot unknown-ACK recovery needs an independently reliable `file_id`. This reconstruction does **not** upload or delete Telegram media.
 
 ### 4.3 Capacity and recovery endurance

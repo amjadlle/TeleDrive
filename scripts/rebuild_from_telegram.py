@@ -47,6 +47,8 @@ async def execute(plan: dict, destination: Path, *, account: str, target: str,
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--plan", type=Path, required=True)
+    p.add_argument("--inventory", type=Path,
+                   help="Optional private marker inventory; must exactly match independent manifest")
     p.add_argument("--new-database", type=Path, required=True)
     p.add_argument("--account", required=True)
     p.add_argument("--target", required=True, help="Original Telegram target")
@@ -56,6 +58,16 @@ def main() -> int:
         api_hash = os.environ["TELEDRIVE_REBUILD_API_HASH"]
         session = os.environ["TELEDRIVE_REBUILD_SESSION"]
         plan = json.loads(args.plan.read_text(encoding="utf-8"))
+        if args.inventory is not None:
+            from teledrive.storage.reconcile_inventory import reconcile_inventory
+            plans = plan["objects"] if (
+                isinstance(plan, dict) and set(plan) == {"objects"}
+            ) else [plan]
+            comparison = reconcile_inventory(
+                json.loads(args.inventory.read_text(encoding="utf-8")), plans
+            )
+            if not comparison["all_plans_match"]:
+                raise ValueError("Telegram inventory differs from independent plan")
         if not api_hash or not session:
             raise ValueError("Missing original Telegram account credentials")
         result = asyncio.run(execute(

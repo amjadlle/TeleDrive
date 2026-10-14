@@ -11,6 +11,11 @@ import pytest
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from teledrive.storage.history_inventory import inventory_channel
+from teledrive.storage.reconcile_inventory import reconcile_inventory
+from teledrive.storage.rebuild import restore_isolated_catalog
+from teledrive.db import connect_database
+from teledrive.storage.catalog import BucketCatalog
+from teledrive.storage.manifest import ManifestStore
 from teledrive.storage.telethon_adapter import TelethonChunkTransport
 from teledrive.storage.target_resolver import resolve_telegram_target
 
@@ -56,6 +61,36 @@ def test_real_test_channel_discovery_without_inventory_mutations():
                 assert report["payload_downloads"] == 0
                 assert report["telegram_mutations"] == 0
                 assert report["restorable_without_independent_manifest"] is False
+                assert await client.get_messages(target, ids=sent[2]) is not None
+                # The fixture independently supplies bucket/key, exact length
+                # and full SHA-256. A marker alone never supplies this data.
+                plan = {
+                    "object_id": ident, "bucket": "recovery-ci",
+                    "key": "isolated/channel-fixture.bin",
+                    "size": len(body), "sha256": digest,
+                    "chunks": [{
+                        "ordinal": 0, "account": sent[0], "chat_id": sent[1],
+                        "message_id": sent[2], "size": len(body), "sha256": digest,
+                    }],
+                }
+                preflight = reconcile_inventory(report, [plan])
+                assert preflight["all_plans_match"]
+                assert preflight["payload_verified"] is False
+                isolated_path = Path(folder) / "isolated-rebuilt.sqlite"
+                restored = await restore_isolated_catalog(
+                    plan, transport, isolated_path,
+                )
+                assert restored["verified"] and restored["telegram_deletions"] == 0
+                rebuilt_db = connect_database(str(isolated_path))
+                try:
+                    catalog = BucketCatalog(ManifestStore(rebuilt_db))
+                    head = catalog.get("recovery-ci", "isolated/channel-fixture.bin").item
+                    assert head.id == ident and head.size == len(body)
+                    assert head.sha256 == digest
+                    refs = catalog.manifests.parts(head.id)
+                    assert len(refs) == 1 and refs[0].message_id == sent[2]
+                finally:
+                    rebuilt_db.close()
                 assert await client.get_messages(target, ids=sent[2]) is not None
             finally:
                 try:
