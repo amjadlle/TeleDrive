@@ -922,3 +922,18 @@ verification and explicit retention approvals are implemented.
   and Telethon large-size tests. Prior SHA green runs are baseline only.
 - Neither an in-progress workflow nor a skipped opt-in stress case closes
   production acceptance. Operator-controlled operations are still open.
+
+## Browser tags + offline metadata DR acceptance (2026-10-14)
+
+- SigV4 browser POST tag and cache metadata are covered by a new independent
+  **online SQLite snapshot/restore** test. It publishes a real 2 MiB+17 B
+  binary request (deterministic fake Telegram transport), backs up live SQL,
+  reopens the backup, checks version identity, SHA-256, versioned tag sets,
+  HTTP metadata and signed GET integrity without any re-upload.
+- Real Telegram user and Bot E2E now include a five-message 4 MiB+1 B payload.
+  The bounded Bot multipart/soak and Telethon large-size acceptance are
+  explicitly enabled on the final CI commit.
+- This CI suite does **not** assert success of operator-owned production
+  credentials, real infrastructure DR, multi-host 429/revocation soak or
+  the upstream S3 lifecycle extensions. Those remain explicit acceptance
+  and subsequent-priority work.
