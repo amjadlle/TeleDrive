@@ -178,10 +178,11 @@ python scripts/setup_telegram_e2e.py --repo babico/TeleDrive --secure-bot-chat-i
 
 The command reads the existing variable with `gh variable get` into
 a captured subprocess buffer (never printing it), writes the value to a
-Secret over `gh secret set` stdin and **verifies that the old variable
-was deleted**. If the old variable is unavailable, it prompts through
-hidden input instead. Any read/deletion permission error aborts with a
-nonzero exit code; resolve it from **Settings → Secrets and variables →
+Secret over `gh secret set` stdin, and **re-lists variable names after
+deleting the old variable** to verify its absence. Only when a separate
+names-only listing confirms that no legacy variable exists does it use
+hidden input instead. An unreadable existing variable, failed list,
+failed deletion, or variable re-creation aborts with a nonzero exit code; resolve it from **Settings → Secrets and variables →
 Actions** before restarting live tests. Neither test logs nor committed
 workflow source should display the ID.
 
