@@ -55,7 +55,7 @@ python scripts/acceptance.py
 
 **Purpose:** development acceptance, not a simulated production cutover. The runner creates a randomly named, isolated Compose project with **PostgreSQL 17, two TeleDrive Web containers, and a fault-scenario container** using actual SQLAlchemy and `TelegramObjectStorage`. The Telegram side is persistent, disk-backed synthetic media. Test credentials, a deployed production instance, an original Telegram account and a legacy folder are **not required**.
 
-The **normal production Compose** has only **one** `teledrive` container. Its single Python process exposes WebUI/REST on port 8080 and S3 on port 9000. Two separate Web containers in **this fault test** deliberately exercise shared-state behavior and crashes; they are not the deployment layout.
+The **normal production Compose** has only **one** `teledrive` container. The integration suite also tests optional lease-fenced legacy source ingestion through that same WebUI/REST/S3 catalog with no direct Telethon duplicate send. Its single Python process exposes WebUI/REST on port 8080 and S3 on port 9000. Two separate Web containers in **this fault test** deliberately exercise shared-state behavior and crashes; they are not the deployment layout.
 
 ## 3. Fault-injection acceptance gates
 

@@ -23,6 +23,7 @@
 - [x] Implement signed Get/PutBucketVersioning with strictly Enabled semantics, scoped permissions and real boto3 compatibility tests.
 - [x] Add signed Get/PutPublicAccessBlock for the enforced all-private configuration; reject any weakening attempts.
 - [ ] Complete tested S3 capabilities beyond the documented subset (for example lifecycle, policies, SSE and currently unsupported checksum modes).
+- [x] Expose opt-in lease-fenced legacy folder ingestion in default single-container Compose and verify cross-interface REST/S3 readback from the shared catalog.
 - [ ] Establish longer-duration real-environment capacity benchmarks on owner-controlled infrastructure.
 
 ## 3. Operator-only production sign-off

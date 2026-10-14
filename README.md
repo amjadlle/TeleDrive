@@ -252,7 +252,7 @@ python -m teledrive.uploader --config local-config.yaml --scan-only
 python -m teledrive.uploader --config local-config.yaml --run-once
 ~~~
 
-WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. This legacy folder scanner uses a distinct upload path from the shared REST/S3 durable-job API; use the latter to make new local files immediately addressable by S3.
+WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. The original direct-send legacy scanner uses a distinct upload path from the REST/S3 catalog. For **unified ingestion in the existing single container**, first create a bucket, disable legacy `app.auto_run`, place the configured `upload.source_dir` under the read-only `/uploads` mount, and opt in with `TELEDRIVE_JOB_LEGACY_AUTO_BUCKET=<bucket>` in `.env`. Optional `TELEDRIVE_JOB_LEGACY_AUTO_PREFIX` and `TELEDRIVE_JOB_LEGACY_AUTO_LIMIT` bound the queue. The scheduler uses the shared SQL catalog, fenced legacy scan, durable Bot transport and existing WebUI/REST/S3 service; it never starts the old Telethon direct-send path. The bucket setting is **empty by default** to prevent unintended source scanning or live-data migration. Never run both upload modes on the same source concurrently.
 
 ### Telegram account setup
 

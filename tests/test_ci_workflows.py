@@ -1006,3 +1006,20 @@ def test_immutable_public_access_controls_have_actual_s3_regression_coverage():
         commands = "\n".join(s.get("run", "") for j in workflow(name)["jobs"].values()
                              for s in j["steps"])
         assert "tests/test_s3_public_access_block.py" in commands
+
+def test_single_container_passes_opt_in_legacy_ingest_configuration():
+    import yaml
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    services = compose["services"]
+    assert list(services) == ["teledrive"]
+    env = services["teledrive"]["environment"]
+    for key in (
+        "TELEDRIVE_JOB_AUTO_RUN", "TELEDRIVE_JOB_LEGACY_AUTO_BUCKET",
+        "TELEDRIVE_JOB_LEGACY_AUTO_PREFIX", "TELEDRIVE_JOB_LEGACY_AUTO_LIMIT",
+    ):
+        assert key in env
+        assert key + "=" in (ROOT / ".env.example").read_text()
+    assert env["TELEDRIVE_JOB_LEGACY_AUTO_BUCKET"].endswith(":-}")
+    assert "tests/test_unified_service.py" in (
+        WORKFLOWS / "integration-storage.yml"
+    ).read_text()
