@@ -9,11 +9,10 @@ on:
 permissions:
   contents: read
 
-# Job-level concurrency: an explicitly skipped opt-in on ordinary pushes
-# must never evict a pending regular Bot E2E from GitHub's one-pending slot.
+# P1 acceptance includes real multiworker verification on every main push.
+# Serialize live Bot activity with the standard Telegram Bot E2E workflow.
 jobs:
   three-process-telegram:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[p1-live-multiworker]') }}
     concurrency:
       group: teledrive-live-bot-${{ github.repository }}
       cancel-in-progress: false
