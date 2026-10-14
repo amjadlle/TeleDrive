@@ -154,7 +154,6 @@ class RecoveryManager:
             # If it points to unrelated Telegram media, refuse ALL deletion.
             missing = 0
             for part in journal:
-                self._require_no_sql_references(object_id)
                 verdict = await self.transport.probe(part, object_id=object_id)
                 if verdict == "mismatch":
                     raise UnsafeCleanup("Journaled message does not belong to this object")
@@ -189,6 +188,7 @@ class RecoveryManager:
                 # Lease expiration must fail closed, never continue deleting.
                 if not db.renew_lease(lease_name, holder, int(time.time()), 300):
                     raise UnsafeCleanup("Cleanup lease lost")
+                self._require_no_sql_references(object_id)
                 verdict = await self.transport.probe(part, object_id=object_id)
                 if verdict == "missing":
                     continue

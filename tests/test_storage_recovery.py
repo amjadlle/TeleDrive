@@ -280,6 +280,8 @@ def test_physical_cleanup_rejects_published_version_even_if_object_failed(db_sto
     db_store.db.commit()
     transport = FakeRecoveryTransport()
     transport.messages[chunk.identity] = chunk
+    preview = run(RecoveryManager(db_store, transport, min_age_seconds=3600).cleanup(ident))
+    assert preview.dry_run and preview.deleted == 0
     with pytest.raises(UnsafeCleanup, match="another SQL reference"):
         run(RecoveryManager(db_store, transport, min_age_seconds=3600).cleanup(
             ident, dry_run=False
