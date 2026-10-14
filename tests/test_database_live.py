@@ -983,3 +983,49 @@ def test_live_sql_serializes_six_independent_bot_send_workers_and_429(env_name):
     finally:
         first.close()
         second.close()
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_live_sql_429_observed_after_another_process_reserves_slot(env_name):
+    """Real database isolation must not hide newly committed 429 backoff."""
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from uuid import uuid4
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+
+    suffix = uuid4().hex[:16]
+    account = "late-429-" + suffix
+    chat_id = -200_000_000 - int(uuid4().hex[:6], 16)
+    before = connect_database(url)
+    after = connect_database(url)
+    t = 5_000_000
+    try:
+        first = BotFileIndex(before)
+        second = BotFileIndex(after)
+        assert first.reserve_send_slot(
+            account, chat_id, 1.5, now_ms=t,
+        ) == 0
+        assert second.reserve_send_slot(
+            account, chat_id, 1.5, now_ms=t,
+        ) == 1.5
+        assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 0
+        first.impose_shared_cooldown(
+            account, chat_id, 17, now_ms=t,
+        )
+        assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 17
+        assert first.shared_cooldown_wait(
+            account, chat_id, now_ms=t + 17000,
+        ) == 0
+        assert second.reserve_send_slot(
+            account, chat_id, 1.5, now_ms=t,
+        ) == 17
+        first.impose_shared_cooldown(
+            account, chat_id, 3, now_ms=t,
+        )
+        assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 17
+        assert second.shared_cooldown_wait(
+            account + "-other", chat_id, now_ms=t,
+        ) == 0
+    finally:
+        after.close()
+        before.close()
