@@ -7,7 +7,9 @@ Prerequisites:
   python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot
 
 Telethon asks for a login code on first sign-in, and for 2FA only if enabled.
-The StringSession is never printed or written to disk.
+The StringSession and test channel ID are never printed or written to disk.
+Use --secure-bot-chat-id to migrate an existing unmasked Actions variable
+to a repository secret without repeating Telegram user login.
 """
 
 from __future__ import annotations
@@ -40,17 +42,6 @@ def require_github_cli(repo: str) -> None:
             raise RuntimeError(message)
 
 
-def store_variable(repo: str, name: str, value: str) -> None:
-    """Store public channel peer ID as a GitHub Actions repository variable."""
-    subprocess.run(
-        ["gh", "variable", "set", name, "--repo", repo],
-        input=value,
-        text=True,
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-
-
 def store_secret(repo: str, name: str, value: str) -> None:
     """Pass the secret on stdin, never via command-line arguments or files."""
     subprocess.run(
@@ -60,6 +51,37 @@ def store_secret(repo: str, name: str, value: str) -> None:
         check=True,
         stdout=subprocess.DEVNULL,
     )
+
+
+def remove_public_bot_chat_variable(repo: str) -> None:
+    """Best-effort removal of the legacy, UNMASKED Actions variable.
+
+    This function never outputs the variable value. GitHub CLI exits nonzero
+    when the variable is already absent; a privileged operator may need to
+    remove it separately if deletion fails.
+    """
+    command = ["gh", "variable", "delete", "TELEDRIVE_E2E_BOT_CHAT_ID",
+               "--repo", repo]
+    result = subprocess.run(command, capture_output=True, check=False)
+    if result.returncode:
+        print(
+            "WARNING: Verify that the old Actions variable "
+            "TELEDRIVE_E2E_BOT_CHAT_ID is deleted in repository Settings.",
+            file=sys.stderr,
+        )
+
+
+def secure_existing_bot_chat_id(repo: str) -> None:
+    """One-time no-Telegram-login migration; never prints the entered ID."""
+    import re
+
+    require_github_cli(repo)
+    chat_id = getpass.getpass("Telegram test channel ID (hidden): ").strip()
+    if not re.fullmatch(r"-100[0-9]{5,16}", chat_id):
+        raise ValueError("Bot target must be a numeric private channel ID")
+    store_secret(repo, "TELEDRIVE_E2E_BOT_CHAT_ID", chat_id)
+    print("Saved GitHub Actions secret: TELEDRIVE_E2E_BOT_CHAT_ID")
+    remove_public_bot_chat_variable(repo)
 
 
 async def find_channel(client: TelegramClient, title: str) -> list:
@@ -136,8 +158,9 @@ async def setup(repo: str, title: str, create_if_missing: bool,
         # discover private channels by title. The user session can resolve
         # that ID during this one-time setup, so no manual ID lookup.
         channel_id = int(matches[0].id)
-        store_variable(repo, "TELEDRIVE_E2E_BOT_CHAT_ID", str(channel_id))
-        print("Saved GitHub Actions variable: TELEDRIVE_E2E_BOT_CHAT_ID")
+        store_secret(repo, "TELEDRIVE_E2E_BOT_CHAT_ID", str(channel_id))
+        print("Saved GitHub Actions secret: TELEDRIVE_E2E_BOT_CHAT_ID")
+        remove_public_bot_chat_variable(repo)
         if configure_bot:
             bot_token = getpass.getpass("Token from @BotFather (hidden): ").strip()
             if not bot_token:
@@ -170,11 +193,19 @@ def main() -> None:
                         help="Create the private broadcast channel on the test account")
     parser.add_argument("--configure-bot", action="store_true",
                         help="Also configure the BotFather token as a GitHub Secret")
+    parser.add_argument("--secure-bot-chat-id", action="store_true",
+                        help="Move an existing test channel ID into a masked GitHub Secret")
     args = parser.parse_args()
     if not args.channel.strip():
         parser.error("--channel cannot be empty")
     try:
-        asyncio.run(setup(args.repo, args.channel.strip(), args.create_if_missing, args.configure_bot))
+        if args.secure_bot_chat_id:
+            secure_existing_bot_chat_id(args.repo)
+        else:
+            asyncio.run(setup(
+                args.repo, args.channel.strip(), args.create_if_missing,
+                args.configure_bot,
+            ))
     except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Setup failed: {error}", file=sys.stderr)
         raise SystemExit(1) from None
