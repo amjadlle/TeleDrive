@@ -1,0 +1,588 @@
+{
+  "schema_version": 1,
+  "source": "docs/S3_SPECS.md",
+  "reference": "https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations_Amazon_Simple_Storage_Service.html",
+  "note": "This inventory describes only the documented TeleDrive subset; partial is never full AWS parity.",
+  "operations": [
+    {
+      "name": "CreateBucket",
+      "status": "supported",
+      "workstream": "implemented"
+    },
+    {
+      "name": "HeadBucket",
+      "status": "supported",
+      "workstream": "implemented"
+    },
+    {
+      "name": "DeleteBucket",
+      "status": "supported",
+      "workstream": "implemented"
+    },
+    {
+      "name": "ListBuckets",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetBucketLocation",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "ListObjects",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "ListObjectsV2",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "ListObjectVersions",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "PutObject",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetObject",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "HeadObject",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "DeleteObject",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "DeleteObjects",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "CopyObject",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetObjectAttributes",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "CreateMultipartUpload",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "UploadPart",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "ListParts",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "ListMultipartUploads",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "CompleteMultipartUpload",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "AbortMultipartUpload",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetBucketTagging",
+      "status": "supported",
+      "workstream": "implemented"
+    },
+    {
+      "name": "PutBucketTagging",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "DeleteBucketTagging",
+      "status": "supported",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetObjectTagging",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "PutObjectTagging",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "DeleteObjectTagging",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetBucketCors",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "PutBucketCors",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "DeleteBucketCors",
+      "status": "supported",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetBucketVersioning",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "PutBucketVersioning",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetPublicAccessBlock",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "PutPublicAccessBlock",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "GetBucketLifecycleConfiguration",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "PutBucketLifecycleConfiguration",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "DeleteBucketLifecycle",
+      "status": "partial",
+      "workstream": "implemented"
+    },
+    {
+      "name": "DeletePublicAccessBlock",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "GetBucketAcl",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "PutBucketAcl",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "GetObjectAcl",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "PutObjectAcl",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "GetBucketOwnershipControls",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "PutBucketOwnershipControls",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "DeleteBucketOwnershipControls",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "GetBucketPolicy",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "PutBucketPolicy",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "DeleteBucketPolicy",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "GetBucketPolicyStatus",
+      "status": "unsupported",
+      "workstream": "P2-C"
+    },
+    {
+      "name": "GetBucketEncryption",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "PutBucketEncryption",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "DeleteBucketEncryption",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "GetObjectLockConfiguration",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "PutObjectLockConfiguration",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "GetObjectRetention",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "PutObjectRetention",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "GetObjectLegalHold",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "PutObjectLegalHold",
+      "status": "unsupported",
+      "workstream": "P2-B"
+    },
+    {
+      "name": "GetBucketLifecycle",
+      "status": "unsupported",
+      "workstream": "P2-D"
+    },
+    {
+      "name": "PutBucketLifecycle",
+      "status": "unsupported",
+      "workstream": "P2-D"
+    },
+    {
+      "name": "GetBucketReplication",
+      "status": "unsupported",
+      "workstream": "P2-D"
+    },
+    {
+      "name": "PutBucketReplication",
+      "status": "unsupported",
+      "workstream": "P2-D"
+    },
+    {
+      "name": "DeleteBucketReplication",
+      "status": "unsupported",
+      "workstream": "P2-D"
+    },
+    {
+      "name": "RestoreObject",
+      "status": "unsupported",
+      "workstream": "P2-D"
+    },
+    {
+      "name": "UploadPartCopy",
+      "status": "unsupported",
+      "workstream": "P2-E"
+    },
+    {
+      "name": "GetBucketWebsite",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "PutBucketWebsite",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "DeleteBucketWebsite",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "GetBucketNotification",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "GetBucketNotificationConfiguration",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "PutBucketNotification",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "PutBucketNotificationConfiguration",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "GetBucketLogging",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "PutBucketLogging",
+      "status": "unsupported",
+      "workstream": "P2-F"
+    },
+    {
+      "name": "GetBucketAnalyticsConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "PutBucketAnalyticsConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "DeleteBucketAnalyticsConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "ListBucketAnalyticsConfigurations",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "GetBucketInventoryConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "PutBucketInventoryConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "DeleteBucketInventoryConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "ListBucketInventoryConfigurations",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "GetBucketMetricsConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "PutBucketMetricsConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "DeleteBucketMetricsConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "ListBucketMetricsConfigurations",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "GetBucketIntelligentTieringConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "PutBucketIntelligentTieringConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "DeleteBucketIntelligentTieringConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "ListBucketIntelligentTieringConfigurations",
+      "status": "unsupported",
+      "workstream": "P3-G"
+    },
+    {
+      "name": "CreateBucketMetadataConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "CreateBucketMetadataTableConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "GetBucketMetadataConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "GetBucketMetadataTableConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "DeleteBucketMetadataConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "DeleteBucketMetadataTableConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "UpdateBucketMetadataAnnotationTableConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "UpdateBucketMetadataInventoryTableConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "UpdateBucketMetadataJournalTableConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "GetObjectAnnotation",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "PutObjectAnnotation",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "DeleteObjectAnnotation",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "ListObjectAnnotations",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "GetBucketAbac",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "PutBucketAbac",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "GetBucketRequestPayment",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "PutBucketRequestPayment",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "GetBucketAccelerateConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "PutBucketAccelerateConfiguration",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "GetObjectTorrent",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "CreateSession",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "ListDirectoryBuckets",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "RenameObject",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "SelectObjectContent",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "UpdateObjectEncryption",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    },
+    {
+      "name": "WriteGetObjectResponse",
+      "status": "unsupported",
+      "workstream": "P3-H"
+    }
+  ]
+}

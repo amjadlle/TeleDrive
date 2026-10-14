@@ -1044,3 +1044,9 @@ def test_s3_compatibility_matrix_cannot_relabel_safe_lifecycle_as_full_aws():
         assert "🟡 Partial" in matches[0]
     assert "AbortIncompleteMultipartUpload" in specs
     assert "never deletes an object or Telegram media" in specs
+
+def test_s3_fail_closed_116_operation_manifest_suite_is_required():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        commands = "\n".join(s.get("run", "")
+            for job in workflow(name)["jobs"].values() for s in job["steps"])
+        assert "tests/test_s3_route_guard.py" in commands

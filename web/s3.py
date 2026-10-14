@@ -27,6 +27,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
+from teledrive.s3.route_guard import validate_s3_query, S3QueryError
 from teledrive.s3.checksums import crc32c, crc64nvme
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.post_policy import parse_form, verify_post_policy, FORM_LIMIT
@@ -488,6 +489,7 @@ async def _handle(request: Request):
             bucket, separator, key = virtual_bucket, "/" if logical else "", logical
         else:
             bucket, separator, key = logical.partition("/")
+        validate_s3_query(request.method, bucket, bool(separator), request.query_params)
         if not bucket:
             if request.method != "GET":
                 return _error("MethodNotAllowed", "Use GET to list buckets", 405)
@@ -1688,6 +1690,8 @@ async def _handle(request: Request):
             response.headers["Connection"] = "close"
         return response
     except BatchDeleteError as exc:
+        return _error(exc.code, str(exc), exc.status)
+    except S3QueryError as exc:
         return _error(exc.code, str(exc), exc.status)
     except LifecycleError as exc:
         return _error(exc.code, str(exc), exc.status)
