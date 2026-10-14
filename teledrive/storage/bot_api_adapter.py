@@ -82,6 +82,18 @@ _bot_chat_slots = Table(
 )
 
 
+# Separate from send-slot queue: a Telegram 429 can arrive *after*
+# another worker already reserved a future slot. Pending workers must
+# re-check the shared cooldown immediately before their HTTP send.
+# Kept in a new table to avoid an in-place migration of existing installs.
+_bot_chat_cooldowns = Table(
+    "storage_bot_chat_cooldowns", _bot_metadata,
+    Column("account", String(255), primary_key=True),
+    Column("chat_id", BigInteger, primary_key=True),
+    Column("cooldown_until_ms", BigInteger, nullable=False),
+)
+
+
 class BotApiError(RuntimeError):
     """Safe error: never includes Bot API token, URL or Telegram response text."""
 
@@ -236,6 +248,56 @@ class BotFileIndex:
             self.db.connection.rollback()
             raise BotApiError("Bot API shared cooldown row missing")
         self.db.commit()
+        # Record the denial independently from future send reservations.
+        # A worker which was already asleep for a reserved start will inspect
+        # this timestamp before sending and must honor any newer 429.
+        predicate = (
+            _bot_chat_cooldowns.c.account == account,
+            _bot_chat_cooldowns.c.chat_id == chat_id,
+        )
+        for attempt in range(12):
+            try:
+                changed = self.db.connection.execute(update(
+                    _bot_chat_cooldowns
+                ).where(*predicate).values(cooldown_until_ms=case(
+                    (_bot_chat_cooldowns.c.cooldown_until_ms < until, until),
+                    else_=_bot_chat_cooldowns.c.cooldown_until_ms,
+                )))
+                if changed.rowcount != 1:
+                    self.db.connection.execute(insert(_bot_chat_cooldowns).values(
+                        account=account, chat_id=chat_id,
+                        cooldown_until_ms=until,
+                    ))
+                self.db.commit()
+                return
+            except (SQLIntegrityError, SQLOperationalError):
+                self.db.connection.rollback()
+                if attempt == 11:
+                    raise BotApiError(
+                        "Shared Bot cooldown failed after bounded retries"
+                    ) from None
+                time.sleep(0.015 * (attempt + 1))
+
+    def shared_cooldown_wait(self, account: str, chat_id: int, *,
+                             now_ms: int | None = None) -> float:
+        """Observe a newer 429 even after reserving an older send start.
+
+        This is read-only (no remote I/O) and releases the SQL read
+        transaction promptly so the next check sees concurrent changes.
+        """
+        if not account or type(chat_id) is not int or not chat_id:
+            raise ValueError("Invalid Bot shared cooldown identity")
+        timestamp = int(time.time() * 1000) if now_ms is None else now_ms
+        if type(timestamp) is not int or timestamp < 0:
+            raise ValueError("Invalid Bot shared cooldown timestamp")
+        deadline = self.db.connection.execute(select(
+            _bot_chat_cooldowns.c.cooldown_until_ms,
+        ).where(
+            _bot_chat_cooldowns.c.account == account,
+            _bot_chat_cooldowns.c.chat_id == chat_id,
+        )).scalar_one_or_none()
+        self.db.commit()
+        return max(0.0, (int(deadline or 0) - timestamp) / 1000)
 
     def get_send_intent(self, *, account: str, chat_id: int,
                         object_id: str, ordinal: int) -> dict | None:
@@ -597,6 +659,17 @@ class BotApiChunkTransport:
                 pause = max(shared_wait, self._next_upload - time.monotonic(), 0.0)
                 if pause:
                     await asyncio.sleep(pause)
+                # A different worker may receive an explicit Telegram 429
+                # while this process is sleeping for its SQL-reserved slot.
+                # Never let a stale reservation bypass that newer cooldown.
+                if self._min_upload_interval > 0:
+                    while True:
+                        backoff = self.index.shared_cooldown_wait(
+                            self.account, self.chat_id,
+                        )
+                        if not backoff:
+                            break
+                        await asyncio.sleep(backoff)
                 try:
                     message = await self.api.call("sendDocument", {
                         "chat_id": self.chat_id,
