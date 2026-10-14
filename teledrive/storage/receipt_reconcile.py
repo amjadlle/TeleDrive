@@ -104,6 +104,7 @@ async def reconcile_bot_receipt(
             account, chat_id, message_id, file_id,
             object_id=object_id, ordinal=ordinal,
             checksum=expected_hash, size=expected_size,
+            require_intent=True,
         )
     return {
         "verified": True, "applied": apply,
