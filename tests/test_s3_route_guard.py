@@ -39,7 +39,8 @@ def test_unknown_bucket_control_never_falls_back_to_bucket_crud(
     before = service[2].uploads
     reply = signed(service, method, f"/guard-bucket?{selector}")
     assert reply.status_code == 501, (method, selector, reply.text)
-    assert b"NotImplemented" in reply.content
+    if method != "HEAD":
+        assert b"NotImplemented" in reply.content
     assert signed(service, "HEAD", "/guard-bucket").status_code == 200
     assert service[2].uploads == before
 
