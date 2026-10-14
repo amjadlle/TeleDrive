@@ -91,3 +91,104 @@ def test_zero_min_interval_does_not_allocate_or_sleep(tmp_path):
         assert index.reserve_send_slot("bot", -10023, 0) == 0
     finally:
         db.close()
+
+def test_429_after_other_workers_reserved_slots_remains_globally_visible(tmp_path):
+    """A late Telegram rejection must fence PREVIOUSLY scheduled sends.
+
+    Without a separate cooldown journal, sleeping workers have a stale
+    reservation and may wake up/send in parallel during server backoff.
+    """
+    path = str(tmp_path / "late-429.db")
+    a = connect_database(path)
+    b = connect_database(path)
+    try:
+        first, second = BotFileIndex(a), BotFileIndex(b)
+        now = 8_000_000
+        assert first.reserve_send_slot("shared", -10077, 1.25, now_ms=now) == 0
+        assert second.reserve_send_slot("shared", -10077, 1.25, now_ms=now) == 1.25
+        assert first.shared_cooldown_wait("shared", -10077, now_ms=now) == 0
+        second.impose_shared_cooldown("shared", -10077, 8, now_ms=now)
+        # Even the worker which reserved its slot BEFORE this 429 must see it.
+        assert first.shared_cooldown_wait("shared", -10077, now_ms=now) == 8
+        assert first.shared_cooldown_wait(
+            "shared", -10077, now_ms=now + 7_999,
+        ) == 0.001
+        assert first.shared_cooldown_wait(
+            "shared", -10077, now_ms=now + 8_000,
+        ) == 0
+        assert first.shared_cooldown_wait("other", -10077, now_ms=now) == 0
+        assert first.shared_cooldown_wait("shared", -10078, now_ms=now) == 0
+        first.impose_shared_cooldown("shared", -10077, 2, now_ms=now)
+        assert second.shared_cooldown_wait("shared", -10077, now_ms=now) == 8
+        first.impose_shared_cooldown("shared", -10077, 12, now_ms=now)
+        assert second.shared_cooldown_wait("shared", -10077, now_ms=now) == 12
+    finally:
+        b.close()
+        a.close()
+
+
+def test_late_shared_429_is_rechecked_before_bot_send(tmp_path, monkeypatch):
+    """A Bot upload must inspect the new shared 429 after SQL-slot sleeping."""
+    import asyncio
+    import hashlib
+    from teledrive.storage.bot_api_adapter import BotApiChunkTransport
+
+    class InspectOnlyBot:
+        sends = 0
+
+        async def call(self, method, fields, source=None):
+            assert method == "sendDocument"
+            self.sends += 1
+            return {
+                "message_id": self.sends,
+                "chat": {"id": -100900},
+                "document": {"file_id": "test-telegram-file"},
+            }
+
+    db = connect_database(str(tmp_path / "sleep-recheck.db"))
+    try:
+        index = BotFileIndex(db)
+        api = InspectOnlyBot()
+        transport = BotApiChunkTransport(
+            api, index, chat_id=-100900, min_upload_interval=0.001,
+        )
+        source = tmp_path / "data.bin"
+        source.write_bytes(b"known-safe-bytes")
+        cooldown_checks = []
+        original = index.shared_cooldown_wait
+
+        def delayed_check(account, chat_id):
+            cooldown_checks.append((account, chat_id))
+            # Simulate another OS worker receiving 429 AFTER this
+            # transport finished its old SQL send-slot wait.
+            return 0.005 if len(cooldown_checks) == 1 else original(
+                account, chat_id,
+            )
+
+        monkeypatch.setattr(index, "shared_cooldown_wait", delayed_check)
+        result = asyncio.run(transport.upload(
+            source, object_id="late-cooldown", ordinal=0,
+            checksum=hashlib.sha256(source.read_bytes()).hexdigest(),
+        ))
+        assert result == ("bot", -100900, 1)
+        assert len(cooldown_checks) >= 2
+        assert api.sends == 1
+        assert index.unresolved_count() == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("value", [-1, 0, 1.0, True, 3601])
+def test_invalid_shared_429_cannot_change_existing_cooldown(tmp_path, value):
+    db = connect_database(str(tmp_path / "429-validation.db"))
+    try:
+        index = BotFileIndex(db)
+        index.reserve_send_slot("a", -100900, 1.0, now_ms=1000)
+        index.impose_shared_cooldown("a", -100900, 10, now_ms=1000)
+        with pytest.raises(ValueError):
+            index.impose_shared_cooldown("a", -100900, value, now_ms=1000)
+        assert index.shared_cooldown_wait(
+            "a", -100900, now_ms=1000,
+        ) == 10
+    finally:
+        db.close()
