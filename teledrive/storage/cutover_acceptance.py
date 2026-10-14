@@ -51,61 +51,88 @@ async def verify_legacy_cutover(
     )
     total = excluded = verified = queued = inconsistent = 0
     truncated = False
-    for raw_path in sorted(iter_source_files(str(root))):
+    initial_paths = []
+    # Materialize at most max_files + 1 eligible entries. The original
+    # sorted(os.walk(...)) scanned an unbounded number of paths into RAM
+    # before noticing its max_files cap.
+    for raw_path in iter_source_files(str(root)):
         if not file_allowed(raw_path, cfg):
             excluded += 1
             continue
-        total += 1
-        if total > max_files:
+        initial_paths.append(raw_path)
+        if len(initial_paths) > max_files:
             truncated = True
             break
-        try:
-            source, before = _source_identity(Path(raw_path), root)
-            if before.st_size > max_bytes:
+    baseline = set(initial_paths)
+    if not truncated:
+        for raw_path in sorted(initial_paths):
+            if not file_allowed(raw_path, cfg):
+                excluded += 1
+                continue
+            total += 1
+            if total > max_files:
+                truncated = True
+                break
+            try:
+                source, before = _source_identity(Path(raw_path), root)
+                if before.st_size > max_bytes:
+                    inconsistent += 1
+                    continue
+                relative = source.relative_to(root).as_posix()
+                key = f"{prefix}/{relative}" if prefix else relative
+                job_id = queue.scan_id(bucket, key, source, before)
+                task = queue.db.connection.execute(
+                    select(jobs).where(jobs.c.id == job_id)
+                ).mappings().one_or_none()
+                if task is None or task["state"] != "done" or not task["object_id"]:
+                    queued += 1
+                    continue
+                if task["bucket"] != bucket or task["object_key"] != key:
+                    inconsistent += 1
+                    continue
+                live_head = queue.catalog.get(bucket, key).item
+                if live_head.id != task["object_id"] or live_head.size != before.st_size:
+                    inconsistent += 1
+                    continue
+                digest = hashlib.sha256()
+                with source.open("rb") as stream:
+                    while block := stream.read(1024 * 1024):
+                        digest.update(block)
+                after = _source_identity(source, root)[1]
+                if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                        or live_head.sha256 != digest.hexdigest()):
+                    inconsistent += 1
+                    continue
+                remote_hash = hashlib.sha256()
+                received = 0
+                async for chunk in engine.iter_bytes(live_head.id):
+                    remote_hash.update(chunk)
+                    received += len(chunk)
+                final_stat = _source_identity(source, root)[1]
+                if (received != before.st_size
+                        or remote_hash.hexdigest() != digest.hexdigest()
+                        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                        != (final_stat.st_dev, final_stat.st_ino,
+                            final_stat.st_size, final_stat.st_mtime_ns)):
+                    inconsistent += 1
+                    continue
+                verified += 1
+            except (OSError, ValueError, FileNotFoundError):
                 inconsistent += 1
-                continue
-            relative = source.relative_to(root).as_posix()
-            key = f"{prefix}/{relative}" if prefix else relative
-            job_id = queue.scan_id(bucket, key, source, before)
-            task = queue.db.connection.execute(
-                select(jobs).where(jobs.c.id == job_id)
-            ).mappings().one_or_none()
-            if task is None or task["state"] != "done" or not task["object_id"]:
-                queued += 1
-                continue
-            if task["bucket"] != bucket or task["object_key"] != key:
-                inconsistent += 1
-                continue
-            live_head = queue.catalog.get(bucket, key).item
-            if live_head.id != task["object_id"] or live_head.size != before.st_size:
-                inconsistent += 1
-                continue
-            digest = hashlib.sha256()
-            with source.open("rb") as stream:
-                while block := stream.read(1024 * 1024):
-                    digest.update(block)
-            after = _source_identity(source, root)[1]
-            if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-                    != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-                    or live_head.sha256 != digest.hexdigest()):
-                inconsistent += 1
-                continue
-            remote_hash = hashlib.sha256()
-            received = 0
-            async for chunk in engine.iter_bytes(live_head.id):
-                remote_hash.update(chunk)
-                received += len(chunk)
-            final_stat = _source_identity(source, root)[1]
-            if (received != before.st_size
-                    or remote_hash.hexdigest() != digest.hexdigest()
-                    or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-                    != (final_stat.st_dev, final_stat.st_ino,
-                        final_stat.st_size, final_stat.st_mtime_ns)):
-                inconsistent += 1
-                continue
-            verified += 1
-        except (OSError, ValueError, FileNotFoundError):
-            inconsistent += 1
+    if not truncated:
+        # Files added/removed while Telegram was being read must block the
+        # switchover, even if every file seen at the start passed its SHA.
+        after_paths = set()
+        for raw_path in iter_source_files(str(root)):
+            if file_allowed(raw_path, cfg):
+                after_paths.add(raw_path)
+                if len(after_paths) > max_files:
+                    truncated = True
+                    break
+        if not truncated and after_paths != baseline:
+            inconsistent += len(after_paths.symmetric_difference(baseline))
+
     return {
         "verified": total > 0 and not truncated and total == verified
                     and queued == 0 and inconsistent == 0,
