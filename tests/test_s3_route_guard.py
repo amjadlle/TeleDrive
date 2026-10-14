@@ -76,7 +76,6 @@ def test_unknown_object_control_never_falls_back_to_data_or_delete(
     ("GET", "/guard-bucket/data?uploads"),
     ("GET", "/guard-bucket/data?uploadId=uid&prefix=x"),
     ("POST", "/guard-bucket/data?select&select-type=2"),
-    ("GET", "/?prefix=secrets"),
 ])
 def test_conflicting_or_wrong_scope_controls_fail_closed(service, method, path):
     assert signed(service, "PUT", "/guard-bucket").status_code == 200
@@ -210,3 +209,11 @@ def test_real_sha256_checksum_mode_readback_for_aws_cli_and_sdk(service):
         })
         assert result.status_code == expected, result.text
     assert signed(service, "GET", "/guard-bucket/checksummed").content == blob
+
+
+def test_root_prefix_is_intentional_supported_list_buckets_parameter(service):
+    assert signed(service, "PUT", "/guard-bucket").status_code == 200
+    result = signed(service, "GET", "/?prefix=guard-")
+    assert result.status_code == 200, result.text
+    assert b"guard-bucket" in result.content
+    assert service[2].uploads == service[2].downloads == 0

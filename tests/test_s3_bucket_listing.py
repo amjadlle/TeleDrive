@@ -21,7 +21,8 @@ from sqlalchemy import insert
 
 import web.s3 as gateway
 from teledrive.s3.credentials import S3CredentialStore
-from teledrive.storage.catalog import buckets
+from teledrive.storage.catalog import BucketCatalog, buckets
+from teledrive.storage.manifest import ManifestStore
 from test_s3_gateway import service, signed
 
 _NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
@@ -164,6 +165,7 @@ def test_sql_page_limit_10000_and_10001st_record(service):
     """Do not load all buckets before limiting even for a default root GET."""
     db = service[3]()
     try:
+        BucketCatalog(ManifestStore(db))  # create shared SQL bucket schema
         db.connection.execute(insert(buckets), [
             {"name": f"test-list-{i:05d}", "created_at": 1714000000}
             for i in range(10001)
