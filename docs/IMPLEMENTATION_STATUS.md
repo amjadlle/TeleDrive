@@ -1299,3 +1299,28 @@ checked on their own exact SHA.
   marked "skipped" is **not** multiworker evidence.
 - Operator-held production verification is described in
   `docs/P1_PRODUCTION_ACCEPTANCE.md`. CI signoff ≠ deployment signoff.
+
+## 2026-10-14: P1 acceptance contract changed to development-first
+
+The actual product is **not deployed to production**. The former operator
+wizard and production acceptance document assumed deployment and a legacy
+migration that do not exist. They are now explicitly FUTURE stages.
+Default `python scripts/p1_acceptance_wizard.py` calls the
+noninteractive disposable Docker development acceptance campaign, and
+`--production` explicitly opts into the original operator wizard.
+
+`docker-compose.p1-dev.yml` runs two real TeleDrive Web/API processes,
+PostgreSQL 17 and an isolated scenario runner on a network with no exposed
+host ports. `scripts/p1_dev_scenarios.py` creates entirely synthetic
+file/media data using the real SQL manifest and upload engine, simulates
+an unjournaled Bot ACK, shared synthetic 429, authentic SQL backup/restore,
+checksum/Range verification and deliberate remote-byte corruption.
+`scripts/run_p1_dev_acceptance.sh` creates a unique Docker project and
+deletes ONLY that project's containers/volumes and its `mktemp` workspace.
+A clean, credential-free `P1 Disposable Docker Development Acceptance`
+workflow enforces the result on the relevant source changes. DEV pass is
+not real Telegram pass or production signoff; never equate the modes.
+
+Development criteria and expected receipts:
+`docs/P1_DEVELOPMENT_ACCEPTANCE.md`. Historic production gates remain
+separate and cannot block development-stage signoff.

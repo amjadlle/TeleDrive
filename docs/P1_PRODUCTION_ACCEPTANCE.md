@@ -1,4 +1,13 @@
-# P1 production acceptance: executable, gated operator runbook
+# P1 production acceptance: future deployment-only operator runbook
+
+> **NOT required for P1 development-stage completion.** TeleDrive has
+> not yet been deployed to production. Do not invent a legacy migration,
+> live host, production backup, or one-hour natural Telegram 429 result.
+> Run the fully automated **Docker DEV** campaign first:
+> [P1 development acceptance](P1_DEVELOPMENT_ACCEPTANCE.md),
+> `bash scripts/run_p1_dev_acceptance.sh`. This document becomes relevant
+> only when a real production environment and owner-controlled data exist.
+
 
 This document separates **implemented and CI-tested safeguards** from
 **production evidence that requires an authorized operator**. Do not interpret

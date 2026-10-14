@@ -1,0 +1,93 @@
+# P1 development acceptance ONLY. No host ports, no production credentials,
+# no real Telegram messages, unique Compose project/ephemeral workspace.
+x-web: &web
+  build:
+    context: .
+    dockerfile: Dockerfile
+  user: "${P1_DEV_UID:?}:${P1_DEV_GID:?}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  environment: &web-env
+    TELEDRIVE_CONFIG: /config/config.yaml
+    TELEDRIVE_AUTH_DIR: /data/auth
+    TELEDRIVE_WEB_USER: dev-operator
+    TELEDRIVE_WEB_PASSWORD: ${P1_DEV_WEB_PASSWORD:?}
+    TELEDRIVE_ALLOWED_HOSTS: web-a,web-b,localhost,127.0.0.1
+    TELEDRIVE_JOB_AUTO_RUN: "0"
+    TELEDRIVE_ALLOW_INSECURE: "0"
+    TELEDRIVE_ALLOWED_SQLITE_ROOTS: /data
+    TELEDRIVE_STORAGE_SCRATCH_DIR: /data/tmp
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks: [dev-isolated]
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/health',timeout=4)"]
+    interval: 5s
+    timeout: 5s
+    retries: 24
+    start_period: 15s
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: teledrive
+      POSTGRES_DB: teledrive_dev
+      POSTGRES_PASSWORD: ${P1_DEV_DB_PASSWORD:?}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teledrive -d teledrive_dev"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks: [dev-isolated]
+    volumes:
+      - db-state:/var/lib/postgresql/data
+    security_opt: ["no-new-privileges:true"]
+    # No ports: never expose the test database on the host.
+  web-a:
+    <<: *web
+    volumes:
+      - ${P1_DEV_WORKSPACE:?}/config:/config:ro
+      - ${P1_DEV_WORKSPACE:?}/web-a:/data
+      - ${P1_DEV_WORKSPACE:?}/uploads:/uploads:ro
+  web-b:
+    <<: *web
+    volumes:
+      - ${P1_DEV_WORKSPACE:?}/config:/config:ro
+      - ${P1_DEV_WORKSPACE:?}/web-b:/data
+      - ${P1_DEV_WORKSPACE:?}/uploads:/uploads:ro
+  scenarios:
+    build:
+      context: .
+      dockerfile: Dockerfile.p1-dev
+    user: "${P1_DEV_UID:?}:${P1_DEV_GID:?}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      web-a:
+        condition: service_healthy
+      web-b:
+        condition: service_healthy
+    environment:
+      P1_DEV_DB_URL: postgresql+psycopg://teledrive:${P1_DEV_DB_PASSWORD:?}@postgres:5432/teledrive_dev
+      P1_DEV_RESTORED_DB_URL: postgresql+psycopg://teledrive:${P1_DEV_DB_PASSWORD:?}@postgres:5432/teledrive_restore
+      P1_DEV_WEB_PASSWORD: ${P1_DEV_WEB_PASSWORD:?}
+      P1_DEV_REMOTE_DIR: /work-data/remote
+      P1_DEV_EVIDENCE_DIR: /work-data/evidence
+      P1_DEV_SOURCES: /work-data/sources
+    volumes:
+      - ${P1_DEV_WORKSPACE:?}/scenario:/work-data
+    networks: [dev-isolated]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m
+    entrypoint: ["python", "scripts/p1_dev_scenarios.py"]
+networks:
+  dev-isolated:
+    internal: true
+volumes:
+  db-state:

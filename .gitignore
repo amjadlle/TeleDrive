@@ -28,3 +28,6 @@ website/.env*
 .DS_Store
 .idea/
 .vscode/
+
+# Ephemeral P1 Docker development acceptance (redacted local reports)
+.p1-dev-evidence/

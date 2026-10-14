@@ -650,4 +650,19 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # During development the default is a zero-credential, disposable Docker
+    # acceptance campaign, never an interrogation about a nonexistent
+    # production deployment. Opt into the original operator-only production
+    # wizard explicitly once a real production deployment exists.
+    if "--production" in sys.argv[1:]:
+        sys.argv.remove("--production")
+        main()
+    elif len(sys.argv) == 1:
+        raise SystemExit(subprocess.call([
+            "bash", str(ROOT / "scripts" / "run_p1_dev_acceptance.sh"),
+        ], cwd=ROOT))
+    else:
+        raise SystemExit(
+            "Development: python scripts/p1_acceptance_wizard.py\n"
+            "Future operator stage: python scripts/p1_acceptance_wizard.py --production"
+        )

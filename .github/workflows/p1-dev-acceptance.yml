@@ -1,0 +1,50 @@
+name: P1 Disposable Docker Development Acceptance
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "docker-compose.p1-dev.yml"
+      - "Dockerfile.p1-dev"
+      - "Dockerfile.p1-dev.dockerignore"
+      - "Dockerfile"
+      - "requirements-web.txt"
+      - "scripts/p1_dev_scenarios.py"
+      - "scripts/run_p1_dev_acceptance.sh"
+      - "scripts/p1_acceptance_wizard.py"
+      - "teledrive/**"
+      - "web/**"
+      - ".github/workflows/p1-dev-acceptance.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p1-dev-docker-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  disposable-docker-fault-injection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify Docker Compose
+        run: |
+          docker version
+          docker compose version
+      - name: Install two clean TeleDrive apps and inject recoverable faults
+        env:
+          P1_DEV_REPORT_DIR: ${{ runner.temp }}/p1-dev-evidence
+        run: bash scripts/run_p1_dev_acceptance.sh
+      - name: Publish sanitized acceptance report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p1-disposable-docker-acceptance
+          path: ${{ runner.temp }}/p1-dev-evidence/*.json
+          if-no-files-found: warn
+          retention-days: 14

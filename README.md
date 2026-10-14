@@ -1,5 +1,14 @@
 # TeleDrive
 
+> **Development-stage P1 acceptance:** use `bash scripts/run_p1_dev_acceptance.sh`.
+> It creates two isolated Docker WebUI services + PostgreSQL, injects
+> recoverable faults into synthetic media, verifies restore, and cleans up.
+> No production deployment, legacy cutover, Telegram session, Bot token
+> or real channel is required. See
+> [P1 Development Acceptance](docs/P1_DEVELOPMENT_ACCEPTANCE.md).
+> Real Telegram CI and production cutover are separate opt-in stages.
+
+
 **Telegram personal backup uploader** — Docker Web UI, Windows/Linux desktop app and an automation CLI. This fork adds multi-account scheduling and SQLAlchemy-backed persistent state.
 
 > Telegram Saved Messages and ordinary Telegram cloud chats are **not end-to-end encrypted**. Encrypt sensitive files before uploading when confidentiality from Telegram is required.
@@ -9,7 +18,7 @@
 The server/NAS deployment has a browser dashboard, upload queue, history, account management, Telegram login prompts and logs.
 
 ~~~bash
-git clone -b feature/docker-webui-multiaccount https://github.com/babico/TeleDrive.git
+git clone -b main https://github.com/babico/TeleDrive.git
 cd TeleDrive
 mkdir -p config data uploads
 cp .env.example .env
