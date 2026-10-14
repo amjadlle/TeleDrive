@@ -9,6 +9,6 @@ TeleDrive includes a Docker Web UI, a PySide6 desktop client, and an Astro marke
 - Validate Compose: `docker compose config --quiet`.
 - For website changes: `cd website && npm ci && npm run build`.
 - Update the **root README.md** for user-facing instructions; do not introduce additional README files.
-- Send vulnerability reports privately as described in [SECURITY.md](SECURITY.md).
+- Send vulnerability reports privately as described in [Security Policy](docs/SECURITY.md).
 
 Packaging helpers are in **scripts/** and Docker Web UI sources in **web/**.

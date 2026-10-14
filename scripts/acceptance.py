@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Interactive, fail-closed TeleDrive P1 operator acceptance assistant.
+"""Interactive, fail-closed TeleDrive acceptance assistant.
 
-Run as a file with "python scripts/p1_acceptance_wizard.py". Do not pipe the
+Run as a file with "python scripts/acceptance.py". Do not pipe the
 source to "python -": that consumes stdin and makes input() raise EOFError.
 
 Produces a private, sanitized report. Never approves production, deletes
@@ -30,9 +30,9 @@ if str(ROOT) not in sys.path:
 
 REPO = "babico/TeleDrive"
 WORKFLOWS = {
-    "user": "Telegram Storage E2E (manual)",
-    "bot": "Telegram Bot Storage E2E",
-    "multiworker": "Telegram Multiworker PostgreSQL E2E",
+    "user": "04 · Live Telegram | User MTProto E2E",
+    "bot": "04 · Live Telegram | Bot API E2E",
+    "multiworker": "04 · Live Telegram | Multiworker PostgreSQL E2E",
 }
 
 
@@ -179,7 +179,7 @@ def soak_stage(result: dict, evidence: Path):
         return
     first = ask("Host A HTTPS origin (443, path yok)")
     second = ask("Host B HTTPS origin (443, path yok)")
-    from scripts.monitor_p1_soak import parse_hosts
+    from scripts.monitor_host_soak import parse_hosts
     hosts = [{"label": "host-a", "url": first},
              {"label": "host-b", "url": second}]
     try:
@@ -204,7 +204,7 @@ def soak_stage(result: dict, evidence: Path):
     target = output_file(evidence, "p1-soak", ".json")
     # Host names / passwords are never recorded in our master report.
     run = safe_run([
-        sys.executable, "scripts/monitor_p1_soak.py",
+        sys.executable, "scripts/monitor_host_soak.py",
         "--duration-seconds", "3600", "--interval-seconds", "60",
         "--output", str(target),
     ], env=env, timeout=3900)
@@ -663,6 +663,6 @@ if __name__ == "__main__":
         ], cwd=ROOT))
     else:
         raise SystemExit(
-            "Development: python scripts/p1_acceptance_wizard.py\n"
-            "Future operator stage: python scripts/p1_acceptance_wizard.py --production"
+            "Development: python scripts/acceptance.py\n"
+            "Future operator stage: python scripts/acceptance.py --production"
         )

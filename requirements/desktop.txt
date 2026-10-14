@@ -1,3 +1,4 @@
+# Desktop installer only (PySide6). The headless Web image uses server.txt.
 telethon>=1.36.0,<2
 PyYAML>=6.0
 PySide6>=6.7,<7

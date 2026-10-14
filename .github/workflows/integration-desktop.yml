@@ -36,6 +36,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements/desktop.txt
       - name: Install Linux Qt runtime libraries
         if: runner.os == 'Linux'
         shell: bash

@@ -29,9 +29,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements/server.txt
       - name: Install API and test runtime
         run: |
-          python -m pip install -r requirements-web.txt
+          python -m pip install -r requirements/server.txt
           python -m pip install pytest httpx boto3
           python -m pip check
       - name: Install actual AWS CLI and rclone clients
@@ -66,7 +67,7 @@ jobs:
             tests/test_storage_multiworker.py \
             tests/test_metadata_snapshot_rehearsal.py \
             tests/test_storage_versions.py \
-            tests/test_storage_ops_health.py tests/test_p1_soak_acceptance.py tests/test_p1_acceptance_wizard.py \
+            tests/test_storage_ops_health.py tests/test_host_soak.py tests/test_acceptance_cli.py \
             tests/test_storage_gc_retention.py \
             tests/test_s3_version_reads.py \
             tests/test_s3_delete_markers.py \
@@ -101,9 +102,9 @@ jobs:
             tests/test_s3_cors.py \
             tests/test_s3_object_attributes.py \
             tests/test_s3_sigv4_defense.py \
-            tests/test_s3_p0_acceptance.py \
-            tests/test_s3_p0_final.py \
-            tests/test_p0_security_matrix.py \
+            tests/test_s3_fail_closed.py \
+            tests/test_s3_contract.py \
+            tests/test_s3_permissions.py \
             tests/test_storage_gc_audit.py \
             tests/test_storage_gc_admin.py
       - name: Publish CI run summary

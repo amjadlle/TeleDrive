@@ -1,5 +1,7 @@
 # Security Policy
 
+GitHub recognizes this policy at `docs/SECURITY.md`; report vulnerabilities privately.
+
 ## Reporting a vulnerability
 
 Please do not publish credentials, Telegram session files, or exploitable details in

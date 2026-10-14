@@ -1,8 +1,9 @@
-# P1 development acceptance ONLY. No host ports, no production credentials,
+# Compose file is under .github/ci/fault-injection; ../../.. is the repo root.
+# Isolated Docker fault-injection and acceptance test ONLY. No host ports, no production credentials,
 # no real Telegram messages, unique Compose project/ephemeral workspace.
 x-web: &web
   build:
-    context: .
+    context: ../../..
     dockerfile: Dockerfile
   user: "${TELEDRIVE_FAULT_UID:?}:${TELEDRIVE_FAULT_GID:?}"
   read_only: true
@@ -60,8 +61,8 @@ services:
       - ${TELEDRIVE_FAULT_WORKSPACE:?}/uploads:/uploads:ro
   scenarios:
     build:
-      context: .
-      dockerfile: Dockerfile.fault-ci
+      context: ../../..
+      dockerfile: .github/ci/fault-injection/Dockerfile
     user: "${TELEDRIVE_FAULT_UID:?}:${TELEDRIVE_FAULT_GID:?}"
     depends_on:
       postgres:

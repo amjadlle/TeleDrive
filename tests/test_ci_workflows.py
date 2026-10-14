@@ -16,28 +16,28 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 EXPECTED = (
-    "security-ci.yml",
-    "storage-api-ci.yml",
-    "database-ci.yml",
-    "desktop-ci.yml",
-    "telegram-storage-e2e.yml",
-    "telegram-bot-e2e.yml",
-    "telegram-multiworker-e2e.yml",
-    "release.yml",
-    "docker-fault-injection-ci.yml",
+    "quality-security.yml",
+    "integration-storage.yml",
+    "integration-databases.yml",
+    "integration-desktop.yml",
+    "live-telegram-user.yml",
+    "live-telegram-bot.yml",
+    "live-telegram-multiworker.yml",
+    "delivery-release.yml",
+    "resilience-docker.yml",
 )
 
 
 DISPLAY_NAMES = {
-    "security-ci.yml": "01 · Quality | Security & Regression",
-    "database-ci.yml": "02 · Integration | Databases",
-    "storage-api-ci.yml": "02 · Integration | REST & S3",
-    "desktop-ci.yml": "02 · Integration | Desktop",
-    "docker-fault-injection-ci.yml": "03 · Resilience | P1 Docker Acceptance",
-    "telegram-bot-e2e.yml": "04 · Live Telegram | Bot API E2E",
-    "telegram-storage-e2e.yml": "04 · Live Telegram | User MTProto E2E",
-    "telegram-multiworker-e2e.yml": "04 · Live Telegram | Multiworker PostgreSQL E2E",
-    "release.yml": "05 · Delivery | Release Gate & Packages",
+    "quality-security.yml": "01 · Quality | Security & Regression",
+    "integration-databases.yml": "02 · Integration | Databases",
+    "integration-storage.yml": "02 · Integration | REST & S3",
+    "integration-desktop.yml": "02 · Integration | Desktop",
+    "resilience-docker.yml": "03 · Resilience | Docker Fault Injection",
+    "live-telegram-bot.yml": "04 · Live Telegram | Bot API E2E",
+    "live-telegram-user.yml": "04 · Live Telegram | User MTProto E2E",
+    "live-telegram-multiworker.yml": "04 · Live Telegram | Multiworker PostgreSQL E2E",
+    "delivery-release.yml": "05 · Delivery | Release Gate & Packages",
 }
 
 
@@ -86,9 +86,9 @@ def test_all_external_actions_are_pinned_to_full_commit_sha(name):
 
 
 @pytest.mark.parametrize("name,job_name,test_file", (
-    ("telegram-storage-e2e.yml", "telegram-roundtrip",
+    ("live-telegram-user.yml", "telegram-roundtrip",
      "tests/test_telegram_storage_e2e.py"),
-    ("telegram-bot-e2e.yml", "telegram-bot-roundtrip",
+    ("live-telegram-bot.yml", "telegram-bot-roundtrip",
      "tests/test_telegram_bot_e2e.py"),
 ))
 def test_live_e2e_is_push_manual_only_fails_closed_and_never_aborts_cleanup(
@@ -113,7 +113,7 @@ def test_live_e2e_is_push_manual_only_fails_closed_and_never_aborts_cleanup(
 
 
 def test_release_requires_regressions_before_build_and_tag_before_publication():
-    doc = workflow("release.yml")
+    doc = workflow("delivery-release.yml")
     assert doc["permissions"]["contents"] == "read"
     assert "tags" in doc["on"]["push"]
     jobs = doc["jobs"]
@@ -130,7 +130,7 @@ def test_release_requires_regressions_before_build_and_tag_before_publication():
 
 
 def test_security_includes_bot_target_and_api_tests():
-    doc = workflow("security-ci.yml")
+    doc = workflow("quality-security.yml")
     assert doc["permissions"]["contents"] == "read"
     scripts = "\n".join(s.get("run", "") for s in doc["jobs"]["security"]["steps"])
     for path in (
@@ -141,8 +141,8 @@ def test_security_includes_bot_target_and_api_tests():
         "tests/test_api_keys.py",
         "tests/test_rest_api.py",
         "tests/test_s3_sigv4_defense.py",
-        "tests/test_s3_p0_acceptance.py",
-        "tests/test_s3_p0_final.py",
+        "tests/test_s3_fail_closed.py",
+        "tests/test_s3_contract.py",
     ):
         assert path in scripts
     for tool in ("pip-audit", "bandit", "docker build", "trivy"):
@@ -154,14 +154,14 @@ def test_security_includes_bot_target_and_api_tests():
 
 
 def test_db_and_desktop_matrix_and_storage_contracts_are_present():
-    db = workflow("database-ci.yml")["jobs"]["database"]
+    db = workflow("integration-databases.yml")["jobs"]["database"]
     assert {"mysql", "postgres"} <= set(db["services"])
     assert any("tests/test_database_live.py" in s.get("run", "")
                and "tests/test_storage_engine.py" in s.get("run", "")
                and "tests/test_storage_recovery.py" in s.get("run", "")
                for s in db["steps"])
 
-    desktop = workflow("desktop-ci.yml")["jobs"]["desktop"]
+    desktop = workflow("integration-desktop.yml")["jobs"]["desktop"]
     assert set(desktop["strategy"]["matrix"]["os"]) == {
         "ubuntu-latest", "windows-latest"
     }
@@ -171,16 +171,16 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
     assert "scripts/build-linux.sh" in steps
     assert "scripts/build.ps1" in steps
 
-    api = workflow("storage-api-ci.yml")["jobs"]["storage-api"]
+    api = workflow("integration-storage.yml")["jobs"]["storage-api"]
     commands = "\n".join(s.get("run", "") for s in api["steps"])
     for path in ("tests/test_rest_api.py", "tests/test_rest_transfer.py",
                  "tests/test_storage_catalog.py", "tests/test_bot_storage.py",
-                 "tests/test_p0_security_matrix.py"):
+                 "tests/test_s3_permissions.py"):
         assert path in commands
 
 
 def test_live_multipart_push_is_explicitly_opted_in():
-    bot = workflow("telegram-bot-e2e.yml")
+    bot = workflow("live-telegram-bot.yml")
     job = bot["jobs"]["telegram-bot-roundtrip"]
     expression = job["env"]["TELEDRIVE_E2E_MULTIPART"]
     assert "inputs.run_multipart" in expression
@@ -190,7 +190,7 @@ def test_live_multipart_push_is_explicitly_opted_in():
 
 
 def test_final_p0_contract_runs_on_every_database_and_desktop_push():
-    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+    for name in ("integration-databases.yml", "integration-desktop.yml", "integration-storage.yml"):
         rules = workflow(name)["on"]
         for event in ("push", "pull_request"):
             assert event in rules
@@ -198,14 +198,14 @@ def test_final_p0_contract_runs_on_every_database_and_desktop_push():
             assert "paths-ignore" not in rules[event]
     commands = "\n".join(
         s.get("run", "")
-        for s in workflow("storage-api-ci.yml")["jobs"]["storage-api"]["steps"]
+        for s in workflow("integration-storage.yml")["jobs"]["storage-api"]["steps"]
     )
-    assert "tests/test_s3_p0_final.py" in commands
+    assert "tests/test_s3_contract.py" in commands
 
 
 
 def test_acceptance_report_updates_cannot_skip_required_ci():
-    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+    for name in ("integration-databases.yml", "integration-desktop.yml", "integration-storage.yml"):
         events = workflow(name)["on"]
         assert "paths" not in events["push"]
         assert "paths" not in events["pull_request"]
@@ -213,22 +213,22 @@ def test_acceptance_report_updates_cannot_skip_required_ci():
 
 
 def test_status_audit_rechecks_every_release_workflow():
-    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+    for name in ("integration-databases.yml", "integration-desktop.yml", "integration-storage.yml"):
         triggers = workflow(name)["on"]
         for event in ("push", "pull_request"):
             assert "paths" not in triggers[event]
-    release = workflow("release.yml")["on"]["push"]
+    release = workflow("delivery-release.yml")["on"]["push"]
     assert "paths" not in release
     assert "tags" in release and "branches" in release
 
 
 
 def test_storage_ci_runs_legacy_migration_on_every_change():
-    events = workflow("storage-api-ci.yml")["on"]
+    events = workflow("integration-storage.yml")["on"]
     for event in ("push", "pull_request"):
         assert "paths" not in events[event]
     command = "\n".join(
-        x.get("run", "") for x in workflow("storage-api-ci.yml")["jobs"]["storage-api"]["steps"]
+        x.get("run", "") for x in workflow("integration-storage.yml")["jobs"]["storage-api"]["steps"]
     )
     for path in (
         "tests/test_legacy_bridge.py",
@@ -239,7 +239,7 @@ def test_storage_ci_runs_legacy_migration_on_every_change():
 
 
 def test_real_bot_soak_is_explicitly_opted_in_and_never_silently_skipped():
-    bot = workflow("telegram-bot-e2e.yml")
+    bot = workflow("live-telegram-bot.yml")
     assert bot["on"]["workflow_dispatch"]["inputs"]["run_soak"]["type"] == "boolean"
     script = bot["jobs"]["telegram-bot-roundtrip"]["steps"]
     assert any("tests/test_telegram_bot_e2e.py" in s.get("run", "") for s in script)
@@ -252,7 +252,7 @@ def test_real_bot_soak_is_explicitly_opted_in_and_never_silently_skipped():
 
 
 def test_bot_send_intent_contract_and_operator_health_run_on_every_push():
-    storage = workflow("storage-api-ci.yml")
+    storage = workflow("integration-storage.yml")
     for event in ("push", "pull_request"):
         assert "paths" not in storage["on"][event]
     executed = "\n".join(
@@ -266,14 +266,14 @@ def test_bot_send_intent_contract_and_operator_health_run_on_every_push():
     ):
         assert test_file in executed
     security_steps = "\n".join(
-        s.get("run", "") for s in workflow("security-ci.yml")["jobs"]["security"]["steps"]
+        s.get("run", "") for s in workflow("quality-security.yml")["jobs"]["security"]["steps"]
     )
     assert "tests/test_bot_storage.py" in security_steps
 
 
 def test_production_acceptance_dr_ack_cutover_gates_are_run_in_ci():
     """Safety-critical operator artifacts must stay in non-skipped CI gates."""
-    for filename in ("storage-api-ci.yml", "security-ci.yml", "release.yml"):
+    for filename in ("integration-storage.yml", "quality-security.yml", "delivery-release.yml"):
         content = (WORKFLOWS / filename).read_text(encoding="utf-8")
         for path in (
             "tests/test_bot_receipt_reconcile.py",
@@ -285,7 +285,7 @@ def test_production_acceptance_dr_ack_cutover_gates_are_run_in_ci():
 
 
 def test_mainline_multi_process_live_postgres_bot_acceptance():
-    name = "telegram-multiworker-e2e.yml"
+    name = "live-telegram-multiworker.yml"
     path = WORKFLOWS / name
     assert path.is_file()
     content = path.read_text(encoding="utf-8")
@@ -297,10 +297,10 @@ def test_mainline_multi_process_live_postgres_bot_acceptance():
     assert "concurrency" not in wf  # job-level serialization with Bot E2E
     assert job["concurrency"]["cancel-in-progress"] == "false"
     assert job["concurrency"]["group"] != workflow(
-        "telegram-bot-e2e.yml"
+        "live-telegram-bot.yml"
     )["concurrency"]["group"]
     assert job["concurrency"]["group"] != workflow(
-        "telegram-storage-e2e.yml"
+        "live-telegram-user.yml"
     )["concurrency"]["group"]
     assert "postgres" in job["services"]
     assert "postgres:17-alpine" in job["services"]["postgres"]["image"]
@@ -317,7 +317,7 @@ def test_mainline_multi_process_live_postgres_bot_acceptance():
 
 
 def test_cross_client_bot_ack_requires_opt_in():
-    wf = workflow("telegram-bot-e2e.yml")
+    wf = workflow("live-telegram-bot.yml")
     expressions = wf["jobs"]["telegram-bot-roundtrip"]["env"]
     assert "inputs.run_ack_proof" in expressions["TELEDRIVE_E2E_CROSS_CLIENT"]
     assert "[p1-live-ack-proof]" in expressions["TELEDRIVE_E2E_CROSS_CLIENT"]
@@ -326,14 +326,14 @@ def test_cross_client_bot_ack_requires_opt_in():
     assert "TELEDRIVE_E2E_SESSION" in expressions
 
 @pytest.mark.parametrize("name", [
-    "telegram-bot-e2e.yml", "telegram-multiworker-e2e.yml",
+    "live-telegram-bot.yml", "live-telegram-multiworker.yml",
 ])
 def test_bot_target_is_masked_secret_before_any_live_step(name):
     """Reject accidental reintroduction of clear-text Actions channel IDs."""
     raw = (WORKFLOWS / name).read_text(encoding="utf-8")
     doc = workflow(name)
     job = (doc["jobs"]["telegram-bot-roundtrip"]
-           if name == "telegram-bot-e2e.yml"
+           if name == "live-telegram-bot.yml"
            else doc["jobs"]["three-process-telegram"])
     target = job["env"]["TELEDRIVE_E2E_BOT_CHAT_ID"]
     assert target == "${{ secrets.TELEDRIVE_E2E_BOT_CHAT_ID }}"
@@ -359,8 +359,8 @@ def test_telegram_setup_writes_bot_target_as_secret_and_avoids_value_output():
 
 def test_telethon_optional_numeric_target_uses_secret_not_public_variable():
     """A numeric user-session peer ID needs masking as much as a Bot peer."""
-    raw = (WORKFLOWS / "telegram-storage-e2e.yml").read_text("utf-8")
-    job = workflow("telegram-storage-e2e.yml")["jobs"]["telegram-roundtrip"]
+    raw = (WORKFLOWS / "live-telegram-user.yml").read_text("utf-8")
+    job = workflow("live-telegram-user.yml")["jobs"]["telegram-roundtrip"]
     assert job["env"]["TELEDRIVE_E2E_TARGET"] == "${{ secrets.TELEDRIVE_E2E_TARGET }}"
     assert "vars.TELEDRIVE_E2E_TARGET" not in raw
     assert job["steps"][0]["name"] == "Mask optional Telegram user target"
@@ -686,9 +686,9 @@ def test_live_workers_use_independent_queues_without_cancelling_user_e2e():
     """Keep the Bot, multiworker, and user pending queues distinct."""
     bot_group = "teledrive-live-bot-${{ github.repository }}"
     user_group = "teledrive-live-user-${{ github.repository }}"
-    bot = workflow("telegram-bot-e2e.yml")
-    user = workflow("telegram-storage-e2e.yml")
-    workers = workflow("telegram-multiworker-e2e.yml")
+    bot = workflow("live-telegram-bot.yml")
+    user = workflow("live-telegram-user.yml")
+    workers = workflow("live-telegram-multiworker.yml")
     assert bot["concurrency"]["group"] == bot_group
     assert user["concurrency"]["group"] == user_group
     worker_group = workers["jobs"]["three-process-telegram"]["concurrency"]["group"]
@@ -716,12 +716,12 @@ def test_every_test_file_is_referenced_by_a_real_ci_workflow():
 
 
 def test_critical_ci_is_unfiltered_at_every_commit_sha():
-    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
+    for name in ("integration-databases.yml", "integration-desktop.yml", "integration-storage.yml"):
         events = workflow(name)["on"]
         for trigger in ("push", "pull_request"):
             assert "paths" not in events[trigger]
             assert "paths-ignore" not in events[trigger]
-    assert "paths" not in workflow("release.yml")["on"]["push"]
+    assert "paths" not in workflow("delivery-release.yml")["on"]["push"]
 
 
 @pytest.mark.parametrize("name", EXPECTED)
@@ -734,13 +734,13 @@ def test_mainline_only_push_triggers_after_p1_merge(name):
     assert "feature/docker-webui-multiaccount" not in branches, name
 
 
-def test_p1_multiworker_runs_on_main_without_regular_bot_collision():
+def test_live_multiworker_runs_on_main_without_regular_bot_collision():
     """Multiworker runs on every main push and shares the Bot writer lock."""
-    bot = workflow("telegram-bot-e2e.yml")
-    worker = workflow("telegram-multiworker-e2e.yml")
+    bot = workflow("live-telegram-bot.yml")
+    worker = workflow("live-telegram-multiworker.yml")
     regular = bot["jobs"]["telegram-bot-roundtrip"]
     triple = worker["jobs"]["three-process-telegram"]
-    assert "[p1-live-multiworker]" in regular["if"]
+    assert "[live-multiworker]" in regular["if"]
     assert "github.event_name != 'push'" in regular["if"]
     assert "!contains" in regular["if"]
     assert "if" not in triple  # no opt-in marker required for P1 acceptance
@@ -751,9 +751,9 @@ def test_p1_multiworker_runs_on_main_without_regular_bot_collision():
 
 def test_reusable_docker_fault_injection_workflow_contract():
     """Independent Docker fault injection persists across roadmap phases."""
-    assert not (WORKFLOWS / "p1-dev-acceptance.yml").exists()
-    doc = workflow("docker-fault-injection-ci.yml")
-    assert doc["name"] == "03 · Resilience | P1 Docker Acceptance"
+    assert sorted(p.name for p in WORKFLOWS.glob("*.yml")) == sorted([*EXPECTED, "endurance-capacity.yml"])
+    doc = workflow("resilience-docker.yml")
+    assert doc["name"] == "03 · Resilience | Docker Fault Injection"
     assert "workflow_dispatch" in doc["on"]
     assert "push" in doc["on"] and "pull_request" in doc["on"]
     assert "paths" not in doc["on"]["push"]
@@ -761,8 +761,9 @@ def test_reusable_docker_fault_injection_workflow_contract():
     commands = "\n".join(s.get("run", "") for s in
                          doc["jobs"]["disposable-docker-fault-injection"]["steps"])
     assert "scripts/run_docker_fault_injection.sh" in commands
-    assert (ROOT / "docker-compose.fault-ci.yml").is_file()
-    assert (ROOT / "Dockerfile.fault-ci").is_file()
+    assert (ROOT / ".github/ci/fault-injection/compose.yml").is_file()
+    assert (ROOT / ".github/ci/fault-injection/Dockerfile").is_file()
+    assert (ROOT / ".github/ci/fault-injection/Dockerfile.dockerignore").is_file()
     assert (ROOT / "scripts/docker_fault_scenarios.py").is_file()
     assert (ROOT / "docs/CI_WORKFLOWS.md").is_file()
     assert "DEV-13" in (ROOT / "docs/CI_WORKFLOWS.md").read_text(encoding="utf-8")
@@ -815,7 +816,7 @@ def test_disposable_docker_dev_acceptance_has_real_restart_and_restore_gates():
 
 def test_disposable_dev_acceptance_does_not_require_live_telegram_credentials():
     """No production secret may be mounted inside disposable Compose."""
-    compose = (ROOT / "docker-compose.fault-ci.yml").read_text(
+    compose = (ROOT / ".github/ci/fault-injection/compose.yml").read_text(
         encoding="utf-8",
     )
     runner = (ROOT / "scripts" / "run_docker_fault_injection.sh").read_text(
@@ -831,7 +832,7 @@ def test_disposable_dev_acceptance_does_not_require_live_telegram_credentials():
 
 
 def test_release_publish_marker_requires_main_and_same_sha_guard():
-    release = workflow("release.yml")
+    release = workflow("delivery-release.yml")
     build = release["jobs"]["build"]
     publish = release["jobs"]["publish"]
     for job in (build, publish):
@@ -856,11 +857,55 @@ def test_canonical_docs_and_generated_release_notes():
     ):
         assert not (ROOT / "docs" / name).exists(), name
     for name, required_sections in (
-        ("CI_WORKFLOWS.md", ("DEV-01", "DEV-13", "docker-fault-injection-ci.yml")),
+        ("CI_WORKFLOWS.md", ("DEV-01", "DEV-13", "resilience-docker.yml")),
         ("IMPLEMENTATION_STATUS.md", ("P0", "P1", "P2", "verify_production_bundle.py")),
     ):
         content = (ROOT / "docs" / name).read_text(encoding="utf-8")
         assert all(section in content for section in required_sections), name
-    text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    text = (WORKFLOWS / "delivery-release.yml").read_text(encoding="utf-8")
     assert "--generate-notes" in text
     assert "--notes-file" not in text
+
+
+def test_explicit_dependencies_and_isolated_docker_build_contexts():
+    """Keep desktop GUI out of production API image and keep CI Docker isolated."""
+    desktop = (ROOT / "requirements/desktop.txt").read_text("utf-8")
+    server = (ROOT / "requirements/server.txt").read_text("utf-8")
+    assert "PySide6" in desktop and "fastapi" not in desktop.lower()
+    assert "fastapi" in server.lower() and "PySide6" not in server
+    web = (ROOT / "Dockerfile").read_text("utf-8")
+    isolated = (ROOT / ".github/ci/fault-injection/Dockerfile").read_text("utf-8")
+    compose = (ROOT / ".github/ci/fault-injection/compose.yml").read_text("utf-8")
+    assert "requirements/server.txt" in web and "requirements/server.txt" in isolated
+    assert "context: ../../.." in compose
+    assert "dockerfile: .github/ci/fault-injection/Dockerfile" in compose
+    prod_compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text("utf-8"))
+    assert prod_compose["services"]["s3"]["profiles"] == ["s3"]
+    assert "profiles" not in prod_compose["services"]["teledrive"]
+    assert (ROOT / "docs/SECURITY.md").is_file()
+    assert not (ROOT / "SECURITY.md").exists()
+
+
+def test_pip_cache_keys_follow_explicit_target_requirements():
+    """Renamed manifest paths must be used by setup-python caching too."""
+    for workflow_name in (
+        "quality-security.yml", "integration-storage.yml",
+        "integration-databases.yml", "integration-desktop.yml",
+        "delivery-release.yml",
+    ):
+        job = next(iter(workflow(workflow_name)["jobs"].values()))
+        setup = next(s for s in job["steps"] if s.get("name") == "Set up Python")
+        expected = ("requirements/desktop.txt" if "desktop" in workflow_name
+                    else "requirements/server.txt")
+        assert setup["with"]["cache-dependency-path"] == expected
+    endurance = workflow("endurance-capacity.yml")
+    assert endurance["name"] == "06 · Endurance | Isolated Capacity Soak"
+    assert "workflow_dispatch" in endurance["on"]
+
+
+def test_general_purpose_test_file_names_not_roadmap_phases():
+    """Test names describe behavior rather than internal rollout priorities."""
+    for path in (ROOT / "tests").glob("test_*.py"):
+        assert not re.match(r"test_(?:p0|p1|p2|s3_p0)(?:_|\\.)", path.name), path.name
+    for script in (ROOT / "scripts").glob("*.py"):
+        assert not re.match(r"(?:p0|p1|p2)_", script.name), script.name

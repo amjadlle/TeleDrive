@@ -1,7 +1,7 @@
 """Bounded synthetic endurance instrumentation, not production certification."""
 from __future__ import annotations
 import pytest
-from scripts.p2_capacity_probe import percentile, run
+from scripts.capacity_probe import percentile, run
 
 
 def test_percentile_is_deterministic():
@@ -42,7 +42,7 @@ def test_disk_media_retention_survives_database_restart(tmp_path):
 
 
 def test_synthetic_message_corruption_is_visible_to_original_storage_engine(tmp_path):
-    from scripts.p2_capacity_probe import IsolatedMedia
+    from scripts.capacity_probe import IsolatedMedia
     from teledrive.db import connect_database
     from teledrive.storage.catalog import BucketCatalog
     from teledrive.storage.engine import TelegramObjectStorage, IntegrityError

@@ -1,4 +1,4 @@
-name: 03 · Resilience | P1 Docker Acceptance
+name: 03 · Resilience | Docker Fault Injection
 on:
   workflow_dispatch:
   push:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   disposable-docker-fault-injection:
-    name: P1 DEV · Docker 13-gate fault acceptance
+    name: Docker · 13 fault-injection checks
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -42,7 +42,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo '### 03 · Resilience | P1 Docker Acceptance' >> "$GITHUB_STEP_SUMMARY"
+          echo '### 03 · Resilience | Docker Fault Injection' >> "$GITHUB_STEP_SUMMARY"
           echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
           echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
           echo '| Scope | Isolated 2-node API; PostgreSQL; crash, restore and teardown |' >> "$GITHUB_STEP_SUMMARY"

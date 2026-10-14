@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt pyinstaller
+.venv/bin/python -m pip install -r requirements/desktop.txt pyinstaller
 
 rm -rf build dist
 .venv/bin/python -m PyInstaller --noconfirm --clean --windowed \

@@ -8,16 +8,16 @@ GitHub Actions kenar çubuğu gerçek klasör/grup desteklemediği için adları
 
 | Grup | Workflow | Test kapsamı |
 | --- | --- | --- |
-| 01 Quality | [Security & Regression](../.github/workflows/security-ci.yml) | Regresyon, güvenlik, bağımlılık ve container smoke testleri |
-| 02 Integration | [Databases](../.github/workflows/database-ci.yml) | Gerçek PostgreSQL/MySQL, native yedek ve izole restore |
-| 02 Integration | [REST & S3](../.github/workflows/storage-api-ci.yml) | REST, SigV4/S3, boto3, AWS CLI ve rclone uyumluluk testleri |
-| 02 Integration | [Desktop](../.github/workflows/desktop-ci.yml) | Linux ve Windows desktop/CLI/paketleme kontrolleri |
-| 03 Resilience | [P1 Docker Acceptance](../.github/workflows/docker-fault-injection-ci.yml) | Gerçek PostgreSQL, iki WebUI, arıza enjeksiyonu, geri yükleme, 13 DEV kapısı |
-| 04 Live Telegram | [Bot API E2E](../.github/workflows/telegram-bot-e2e.yml) | Özel Telegram test kanalında gerçek Bot aktarımı ve readback |
-| 04 Live Telegram | [User MTProto E2E](../.github/workflows/telegram-storage-e2e.yml) | Gerçek Telethon oturumu, SHA ve Range |
-| 04 Live Telegram | [Multiworker PostgreSQL E2E](../.github/workflows/telegram-multiworker-e2e.yml) | Ortak PostgreSQL kullanan üç bağımsız worker ve gerçek Telegram |
-| 05 Delivery | [Release Gate & Packages](../.github/workflows/release.yml) | Release regresyonları, Linux/Windows paketleri, sürüm yayını |
-| 06 Endurance | [Offline 60m Capacity Soak](../.github/workflows/p2-capacity-soak.yml) | **Manuel** 60–110 dk: gerçek SQLite/engine, diskte sentetik Telegram, SQL restart ve p95 |
+| 01 Quality | [Security & Regression](../.github/workflows/quality-security.yml) | Regresyon, güvenlik, bağımlılık ve container smoke testleri |
+| 02 Integration | [Databases](../.github/workflows/integration-databases.yml) | Gerçek PostgreSQL/MySQL, native yedek ve izole restore |
+| 02 Integration | [REST & S3](../.github/workflows/integration-storage.yml) | REST, SigV4/S3, boto3, AWS CLI ve rclone uyumluluk testleri |
+| 02 Integration | [Desktop](../.github/workflows/integration-desktop.yml) | Linux ve Windows desktop/CLI/paketleme kontrolleri |
+| 03 Resilience | [Docker Fault Injection](../.github/workflows/resilience-docker.yml) | Gerçek PostgreSQL, iki WebUI, arıza enjeksiyonu, geri yükleme, 13 DEV kapısı |
+| 04 Live Telegram | [Bot API E2E](../.github/workflows/live-telegram-bot.yml) | Özel Telegram test kanalında gerçek Bot aktarımı ve readback |
+| 04 Live Telegram | [User MTProto E2E](../.github/workflows/live-telegram-user.yml) | Gerçek Telethon oturumu, SHA ve Range |
+| 04 Live Telegram | [Multiworker PostgreSQL E2E](../.github/workflows/live-telegram-multiworker.yml) | Ortak PostgreSQL kullanan üç bağımsız worker ve gerçek Telegram |
+| 05 Delivery | [Release Gate & Packages](../.github/workflows/delivery-release.yml) | Release regresyonları, Linux/Windows paketleri, sürüm yayını |
+| 06 Endurance | [Offline 60m Capacity Soak](../.github/workflows/endurance-capacity.yml) | **Manuel** 60–110 dk: gerçek SQLite/engine, diskte sentetik Telegram, SQL restart ve p95 |
 
 **Dokuz ana workflow** her `main` push'unda çalışır. `06 Endurance` manuel `workflow_dispatch` testidir ve her push'ta bir saatlik iş başlatmaz. Her job, `GITHUB_STEP_SUMMARY` içine sonucunu yazar. Gerçek Telegram E2E'leri test kanalı secret'larına bağımlıdır; Docker DEV testinin secret ihtiyacı yoktur.
 
@@ -35,12 +35,12 @@ GitHub Actions kenar çubuğu gerçek klasör/grup desteklemediği için adları
 
 ### Tek komut
 
-Docker Engine + Docker Compose v2 gerekir. GitHub Actions bunu kendi izole runner'ında kurar; yerel makinede kurulum mümkün değilse [Docker P1 workflow'unun](../.github/workflows/docker-fault-injection-ci.yml) `success` sonucu ve artifact'i kullanılır.
+Docker Engine + Docker Compose v2 gerekir. GitHub Actions bunu kendi izole runner'ında kurar; yerel makinede kurulum mümkün değilse [Docker P1 workflow'unun](../.github/workflows/resilience-docker.yml) `success` sonucu ve artifact'i kullanılır.
 
 ~~~bash
 bash scripts/run_docker_fault_injection.sh
 # Eşdeğer varsayılan geliştirme kabul sihirbazı:
-python scripts/p1_acceptance_wizard.py
+python scripts/acceptance.py
 ~~~
 
 Komut, rastgele isimli Compose projesi ve özel çalışma alanında şu servisleri oluşturur: **PostgreSQL 17**, ayrı iki gerçek TeleDrive WebUI/API container'ı ve gerçek SQLAlchemy/TelegramObjectStorage motorunu kullanan senaryo container'ı. Telegram'ın yerine **diske yazan sentetik taşıma** geçer; gerçek Telegram'a bağlanılmaz. Dış dünyaya servis portu açılmaz.
@@ -101,4 +101,11 @@ Bu sadece **beklenen şema örneğidir**, gerçekleşmiş koşu çıktısı değ
 
 P0/P1 DEV geliştirme kapanışı ve bunun production'dan farkı, operatörün gerçek host/DR/cutover prosedürü, Telegram GC sınırı ve P2 backlog'u tek yerde: **[Proje durumu, kabul ve P2](IMPLEMENTATION_STATUS.md)**.
 
-SQL backup'ın genel uygulaması: [Backup & Restore](BACKUP_RESTORE.md). Test altyapısı: [Docker Compose tanımı](../docker-compose.fault-ci.yml), [senaryolar](../scripts/docker_fault_scenarios.py) ve [çalıştırıcı](../scripts/run_docker_fault_injection.sh).
+SQL backup'ın genel uygulaması: [Backup & Restore](BACKUP_RESTORE.md). Test altyapısı: [Docker Compose tanımı](../.github/ci/fault-injection/compose.yml), [senaryolar](../scripts/docker_fault_scenarios.py) ve [çalıştırıcı](../scripts/run_docker_fault_injection.sh).
+
+## Dosya düzeni ve çalışma profilleri
+
+- GitHub Actions tanımları yalnızca [`.github/workflows/`](../.github/workflows/) içindedir. Resilience testinin Docker build bağlamı ve yardımcı Dockerfile'ı [`.github/ci/fault-injection/`](../.github/ci/fault-injection/) altında tutulur; GitHub Actions bu dosyaları ayrıca workflow olarak çalıştırmaz.
+- Bağımlılıklar [`requirements/server.txt`](../requirements/server.txt) (başsız Web/S3) ve [`requirements/desktop.txt`](../requirements/desktop.txt) (PySide6 masaüstü) olarak ayrılmıştır. GUI paketlerini server image'ına yüklemeyiz. Ortak Python çekirdeğinin metadata'sı `pyproject.toml` içindedir.
+- [`docker-compose.yml`](../docker-compose.yml) normalde sadece `teledrive` Web servisini açar. İkinci `s3` ASGI servisi `profiles: [s3]` altında isteğe bağlıdır; `docker compose --profile s3 up -d --build` ile açılır ve aynı image/metadata'yı kullanır. Farklı giriş noktalarının ayrı proses olması güvenlik ve port sınırlarını korur.
+- Docker arıza senaryosunda **gerçek** PostgreSQL ve iki ayrı Web container'ı kasıtlıdır: çoklu servis crash/restart testi bunu gerektirir. Bunlar production container'ları değildir.

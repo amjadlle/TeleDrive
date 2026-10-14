@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.monitor_p1_soak import (
+from scripts.monitor_host_soak import (
     collect, parse_hosts, selected_metrics, summarize,
 )
 

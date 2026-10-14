@@ -41,7 +41,7 @@ En az iki **fiziksel olarak ayrı** uygulama host'u ve ortak PostgreSQL/MySQL ku
 Korunan ortamda `TELEDRIVE_P1_HEALTH_HOSTS` (iki–sekiz farklı HTTPS endpoint'i içeren `label`/`url` JSON), `TELEDRIVE_P1_BASIC_USERNAME` ve `TELEDRIVE_P1_BASIC_PASSWORD` sağlandıktan sonra:
 
 ~~~bash
-python scripts/monitor_p1_soak.py \
+python scripts/monitor_host_soak.py \
   --output /secure/acceptance/soak.json \
   --duration-seconds 3600 \
   --interval-seconds 60
@@ -123,7 +123,7 @@ python scripts/rebuild_from_telegram.py \
 
 ### P2 kapasite: sentetik ve gerçek host testleri ayrıdır
 
-[Manuel 60–110 dk dayanıklılık workflow'u](../.github/workflows/p2-capacity-soak.yml) gerçek SQLite/engine, diskte kalıcı sentetik Telegram, periyodik SQL restart, geçmiş nesne readback, SHA ve p50/p95 ölçer. Normal `main` push'unda bir saatlik iş tüketmez. **Gerçek Telegram, doğal 429, fiziksel host, production soak değil.**
+[Manuel 60–110 dk dayanıklılık workflow'u](../.github/workflows/endurance-capacity.yml) gerçek SQLite/engine, diskte kalıcı sentetik Telegram, periyodik SQL restart, geçmiş nesne readback, SHA ve p50/p95 ölçer. Normal `main` push'unda bir saatlik iş tüketmez. **Gerçek Telegram, doğal 429, fiziksel host, production soak değil.**
 
 Gerçek production sunucusu olduğunda en az 1 saatlik host telemetrisi ve uzun-dönem kapasite/latency profili ayrıca toplanacaktır.
 
@@ -142,3 +142,7 @@ AWS lifecycle, bucket policies, SSE, ileri checksum/SDK davranışları, eksik S
 - [ ] Otomatik bilinmeyen Telegram geçmişi keşfi, P2 advanced S3 ve production ölçek testleri geliştirilmeli.
 
 Operatörlerin toplu iş listesi: [TODO.md](../TODO.md). Sürüm günlüğü için ayrı `docs/RELEASE_NOTES_*` dosyaları tutulmaz; [GitHub Releases](https://github.com/babico/TeleDrive/releases) sayfası notları üretir.
+
+## Kaynak ağacının bakımı
+
+GitHub Actions YAML'ları [`.github/workflows/`](../.github/workflows/), bunların özel Docker yardımcıları [`.github/ci/fault-injection/`](../.github/ci/fault-injection/) altında yer alır. Script ve test dosyaları P0/P1/P2 faz adını değil davranışı adlandırır: `acceptance.py`, `monitor_host_soak.py`, `capacity_probe.py`; `test_acceptance_cli.py`, `test_host_soak.py`, `test_capacity_probe.py` vb. Güvenlik politikası GitHub'ın desteklediği [`docs/SECURITY.md`](SECURITY.md) yolundadır. Desktop ve sunucu bağımlılıkları [`requirements/`](../requirements/) klasöründe ayrıdır.

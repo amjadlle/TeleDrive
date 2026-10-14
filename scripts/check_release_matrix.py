@@ -9,7 +9,7 @@ REQUIRED = {
     "02 · Integration | Databases",
     "02 · Integration | REST & S3",
     "02 · Integration | Desktop",
-    "03 · Resilience | P1 Docker Acceptance",
+    "03 · Resilience | Docker Fault Injection",
     "04 · Live Telegram | Bot API E2E",
     "04 · Live Telegram | User MTProto E2E",
     "04 · Live Telegram | Multiworker PostgreSQL E2E",

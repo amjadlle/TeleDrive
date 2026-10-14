@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import p1_acceptance_wizard as w
+from scripts import acceptance as w
 
 
 def test_report_is_unique_private_and_no_automatic_signoff(tmp_path):

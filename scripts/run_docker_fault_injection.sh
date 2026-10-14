@@ -10,12 +10,12 @@ if [[ -n "${TELEDRIVE_BOT_TOKEN:-}" || -n "${TELEDRIVE_STORAGE_BOT_TOKEN:-}" ]];
   echo "Üretim Bot token içeren shell'de DEV fault injection çalıştırma." >&2; exit 2
 fi
 ID="$(python3 -c 'import secrets;print(secrets.token_hex(6))')"
-PROJECT="tdp1$ID"
-WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/teledrive-p1-disposable.XXXXXXXX")"
+PROJECT="tdfault$ID"
+WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/teledrive-fault-disposable.XXXXXXXX")"
 export TELEDRIVE_FAULT_WORKSPACE="$WORKSPACE" TELEDRIVE_FAULT_UID="$(id -u)" TELEDRIVE_FAULT_GID="$(id -g)"
 export TELEDRIVE_FAULT_DB_PASSWORD="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
 export TELEDRIVE_FAULT_WEB_PASSWORD="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
-COMPOSE=(docker compose -f "$REPO/docker-compose.fault-ci.yml" -p "$PROJECT")
+COMPOSE=(docker compose -f "$REPO/.github/ci/fault-injection/compose.yml" -p "$PROJECT")
 REPORT_DIR="${TELEDRIVE_FAULT_REPORT_DIR:-$REPO/.docker-fault-evidence}"
 if [[ -L "$REPORT_DIR" ]]; then echo "Symlink rapor dizini reddedildi" >&2; exit 2; fi
 mkdir -p "$REPORT_DIR"; chmod 700 "$REPORT_DIR"
@@ -65,7 +65,7 @@ with os.fdopen(fd, "w") as output:
 print("DOCKER FAULT:", payload["result"], "| rapor:", target)
 sys.exit(0 if complete else 1)
 PY
-  if [[ "$docker_removed" == "true" && "$WORKSPACE" == "${TMPDIR:-/tmp}"/teledrive-p1-disposable.* ]]; then
+  if [[ "$docker_removed" == "true" && "$WORKSPACE" == "${TMPDIR:-/tmp}"/teledrive-fault-disposable.* ]]; then
     rm -rf -- "$WORKSPACE"
   else
     echo "İzole test workspace saklandı: Docker teardown doğrulanmadı." >&2

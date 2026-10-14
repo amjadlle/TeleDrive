@@ -1,6 +1,6 @@
 # TeleDrive
 
-> **Dokümantasyon:** [CI, otomatik testler ve Docker P1 kabulü](docs/CI_WORKFLOWS.md) · [P0/P1 durumu, production kabulü ve P2 planı](docs/IMPLEMENTATION_STATUS.md).
+> **Dokümantasyon:** [CI, otomatik testler ve Docker arıza senaryoları](docs/CI_WORKFLOWS.md) · [P0/P1 durumu, production kabulü ve P2 planı](docs/IMPLEMENTATION_STATUS.md).
 >
 > Docker geliştirme testi: `bash scripts/run_docker_fault_injection.sh`. Gerçek Telegram/production verisi gerekmez. Production operatör kabulü **ayrıdır**.
 
@@ -32,6 +32,8 @@ docker compose logs -f teledrive
 Open **http://127.0.0.1:8080** on the Docker host. The port binds to loopback by default. For remote administration use an SSH tunnel, VPN or HTTPS reverse proxy. Never expose HTTP Basic authentication over untrusted plaintext HTTP.
 
 In **Settings**, enter the Telegram API ID/hash from [my.telegram.org](https://my.telegram.org/apps), each enabled account's phone number and upload target, then select a strategy. Choose **Run batch**; the browser prompts for login codes and 2FA passwords as needed.
+
+**Compose services:** `docker compose up -d --build` starts **one** `teledrive` Web container. The separate `s3` container is optional (`docker compose --profile s3 up -d --build`); both share the same image and state. Their ASGI entrypoints use different ports and are intentionally separate.
 
 Docker mounts: **./config → /config** (settings), **./data → /data** (sessions, auth handoff, default SQLite DB), and **./uploads → /uploads:ro** (source files). To upload a different host directory, change only the host-side path of the **/uploads** bind mount.
 
@@ -104,7 +106,7 @@ Some drivers, especially ODBC variants, also require system libraries in a deriv
 A PySide6 desktop UI remains available, including multiple Telegram accounts, strategy selection, database URL settings, account-scoped login/2FA and SQLAlchemy-backed queue/history. The desktop example is [examples/config.desktop.yaml](examples/config.desktop.yaml); the application creates its own configuration under the user's application data directory.
 
 ~~~bash
-python -m pip install -r requirements.txt
+python -m pip install -r requirements/desktop.txt
 python -m app.main
 ~~~
 
@@ -156,7 +158,7 @@ Keep source files stable during uploads; back up your Telethon sessions and stat
 
 The Web UI is password-protected by default. Container defaults include loopback binding, non-root execution, dropped Linux capabilities, a read-only root filesystem and read-only upload source. Telegram sessions and auth handoff files have restrictive permissions; distributed leases and per-file claims help prevent duplicate uploads.
 
-See [SECURITY.md](SECURITY.md) for the threat model, TLS/host allowlists, secret-file authentication and database-driver trust. Default options are documented in [.env.example](.env.example) and [docker-compose.yml](docker-compose.yml).
+See [docs/SECURITY.md](docs/SECURITY.md) for the threat model, TLS/host allowlists, secret-file authentication and database-driver trust. Default options are documented in [.env.example](.env.example) and [docker-compose.yml](docker-compose.yml).
 
 ## Website and development
 
@@ -185,7 +187,7 @@ npm run build
 Development checks:
 
 ~~~bash
-python -m pip install -r requirements-web.txt pytest
+python -m pip install -r requirements/server.txt pytest
 python -m pytest -q
 python -m compileall -q teledrive web app tests
 docker compose config --quiet
@@ -724,7 +726,7 @@ currently rejected as unsupported instead of inventing AWS-like values.
   A separate fake-Telegram/real-SQL upload worker is SIGKILL-tested. Real 5 MiB+ Telegram Bot multipart **has** passed with
   `TELEDRIVE_E2E_MULTIPART=1` and end-to-end SQL restart, reparenting,
   checksum and test-only cleanup on the feature branch. Manual
-  `Telegram Bot Storage E2E` can repeat this with `run_multipart=true`;
+  `04 · Live Telegram | Bot API E2E` can repeat this with `run_multipart=true`;
   routine pushes do not enable the costly large-object case.
 
 No primary payload storage or fallback is added outside Telegram. SQL
@@ -800,7 +802,7 @@ TeleDrive keeps **two distinct Telegram upload paths**:
   a user session, but private-channel access requires a numeric chat ID and
   channel administrator permissions. Bot API cannot retrieve arbitrary past
   channel messages using message IDs alone, so TeleDrive persistently stores
-  the uploaded document's file ID in the SQL \`storage_bot_file_ids\` table.
+  the uploaded document's file ID in the SQL `storage_bot_file_ids` table.
 
 Both routes use the **same TelegramObjectStorage manifest, SHA-256 verification,
 range reads, and Telegram-only payload storage**. Bot API index-based uploads
@@ -835,12 +837,12 @@ displaying or writing the Telegram StringSession to a session file:
 
 | GitHub Actions setting | Type | Value |
 | --- | --- | --- |
-| \`TELEDRIVE_E2E_API_ID\` | Secret | Test user's Telegram API ID |
-| \`TELEDRIVE_E2E_API_HASH\` | Secret | Test user's API hash |
-| \`TELEDRIVE_E2E_SESSION\` | Secret | Authorized user StringSession |
-| \`TELEDRIVE_E2E_CHANNEL_NAME\` | Secret | Private test channel title |
-| \`TELEDRIVE_E2E_BOT_TOKEN\` | Secret | Test bot token from BotFather |
-| \`TELEDRIVE_E2E_BOT_CHAT_ID\` | Variable | Numeric private channel ID resolved by test user |
+| `TELEDRIVE_E2E_API_ID` | Secret | Test user's Telegram API ID |
+| `TELEDRIVE_E2E_API_HASH` | Secret | Test user's API hash |
+| `TELEDRIVE_E2E_SESSION` | Secret | Authorized user StringSession |
+| `TELEDRIVE_E2E_CHANNEL_NAME` | Secret | Private test channel title |
+| `TELEDRIVE_E2E_BOT_TOKEN` | Secret | Test bot token from BotFather |
+| `TELEDRIVE_E2E_BOT_CHAT_ID` | Variable | Numeric private channel ID resolved by test user |
 
 **Manual Telegram permission step:** Add the dedicated bot as an
 **administrator of the private test channel** and grant it *Post Messages*
@@ -848,18 +850,18 @@ and *Delete Messages*. A bot cannot list all private channels by name, and
 GitHub Actions cannot infer a Telegram user's numeric channel ID from API
 ID and API hash alone. The local bootstrap handles the channel-ID lookup.
 
-If you only need the user-account mode, omit \`--configure-bot\`. The bot E2E
+If you only need the user-account mode, omit `--configure-bot`. The bot E2E
 will be skipped until its bot token is configured. Do not give the bot access
 to personal or production channels.
 
 #### Automated CI and tests
 
-- \`.github/workflows/telegram-storage-e2e.yml\`: real **user account** E2E.
-- \`.github/workflows/telegram-bot-e2e.yml\`: real **bot account** E2E.
-- Both run on pushes to \`main\` and \`feature/docker-webui-multiaccount\`,
+- `.github/workflows/live-telegram-user.yml`: real **user account** E2E.
+- `.github/workflows/live-telegram-bot.yml`: real **bot account** E2E.
+- Both run on pushes to `main` and `feature/docker-webui-multiaccount`,
   as well as manual dispatch. They **skip with a notice when credentials
   are not configured**; a green skipped run is not proof of real access.
-- \`tests/test_telegram_target_resolution.py\` and \`tests/test_bot_storage.py\`
+- `tests/test_telegram_target_resolution.py` and `tests/test_bot_storage.py`
   run offline on Security CI, without any Telegram secrets.
 - Each live test uploads a fresh 4,097-byte object in three Telegram
   messages, downloads and verifies its SHA-256, tests a cross-chunk

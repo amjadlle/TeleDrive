@@ -13,9 +13,9 @@ WORKDIR /app
 RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
-COPY requirements-web.txt /app/requirements-web.txt
+COPY requirements/server.txt /app/requirements-server.txt
 ARG TELEDRIVE_DB_EXTRA_PACKAGES=""
-RUN pip install --no-cache-dir -r /app/requirements-web.txt \
+RUN pip install --no-cache-dir -r /app/requirements-server.txt \
  && if [ -n "$TELEDRIVE_DB_EXTRA_PACKAGES" ]; then pip install --no-cache-dir $TELEDRIVE_DB_EXTRA_PACKAGES; fi
 
 COPY teledrive /app/teledrive

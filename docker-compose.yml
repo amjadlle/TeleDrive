@@ -1,3 +1,6 @@
+# Default: only the Web UI service starts. S3 is an optional separate ASGI app.
+# Enable the S3 gateway with: docker compose --profile s3 up -d --build
+# Both services share one image and mounted state; do not expose S3 without TLS/VPN.
 services:
   teledrive:
     build:
