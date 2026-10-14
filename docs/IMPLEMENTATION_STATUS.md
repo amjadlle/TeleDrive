@@ -1236,3 +1236,16 @@ checked on their own exact SHA.
   enables Telegram deletion or authorizes garbage-collection approval.
 - A real-SQL admin API test verifies one confirmed unjournaled Bot ACK,
   a separate ambiguous send, totals, and read-only/no-deletion guarantees.
+
+
+## P2 GC read-only HTTP fail-closed contracts
+
+- If only one of the Bot send-intent and durable receipt SQL tables exists,
+  the admin GC candidate preview, full reference audit and operator health
+  endpoint all return an authenticated, sanitized HTTP **409** conflict
+  instead of a 500 traceback or an apparently unprotected Telegram message.
+- No remote Telegram physical deletion path is enabled. Restore the
+  missing schema via a reviewed migration before retrying the audit;
+  never infer message ownership from an incomplete SQL table set.
+- Real-SQL + authenticated HTTP regressions validate the error status
+  and enforce the exact generic response without exposing peer IDs.

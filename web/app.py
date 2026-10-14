@@ -923,10 +923,14 @@ def list_storage_gc_candidates(
     conn = db_connect()
     try:
         catalog = BucketCatalog(ManifestStore(conn))
-        return {
-            "candidates": StorageGCInventory(catalog.manifests).preview_failed_retention(
+        try:
+            candidates = StorageGCInventory(catalog.manifests).preview_failed_retention(
                 now=int(time.time()), min_age_seconds=min_age_seconds, limit=limit
-            ),
+            )
+        except RuntimeError as exc:
+            raise HTTPException(409, "Reference graph is inconsistent; GC blocked") from exc
+        return {
+            "candidates": candidates,
             "dry_run": True, "physical_deletion_enabled": False,
             "remote_history_scan_required": True,
         }
@@ -1090,7 +1094,10 @@ def storage_operations_health(_: None = Depends(require_auth)):
         now = int(time.time())
         pending = catalog.manifests.stale_pending(now=now, limit=1000)
         completing = MultipartStore(catalog).stale_completions(now=now, limit=1000)
-        gc = StorageGCInventory(catalog.manifests).inspect()
+        try:
+            gc = StorageGCInventory(catalog.manifests).inspect()
+        except RuntimeError as exc:
+            raise HTTPException(409, "Reference graph is inconsistent; GC blocked") from exc
         from teledrive.storage.bot_api_adapter import BotFileIndex
         bot_index = BotFileIndex(conn)
         unjournaled_bot_acks = bot_index.unjournaled_count()

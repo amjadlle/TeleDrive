@@ -95,7 +95,7 @@ def test_gc_preview_fails_closed_on_partially_migrated_bot_receipt_schema(admin)
     """Missing half of a Bot receipt schema cannot be interpreted as no ACK."""
     from teledrive.storage.bot_api_adapter import BotFileIndex
 
-    _, url, _ = admin
+    client, url, _ = admin
     now = int(time.time())
     old = now - 9 * 86400
     db = connect_database(url)
@@ -115,3 +115,12 @@ def test_gc_preview_fails_closed_on_partially_migrated_bot_receipt_schema(admin)
             StorageGCInventory(manifests).preview_failed_retention(now=now)
     finally:
         db.close()
+    # Every sensitive admin inventory fails with a sanitized 409; neither
+    # HTTP 500 traces nor a falsely safe GC candidate are acceptable.
+    for route in ("gc-candidates", "gc-audit", "health"):
+        response = client.get(
+            "/api/v1/admin/storage/" + route,
+            auth=("testadmin", "secure-auth-password"),
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Reference graph is inconsistent; GC blocked"
