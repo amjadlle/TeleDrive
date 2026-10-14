@@ -438,7 +438,7 @@ def test_e2e_chat_variable_cleanup_never_logs_unmasked_value(
         setup.remove_public_bot_chat_variable("some-owner/some-repo")
     assert calls[0][0] == [
         "gh", "variable", "list", "--repo", "some-owner/some-repo",
-        "--json", "name", "--limit", "1000",
+        "--json", "name",
     ]
     assert all(kwargs["capture_output"] for _, kwargs in calls)
     assert [cmd[2] for cmd, _ in calls] == (
@@ -618,8 +618,8 @@ def test_secure_bot_id_cli_help_requires_no_telethon_install():
     assert "ModuleNotFoundError" not in finished.stderr
 
 
-def test_bot_variable_discovery_reads_beyond_gh_default_page(monkeypatch):
-    """An unmasked ID outside gh's first 30 variables must still be found."""
+def test_bot_variable_discovery_parses_full_name_listing(monkeypatch):
+    """The names-only JSON parser must not truncate a long variable list."""
     from subprocess import CompletedProcess
     import json
     from scripts import setup_telegram_e2e as setup
@@ -632,7 +632,7 @@ def test_bot_variable_discovery_reads_beyond_gh_default_page(monkeypatch):
     def all_variable_names(cmd, **kwargs):
         calls.append(cmd)
         assert kwargs["capture_output"] is True
-        assert cmd[-2:] == ["--limit", "1000"]
+        assert cmd[-2:] == ["--json", "name"]
         return CompletedProcess(cmd, 0, stdout=json.dumps(entries).encode())
 
     monkeypatch.setattr(setup.subprocess, "run", all_variable_names)
