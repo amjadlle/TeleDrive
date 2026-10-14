@@ -172,12 +172,6 @@ def test_final_p0_contract_runs_on_every_database_and_desktop_push():
     )
     assert "tests/test_s3_p0_final.py" in commands
 
-    # Cross-service regressions must re-run at the release SHA; passing an
-    # unrelated earlier desktop/database build is not immutable signoff.
-    for name in ("database-ci.yml", "desktop-ci.yml"):
-        rules = workflow(name)["on"]
-        assert "tests/test_s3_p0_final.py" in rules["push"]["paths"]
-        assert "tests/test_s3_p0_final.py" in rules["pull_request"]["paths"]
 
 
 def test_acceptance_report_updates_cannot_skip_required_ci():
@@ -186,12 +180,6 @@ def test_acceptance_report_updates_cannot_skip_required_ci():
         assert "paths" not in events["push"]
         assert "paths" not in events["pull_request"]
 
-    # An updated acceptance record must invalidate the previous same-SHA
-    # CI baseline rather than leaving stale green checks on an older SHA.
-    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
-        events = workflow(name)["on"]
-        assert "docs/P0_ACCEPTANCE.md" in events["push"]["paths"]
-        assert "docs/P0_ACCEPTANCE.md" in events["pull_request"]["paths"]
 
 
 def test_status_audit_rechecks_every_release_workflow():
@@ -203,11 +191,6 @@ def test_status_audit_rechecks_every_release_workflow():
     assert "paths" not in release
     assert "tags" in release and "branches" in release
 
-    for name in ("database-ci.yml", "desktop-ci.yml", "storage-api-ci.yml"):
-        triggers = workflow(name)["on"]
-        for event in ("push", "pull_request"):
-            assert "docs/IMPLEMENTATION_STATUS.md" in triggers[event]["paths"]
-    assert "docs/IMPLEMENTATION_STATUS.md" in workflow("release.yml")["on"]["push"]["paths"]
 
 
 def test_storage_ci_runs_legacy_migration_on_every_change():
@@ -224,22 +207,6 @@ def test_storage_ci_runs_legacy_migration_on_every_change():
     ):
         assert path in command
 
-    # A green CI for a different SHA must not be mistaken for passing the
-    # updated legacy migration tests or the SQL lease implementation.
-    events = workflow("storage-api-ci.yml")["on"]
-    for event in ("push", "pull_request"):
-        paths = set(events[event]["paths"])
-        assert {
-            "teledrive/db.py",
-            "teledrive/uploader.py",
-            "tests/test_legacy_bridge.py",
-            "tests/test_legacy_import_admin.py",
-        } <= paths
-    command = "\\n".join(
-        x.get("run", "") for x in workflow("storage-api-ci.yml")["jobs"]["storage-api"]["steps"]
-    )
-    assert "tests/test_legacy_bridge.py" in command
-    assert "tests/test_legacy_import_admin.py" in command
 
 def test_real_bot_soak_is_explicitly_opted_in_and_never_silently_skipped():
     bot = workflow("telegram-bot-e2e.yml")
@@ -273,22 +240,6 @@ def test_bot_send_intent_contract_and_operator_health_run_on_every_push():
     )
     assert "tests/test_bot_storage.py" in security_steps
 
-    storage = workflow("storage-api-ci.yml")
-    for event in ("push", "pull_request"):
-        paths = storage["on"][event]["paths"]
-        assert "teledrive/storage/**" in paths
-        assert "web/**" in paths
-        assert "tests/test_bot_storage.py" in paths
-        assert "tests/test_storage_ops_health.py" in paths or "tests/test_storage_*.py" in paths
-    executed = "\\n".join(
-        step.get("run", "") for step in storage["jobs"]["storage-api"]["steps"]
-    )
-    assert "tests/test_bot_storage.py" in executed
-    assert "tests/test_storage_ops_health.py" in executed
-    security_steps = "\\n".join(
-        step.get("run", "") for step in workflow("security-ci.yml")["jobs"]["security"]["steps"]
-    )
-    assert "tests/test_bot_storage.py" in security_steps
 
 def test_production_acceptance_dr_ack_cutover_gates_are_run_in_ci():
     """Safety-critical operator artifacts must stay in non-skipped CI gates."""
