@@ -176,12 +176,13 @@ in this document or in Git history**, use a terminal with an authenticated
 python scripts/setup_telegram_e2e.py --repo babico/TeleDrive --secure-bot-chat-id
 ```
 
-The command prompts for the existing ID using hidden input, stores it via
-`gh secret set` on stdin, then attempts to delete the old repository
-variable `TELEDRIVE_E2E_BOT_CHAT_ID`. If it warns about deletion, remove
-that variable separately from GitHub repository **Settings → Secrets and
-variables → Actions → Variables**. Confirm the **Secrets** tab contains the
-new name before restarting live tests. Neither test logs nor committed
+The command reads the existing variable with `gh variable get` into
+a captured subprocess buffer (never printing it), writes the value to a
+Secret over `gh secret set` stdin and **verifies that the old variable
+was deleted**. If the old variable is unavailable, it prompts through
+hidden input instead. Any read/deletion permission error aborts with a
+nonzero exit code; resolve it from **Settings → Secrets and variables →
+Actions** before restarting live tests. Neither test logs nor committed
 workflow source should display the ID.
 
 Until the secret exists, live Bot workflows now **fail closed during the
