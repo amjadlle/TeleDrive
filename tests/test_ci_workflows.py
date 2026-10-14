@@ -1030,3 +1030,17 @@ def test_real_s3_lifecycle_has_single_process_schedule_and_ci():
                              for s in job["steps"])
         assert "tests/test_s3_lifecycle.py" in commands
     assert "lifecycle_scheduler_loop()" in (ROOT / "web/app.py").read_text()
+
+def test_s3_compatibility_matrix_cannot_relabel_safe_lifecycle_as_full_aws():
+    specs = (ROOT / "docs/S3_SPECS.md").read_text()
+    assert "**Inventory totals:** 6 supported, 31 partial, 79 unsupported;" in specs
+    for action in (
+        "GetBucketLifecycleConfiguration", "PutBucketLifecycleConfiguration",
+        "DeleteBucketLifecycle",
+    ):
+        prefix = "| [" + action + "](https://docs.aws.amazon.com"
+        matches = [line for line in specs.splitlines() if line.startswith(prefix)]
+        assert len(matches) == 1
+        assert "🟡 Partial" in matches[0]
+    assert "AbortIncompleteMultipartUpload" in specs
+    assert "never deletes an object or Telegram media" in specs

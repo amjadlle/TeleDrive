@@ -13,7 +13,7 @@
 | ❌ Unsupported | No supported TeleDrive contract; do not rely on that AWS method. It may be rejected as NotImplemented (501) **or** require additional fail-closed routing tests; do not assume every selector currently returns the same error. |
 | Not verified | Client, deployment configuration or optional parameter is untested; never upgrade an operation's status merely because another client happens to succeed. |
 
-**Inventory totals:** 6 supported, 28 partial, 82 unsupported; **116 AWS S3 operations**. Count operations, not request permutations. Partial operations are **not** fully supported. These statuses describe development code and tests, not a fresh CI run or independently validated production setup.
+**Inventory totals:** 6 supported, 31 partial, 79 unsupported; **116 AWS S3 operations**. Count operations, not request permutations. Partial operations are **not** fully supported. These statuses describe development code and tests, not a fresh CI run or independently validated production setup.
 
 **Implementation evidence:** [gateway router](../web/s3.py), [S3 protocol modules](../teledrive/s3/), [S3 tests](../tests/), [CI guide](CI_WORKFLOWS.md), [implementation/production status](IMPLEMENTATION_STATUS.md). On a new code SHA, rerun its own CI rather than recycling a historical green status. No new test execution was performed solely to prepare this inventory.
 
@@ -40,7 +40,7 @@
 | Copy | Metadata-level local bucket/key and selected source-VersionId copy; signed source, permissions, metadata/tag directives and ETag source preconditions. No UploadPartCopy, presigned CopyObject or ranged source copy. | [gateway copy route](../web/s3.py), [tests](../tests/test_s3_copy.py), [version copy](../tests/test_s3_version_copy.py) |
 | Unsupported write semantics | SSE-S3/SSE-KMS/SSE-C, retention/Object Lock, public ACLs, non-STANDARD tiers, request-payer, aws-chunked/trailer semantics and select copy conditions **must not be silently acknowledged**. | [fail-closed write checks](../web/s3.py), [tests](../tests/test_s3_fail_closed.py) |
 | Clients and operational proof | Boto3, AWS CLI and rclone scenarios exist, with **synthetic Telegram transport** for most storage integration tests; dedicated live Telegram E2E tests validate other actual payload paths. **Cyberduck, other SDKs and every SDK checksum mode remain unverified.** | [client tests](../tests/test_s3_cli_compat.py), [CI guide](CI_WORKFLOWS.md) |
-| Physical delete and lifecycle | Object deletion removes catalog visibility or version references; it **does not authorize deleting Telegram messages**. Physical GC and AWS lifecycle expiration are not production enabled. | [P2 GC safeguards](IMPLEMENTATION_STATUS.md#41-physical-telegram-garbage-collection-disabled), [GC tests](../tests/test_gc_reference_planner.py) |
+| Physical delete and lifecycle | Object deletion removes catalog visibility or version references; it **does not authorize deleting Telegram messages**. Only SQL-only AbortIncompleteMultipartUpload lifecycle rules are implemented; an hourly task marks old unfinished upload sessions aborted while retaining Telegram chunks. Object expiration/transitions and physical GC are not enabled. | [Lifecycle](../teledrive/s3/lifecycle.py), [lifecycle tests](../tests/test_s3_lifecycle.py), [GC safeguards](IMPLEMENTATION_STATUS.md#41-physical-telegram-garbage-collection-disabled) |
 
 ## 3. Implemented and partially implemented AWS S3 actions
 
@@ -82,6 +82,10 @@ The following operations have a routed implementation. Every qualification in th
 | [PutBucketVersioning](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketVersioning.html) | 🟡 Partial | Idempotent Enabled only; rejects Suspended and MFADelete. |
 | [GetPublicAccessBlock](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetPublicAccessBlock.html) | 🟡 Partial | Fixed all-four-fields true, no public mode. |
 | [PutPublicAccessBlock](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html) | 🟡 Partial | Accepts only all-four-fields true; cannot weaken privacy. |
+
+| [GetBucketLifecycleConfiguration](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLifecycleConfiguration.html) | 🟡 Partial | Read a private bucket's bounded, prefix-scoped AbortIncompleteMultipartUpload-only rules; no AWS expiration/transition support. |
+| [PutBucketLifecycleConfiguration](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html) | 🟡 Partial | Signed strict XML; only Disabled/Enabled incomplete multipart abort rules with DaysAfterInitiation 1..3650 and Prefix. |
+| [DeleteBucketLifecycle](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketLifecycle.html) | 🟡 Partial | Removes SQL configuration; it never deletes an object or Telegram media. |
 
 ## 4. Unsupported AWS S3 actions grouped for the roadmap
 
@@ -129,10 +133,7 @@ Model rules and durable workers without promising AWS transitions that Telegram 
 | AWS S3 API operation | Status | Target |
 | --- | --- | --- |
 | [GetBucketLifecycle](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLifecycle.html) | ❌ Unsupported | P2-D |
-| [GetBucketLifecycleConfiguration](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLifecycleConfiguration.html) | ❌ Unsupported | P2-D |
 | [PutBucketLifecycle](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycle.html) | ❌ Unsupported | P2-D |
-| [PutBucketLifecycleConfiguration](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html) | ❌ Unsupported | P2-D |
-| [DeleteBucketLifecycle](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketLifecycle.html) | ❌ Unsupported | P2-D |
 | [GetBucketReplication](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketReplication.html) | ❌ Unsupported | P2-D |
 | [PutBucketReplication](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketReplication.html) | ❌ Unsupported | P2-D |
 | [DeleteBucketReplication](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketReplication.html) | ❌ Unsupported | P2-D |
