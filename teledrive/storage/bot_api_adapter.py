@@ -229,7 +229,13 @@ class BotFileIndex:
     def impose_shared_cooldown(self, account: str, chat_id: int,
                                retry_after: int, *,
                                now_ms: int | None = None) -> None:
-        """Propagate a definite Telegram 429 to all SQL-sharing workers."""
+        """Atomically publish Telegram's definitive 429 across all workers.
+
+        A worker may already hold a prebooked send slot. Both the next
+        reservation timestamp and the independent wait-before-send fence
+        therefore commit in ONE transaction; neither may become visible
+        separately after a crash or SQL exception.
+        """
         if (type(retry_after) is not int or not 1 <= retry_after <= 3600
                 or not account or type(chat_id) is not int or not chat_id):
             raise ValueError("Invalid Bot 429 cooldown")
@@ -237,26 +243,21 @@ class BotFileIndex:
         if type(timestamp) is not int or timestamp < 0:
             raise ValueError("Invalid Bot 429 timestamp")
         until = timestamp + retry_after * 1000
-        row = self.db.connection.execute(update(_bot_chat_slots).where(
-            _bot_chat_slots.c.account == account,
-            _bot_chat_slots.c.chat_id == chat_id,
-        ).values(next_allowed_ms=case(
-            (_bot_chat_slots.c.next_allowed_ms < until, until),
-            else_=_bot_chat_slots.c.next_allowed_ms,
-        )))
-        if row.rowcount != 1:
-            self.db.connection.rollback()
-            raise BotApiError("Bot API shared cooldown row missing")
-        self.db.commit()
-        # Record the denial independently from future send reservations.
-        # A worker which was already asleep for a reserved start will inspect
-        # this timestamp before sending and must honor any newer 429.
         predicate = (
             _bot_chat_cooldowns.c.account == account,
             _bot_chat_cooldowns.c.chat_id == chat_id,
         )
         for attempt in range(12):
             try:
+                row = self.db.connection.execute(update(_bot_chat_slots).where(
+                    _bot_chat_slots.c.account == account,
+                    _bot_chat_slots.c.chat_id == chat_id,
+                ).values(next_allowed_ms=case(
+                    (_bot_chat_slots.c.next_allowed_ms < until, until),
+                    else_=_bot_chat_slots.c.next_allowed_ms,
+                )))
+                if row.rowcount != 1:
+                    raise BotApiError("Bot API shared cooldown row missing")
                 changed = self.db.connection.execute(update(
                     _bot_chat_cooldowns
                 ).where(*predicate).values(cooldown_until_ms=case(
@@ -277,6 +278,9 @@ class BotFileIndex:
                         "Shared Bot cooldown failed after bounded retries"
                     ) from None
                 time.sleep(0.015 * (attempt + 1))
+            except BaseException:
+                self.db.connection.rollback()
+                raise
 
     def shared_cooldown_wait(self, account: str, chat_id: int, *,
                              now_ms: int | None = None) -> float:
