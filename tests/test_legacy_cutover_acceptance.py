@@ -133,3 +133,49 @@ def test_cutover_rejects_incomplete_or_unsafe_state(tmp_path, kind):
         assert remote.deletions == 0
     finally:
         db.close()
+
+def test_cutover_detects_new_source_file_during_remote_telegram_readback(tmp_path):
+    """A newly arrived file after scan start invalidates old HEAD acceptance."""
+    db, queue, cfg, src, _, remote = scenario(tmp_path, sizes=(65537,))
+    try:
+        completed = asyncio.run(queue.run_next(
+            remote, allowed_root=src, scratch_directory=src,
+            chunk_size=32768,
+        ))
+        assert completed["state"] == "done"
+        uploads_before = remote.uploads
+        real_download = remote.download
+        inserted = False
+
+        async def mutate_after_scan(ref, destination):
+            nonlocal inserted
+            if not inserted:
+                inserted = True
+                (src / "new-arrival.bin").write_bytes(b"arrived during verification")
+            await real_download(ref, destination)
+
+        remote.download = mutate_after_scan
+        report = asyncio.run(inspect(cfg, queue, remote, src))
+        assert inserted
+        assert not report["verified"]
+        assert report["inconsistent"] >= 1
+        assert report["telegram_uploads"] == report["telegram_deletions"] == 0
+        assert remote.uploads == uploads_before and remote.deletions == 0
+    finally:
+        db.close()
+
+
+def test_legacy_cutover_large_directory_cap_never_reads_telegram(tmp_path):
+    db, queue, cfg, src, _, remote = scenario(tmp_path, sizes=(1,))
+    try:
+        for n in range(120):
+            (src / f"late-{n:04d}.bin").write_bytes(bytes([n % 256]))
+        result = asyncio.run(inspect(
+            cfg, queue, remote, src, max_files=100,
+        ))
+        assert not result["verified"] and result["truncated"]
+        assert result["verified_files"] == 0
+        assert result["telegram_uploads"] == result["telegram_deletions"] == 0
+        assert remote.uploads == 0 and remote.deletions == 0
+    finally:
+        db.close()
