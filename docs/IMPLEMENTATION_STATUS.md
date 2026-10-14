@@ -1217,3 +1217,22 @@ checked on their own exact SHA.
   reconciliation SQL schema fails closed. A 0-journaled-chunk report never
   authorizes remote deletion; all existing no-delete safety guarantees remain.
   Real physical Telegram garbage collection is still disabled.
+
+
+## P2 GC operator inventory counts independent Bot remote ownership
+
+- Read-only `/api/v1/admin/storage/gc-audit` now reports
+  `unjournaled_bot_receipts` separately from
+  `unresolved_bot_intents`; acknowledged but unjournaled Bot messages
+  are included in `total_telegram_messages`, avoiding the previous
+  false impression that a post-ACK/pre-manifest Telegram message did
+  not exist. A mere send intent does not prove remote acceptance and
+  is **not** counted as a confirmed message.
+- Bot receipts are joined to immutable chunk rows by exact
+  `(account, chat_id, message_id)`, not manifest object ID, because
+  multipart reparenting can move ownership to a different manifest.
+- Partial Bot reconciliation SQL schema fails closed during both
+  individual candidate previews and overall GC audit. No endpoint
+  enables Telegram deletion or authorizes garbage-collection approval.
+- A real-SQL admin API test verifies one confirmed unjournaled Bot ACK,
+  a separate ambiguous send, totals, and read-only/no-deletion guarantees.

@@ -954,6 +954,8 @@ def get_storage_gc_audit(
         return {
             "total_manifests": inventory.total_manifests,
             "total_telegram_messages": inventory.total_telegram_messages,
+            "unjournaled_bot_receipts": inventory.unjournaled_bot_receipts,
+            "unresolved_bot_intents": inventory.unresolved_bot_intents,
             "live_object_heads": inventory.live_object_heads,
             "copy_aliases": inventory.copy_aliases,
             "multipart_parts": inventory.multipart_parts,

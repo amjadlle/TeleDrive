@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import defaultdict
 
-from sqlalchemy import inspect, select, func, or_
+from sqlalchemy import and_, inspect, select, func, or_
 
 from teledrive.storage.catalog import BucketCatalog, heads
 from teledrive.storage.manifest import ManifestStore, object_aliases, objects, chunks
@@ -35,6 +35,10 @@ class GCInventory:
     multipart_parts: int
     protected_chunks: tuple[ChunkAudit, ...]
     eligible_for_deletion: int
+    # Confirmed Telegram Bot ACKs without manifest chunks still own media.
+    unjournaled_bot_receipts: int = 0
+    # A pending pre-send intent MAY correspond to a Telegram message.
+    unresolved_bot_intents: int = 0
 
 
 class StorageGCInventory:
@@ -192,6 +196,33 @@ class StorageGCInventory:
             message_identities.add(identity)
             chunk_counts[identifier] += 1
 
+        # A durable Bot ACK may precede the manifest chunk transaction or
+        # survive a crash. Count that acknowledged remote message in the
+        # inventory even if no immutable chunk journal exists yet.
+        inspector = inspect(self.db.engine)
+        has_intents = inspector.has_table("storage_bot_send_intents")
+        has_receipts = inspector.has_table("storage_bot_upload_receipts")
+        if has_intents != has_receipts:
+            raise RuntimeError("Bot reconciliation metadata incomplete")
+        unresolved_bot_intents = 0
+        unjournaled_bot_receipts = 0
+        if has_intents:
+            from teledrive.storage.bot_api_adapter import (
+                _bot_send_intents, _bot_receipts,
+            )
+            unresolved_bot_intents = int(connection.execute(
+                select(func.count()).select_from(_bot_send_intents)
+            ).scalar_one())
+            unjournaled_bot_receipts = int(connection.execute(
+                select(func.count()).select_from(
+                    _bot_receipts.outerjoin(chunks, and_(
+                        chunks.c.account == _bot_receipts.c.account,
+                        chunks.c.chat_id == _bot_receipts.c.chat_id,
+                        chunks.c.message_id == _bot_receipts.c.message_id,
+                    ))
+                ).where(chunks.c.object_id.is_(None))
+            ).scalar_one())
+
         # Roots with no current refs can still be historical versions; do not
         # interpret this report as an approved deletion plan.
         audits = tuple(
@@ -208,10 +239,14 @@ class StorageGCInventory:
         )
         return GCInventory(
             total_manifests=len(all_objects),
-            total_telegram_messages=len(message_identities),
+            total_telegram_messages=(
+                len(message_identities) + unjournaled_bot_receipts
+            ),
             live_object_heads=len(head_ids),
             copy_aliases=len(aliases),
             multipart_parts=len(multipart_objects),
             protected_chunks=audits,
             eligible_for_deletion=0,
+            unjournaled_bot_receipts=unjournaled_bot_receipts,
+            unresolved_bot_intents=unresolved_bot_intents,
         )

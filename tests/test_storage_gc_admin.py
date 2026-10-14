@@ -69,3 +69,45 @@ def test_gc_audit_invalid_limits_blocked_by_validation(admin):
             auth=("testadmin", "secure-auth-password"),
         )
         assert response.status_code == 422
+
+
+def test_admin_gc_audit_counts_unjournaled_ack_and_ambiguous_bot_send(admin):
+    """Bot ACKs are owned remote media even before a chunk journal exists."""
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+
+    client, url, _ = admin
+    now = int(time.time())
+    db = connect_database(url)
+    try:
+        manifests = ManifestStore(db)
+        catalog = BucketCatalog(manifests)
+        catalog.create_bucket("gc-ack-proof", now)
+        received = manifests.begin("gc-ack-proof", "receipt", 4, now - 86400)
+        unknown = manifests.begin("gc-ack-proof", "unknown", 4, now - 86400)
+        manifests.fail(received, "post-ACK SQL crash", now)
+        manifests.fail(unknown, "lost network response", now)
+        index = BotFileIndex(db)
+        sha = hashlib.sha256(b"data").hexdigest()
+        peer = -100888777666555
+        index.start_send("test-ack", peer, received, 0, sha, 4)
+        index.put_receipt(
+            "test-ack", peer, 2001, "owned-file-id",
+            object_id=received, ordinal=0, checksum=sha, size=4,
+            require_intent=True,
+        )
+        index.start_send("test-ack", peer, unknown, 0, sha, 4)
+        assert index.unjournaled_count() == 1
+        assert index.unresolved_count() == 1
+    finally:
+        db.close()
+
+    path = "/api/v1/admin/storage/gc-audit"
+    reply = client.get(path, auth=("testadmin", "secure-auth-password"))
+    assert reply.status_code == 200, reply.text
+    inventory = reply.json()
+    assert inventory["total_telegram_messages"] == 1
+    assert inventory["unjournaled_bot_receipts"] == 1
+    assert inventory["unresolved_bot_intents"] == 1
+    assert inventory["eligible_for_deletion"] == 0
+    assert inventory["dry_run"] is True
+    assert inventory["physical_deletion_enabled"] is False
