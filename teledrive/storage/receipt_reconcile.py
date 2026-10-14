@@ -83,7 +83,9 @@ async def reconcile_bot_receipt(
                 or channel_message.id != message_id
                 or getattr(channel_message, "chat_id", None) != chat_id
                 or getattr(channel_message, "document", None) is None
-                or getattr(channel_message.document, "size", None) != expected_size):
+                or getattr(channel_message.document, "size", None) != expected_size
+                or getattr(channel_message, "raw_text", None)
+                != f"teledrive:{object_id}:{ordinal}:{expected_hash[:16]}"):
             raise BotApiError("Independent channel message proof does not match intent")
         channel_copy = root / "channel-message"
         result = await telethon.download_media(
