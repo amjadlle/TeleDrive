@@ -653,8 +653,8 @@ def test_bot_variable_discovery_parses_full_name_listing(monkeypatch):
     assert len(calls) == 1
 
 
-def test_live_bot_workers_are_serialized_without_cancelling_user_e2e():
-    """GitHub permits only one pending job per concurrency group."""
+def test_live_workers_use_independent_queues_without_cancelling_user_e2e():
+    """Keep the Bot, multiworker, and user pending queues distinct."""
     bot_group = "teledrive-live-bot-${{ github.repository }}"
     user_group = "teledrive-live-user-${{ github.repository }}"
     bot = workflow("telegram-bot-e2e.yml")
@@ -662,8 +662,9 @@ def test_live_bot_workers_are_serialized_without_cancelling_user_e2e():
     workers = workflow("telegram-multiworker-e2e.yml")
     assert bot["concurrency"]["group"] == bot_group
     assert user["concurrency"]["group"] == user_group
-    assert workers["jobs"]["three-process-telegram"]["concurrency"]["group"] == bot_group
-    assert user_group != bot_group  # both required jobs must finish on same SHA
+    worker_group = workers["jobs"]["three-process-telegram"]["concurrency"]["group"]
+    assert worker_group == "teledrive-live-multiworker-${{ github.repository }}"
+    assert len({user_group, bot_group, worker_group}) == 3
     for value in (
         bot["concurrency"], user["concurrency"],
         workers["jobs"]["three-process-telegram"]["concurrency"],
