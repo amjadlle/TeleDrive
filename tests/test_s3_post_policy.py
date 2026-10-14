@@ -901,6 +901,63 @@ def test_browser_post_tagging_requires_extra_explicit_permission(service):
 
 
 
+
+def test_signed_browser_tag_and_http_metadata_survive_online_sql_dr(service, tmp_path):
+    """A consistent SQLite snapshot restores immutable tag+header metadata.
+
+    Telegram bytes remain in its dedicated remote, never in the SQL backup.
+    """
+    from pathlib import Path
+    from scripts.backup_metadata import backup_sqlite
+    from teledrive.db import connect_database
+    from teledrive.s3.object_metadata import ObjectMetadataStore
+    from teledrive.s3.tagging import ObjectTagStore
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.manifest import ManifestStore
+
+    assert signed(service, "PUT", "/backup-bucket").status_code == 200
+    data = hashlib.shake_256(b"browser-tag-dr").digest(2 * 1024 * 1024 + 17)
+    key = "browser/dr/tags-and-metadata.bin"
+    response = post(service, data, make_form(
+        service, data, key=key, extra_fields={
+            "x-amz-tagging": "operator=verified&stage=ci",
+            "Cache-Control": "private, max-age=60",
+            "x-amz-meta-origin": "signed-browser",
+        },
+        content_type="application/octet-stream",
+    ))
+    assert response.status_code == 204, response.text
+    version = response.headers["x-amz-version-id"]
+    archive = tmp_path / "durable-metadata-backup.db"
+    active = service[3]()
+    try:
+        path = Path(active.engine.url.database)
+    finally:
+        active.close()
+    digest = backup_sqlite(path, archive)
+    assert len(digest) == 64
+    restored = connect_database(str(archive))
+    try:
+        catalog = BucketCatalog(ManifestStore(restored))
+        head = catalog.get("backup-bucket", key)
+        assert head.item.id == version
+        assert head.item.sha256 == hashlib.sha256(data).hexdigest()
+        assert ObjectTagStore(catalog).get(version) == [
+            ("operator", "verified"), ("stage", "ci"),
+        ]
+        metadata = ObjectMetadataStore(catalog).get(version)
+        assert metadata["x-amz-meta-origin"] == "signed-browser"
+        assert metadata["cache-control"] == "private, max-age=60"
+        assert metadata["content-type"] == "application/octet-stream"
+    finally:
+        restored.close()
+    assert _post_tags(service, key) == [
+        ("operator", "verified"), ("stage", "ci"),
+    ]
+    assert signed(service, "GET", "/backup-bucket/" + key).content == data
+    assert service[2].uploads == 1
+
+
 def test_browser_post_tag_sql_failure_cannot_replace_published_version(service, monkeypatch):
     from teledrive.s3.tagging import ObjectTagStore
 
