@@ -206,9 +206,11 @@ never uses `vars.TELEDRIVE_E2E_BOT_CHAT_ID`.
 - [x] Standard seven-workflow CI baseline: `fc582f4` passed including
   actual User and Bot Telegram roundtrip. Bot ran 20 tests; 5 opt-in
   cases were skipped and do **not** count as live acceptance.
-- [ ] Current-SHA real Bot 5/16/19 MiB, 12-object mixed-size soak,
-  independent original-channel lost-ACK proof and Telethon size matrix.
-  Confirm from non-skipped job logs after explicit dispatch/commit marker.
+- [x] Dedicated test-channel Bot 5/16/19 MiB, 12-object mixed-size
+  soak, independent test-channel ACK proof and Telethon size matrix:
+  Bot run 38537902913 (25 passed, none skipped) and Telethon run
+  38537902676 (14 passed) at SHA `900ab491`. This proves staging/test
+  channel coverage, **not** original production channel ownership.
 - [ ] Two physically independent app hosts, shared durable SQL, at least
   one hour of approved load and naturally occurring 429 evidence. Do not
   deliberately flood Telegram to manufacture an HTTP 429.
@@ -316,3 +318,20 @@ attach operator-verified physical host/SQL connection evidence,
 permitted load and checksum/range results, original-media DR report,
 and signed legacy cutover approval to the change record. A passing
 CI or sandbox collector cannot certify the original production channel.
+
+
+## Current P1 staging test gate and owner-held production gates
+
+The code commit `73135b0` includes native PostgreSQL/MySQL restore
+checks for the **synthetic** Bot 429 observation record and a production
+soak telemetry collector. A one-shot `[p1-live-multiworker]` validation
+on the next `main` commit deliberately exercises three SQL worker
+processes and actual dedicated-channel Telegram messages; it must be
+recorded by run ID and final result, not assumed to pass merely because
+GitHub started it.
+
+Still open: authorization and real evidence from physically separate
+production hosts, original SQL archive with the original Telegram
+account/channel, and explicit legacy cutover approval. An operator must
+independently verify the source system and supply those receipts before
+changing any production read routing.

@@ -1284,3 +1284,18 @@ checked on their own exact SHA.
 - Actual original-production-media restore, operator-verified physical
   host independence, naturally occurring 429 and legacy read cutover
   remain external acceptance receipts. Never invent or auto-approve them.
+
+
+## Last P1 CI acceptance campaign
+
+- The P1 soak collector, safe host-config tests and native restored
+  PostgreSQL/MySQL 429 SQL journal were merged in `73135b0`;
+  look up all CI results against that exact SHA.
+- The next documentation-only commit intentionally carries
+  `[p1-live-multiworker]` in its **commit message**, activating real
+  PostgreSQL plus three independent Telegram Bot worker processes on
+  `main`; regular Bot E2E intentionally skips on this one push to
+  prevent concurrent writers against the same channel. A workflow
+  marked "skipped" is **not** multiworker evidence.
+- Operator-held production verification is described in
+  `docs/P1_PRODUCTION_ACCEPTANCE.md`. CI signoff ≠ deployment signoff.
