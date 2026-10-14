@@ -339,8 +339,14 @@ class BotFileIndex:
 
     def put_receipt(self, account: str, chat_id: int, message_id: int,
                     file_id: str, *, object_id: str, ordinal: int,
-                    checksum: str, size: int) -> None:
-        """Commit the file ID and upload receipt atomically after Telegram ACK."""
+                    checksum: str, size: int,
+                    require_intent: bool = False) -> None:
+        """Commit the file ID and upload receipt atomically after Telegram ACK.
+
+        Verified operator reconciliation requests require_intent=True so a
+        concurrent worker which resolved/cleared the unknown-outcome fence
+        cannot receive a second, stale proof after the remote checks.
+        """
         if (not object_id or len(object_id) > 36 or ordinal < 0 or size <= 0
                 or len(checksum) != 64
                 or any(c not in "0123456789abcdef" for c in checksum)):
@@ -359,6 +365,10 @@ class BotFileIndex:
                 ).where(
                     *self._intent_predicate(account, chat_id, object_id, ordinal),
                 ).with_for_update()).one_or_none()
+                if intent is None and require_intent:
+                    raise BotApiError(
+                        "Bot API recovery intent disappeared before proof commit"
+                    )
                 if intent is not None and (
                     intent.sha256 != checksum or int(intent.size) != size
                 ):
