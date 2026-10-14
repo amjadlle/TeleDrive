@@ -21,7 +21,7 @@ from teledrive.storage.manifest import (
     ChunkReference, ManifestStore, chunks, objects,
 )
 
-_SHA = re.compile(r"[0-9a-f]{64}\\Z")
+_SHA = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def validate_plan(plan: dict) -> tuple[list[ChunkReference], int]:
