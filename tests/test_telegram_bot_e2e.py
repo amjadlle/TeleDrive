@@ -565,6 +565,25 @@ def test_live_bot_durable_job_queue_restart_and_source_fencing():
                     scratch_directory=root,
                 ).download_to_path(published.item.id, recovered)
                 assert recovered.read_bytes() == payload
+                # Staging disaster recovery with the SAME REAL Bot docs:
+                # snapshot SQL independently, clone it, and restore all
+                # Telegram chunks with checksum and exact Range verification.
+                from scripts.backup_metadata import backup_sqlite
+                from scripts.rehearse_telegram_dr import verify_restored_telegram_object
+
+                archive = root / "sealed-live-telegram-dr.db"
+                receipt = backup_sqlite(database_path, archive)
+                dr = await verify_restored_telegram_object(
+                    archive, receipt, BotApiClient(token),
+                    bucket="ci-queued", key="durable/payload.bin",
+                    account="bot-ci-durable-jobs", chat_id=int(chat_id),
+                    max_bytes=1024 * 1024,
+                )
+                assert dr["verified"] and dr["sha256"] == hashlib.sha256(payload).hexdigest()
+                assert dr["readback_bytes"] == len(payload)
+                assert dr["archive_sha256"] == receipt
+                assert not dr["source_database_modified"]
+                assert dr["telegram_uploads"] == dr["telegram_deletions"] == 0
             finally:
                 try:
                     if transport is not None:
