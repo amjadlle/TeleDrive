@@ -156,3 +156,41 @@ cutover scheduler automatically deletes the legacy tree.
 - The implementation can be prepared/tested without operator intervention;
   the **production acceptance cannot truthfully be marked complete until
   those external steps actually run**.
+
+## 5. Private Telegram E2E channel ID: mandatory GitHub Secret migration
+
+**Do not use repository Actions variables for numeric Telegram peer IDs.**
+Actions variables are not automatically log-masked. Both
+`.github/workflows/telegram-bot-e2e.yml` and
+`.github/workflows/telegram-multiworker-e2e.yml` now read
+`secrets.TELEDRIVE_E2E_BOT_CHAT_ID` exclusively, and install an additional
+`::add-mask::` before checkout or testing. The optional Telethon numeric
+target also reads `secrets.TELEDRIVE_E2E_TARGET`, not an unmasked variable.
+The private channel **name** and Telethon StringSession were already Secrets.
+
+To migrate a channel ID **without printing it on the command line, in logs,
+in this document or in Git history**, use a terminal with an authenticated
+`gh` CLI and run:
+
+```bash
+python scripts/setup_telegram_e2e.py --repo babico/TeleDrive --secure-bot-chat-id
+```
+
+The command prompts for the existing ID using hidden input, stores it via
+`gh secret set` on stdin, then attempts to delete the old repository
+variable `TELEDRIVE_E2E_BOT_CHAT_ID`. If it warns about deletion, remove
+that variable separately from GitHub repository **Settings → Secrets and
+variables → Actions → Variables**. Confirm the **Secrets** tab contains the
+new name before restarting live tests. Neither test logs nor committed
+workflow source should display the ID.
+
+Until the secret exists, live Bot workflows now **fail closed during the
+first configuration step**. This is expected and safer than falling back
+to the unmasked variable; do not bypass it merely to make CI green.
+Previous workflow logs cannot be retroactively masked: review existing
+run retention and access controls separately. Do not paste the numeric
+channel ID into an issue, PR, workflow YAML or shell command arguments.
+
+To minimize exposed diagnostics, tests also verify that every Bot workflow
+loads the target from `secrets`, installs a mask *before* checkout, and
+never uses `vars.TELEDRIVE_E2E_BOT_CHAT_ID`.
