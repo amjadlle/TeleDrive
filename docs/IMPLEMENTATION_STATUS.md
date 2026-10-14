@@ -1119,26 +1119,45 @@ Do not mark P1 fully finished until those distinct production receipts exist.
   for an independently evidenced one-hour deployment soak.
 
 
-## P1 CI consolidation on main (2026-10-14)
+## P1 CI end-to-end audit: all-SHA and live channel isolation (2026-10-14)
 
-- PR #4 merged the P1 implementation into `main`. All eight active
-  GitHub Actions workflow push triggers now track `main` rather than
-  the retired `feature/docker-webui-multiaccount` branch.
-- The opt-in three-process PostgreSQL + real Bot Telegram E2E workflow
-  is available on `main` via workflow_dispatch or the intentional
-  `[p1-live-multiworker]` push marker.
-- Standard Bot E2E and opt-in multiworker share the cross-ref
-  `teledrive-live-bot` concurrency group. `cancel-in-progress=false`
-  protects in-flight tests' own-message cleanup. The opt-in worker
-  deliberately retains **job-level** concurrency so skipped ordinary
-  pushes cannot evict a pending standard Bot E2E.
-- Workflow contract tests include the multiworker YAML in the common
-  mandatory SHA-pinned action and parse checks, and verify all active
-  push branch filters and Bot concurrency coordination.
-- GitHub concurrency groups do not promise a durable backlog: more
-  than one pending run may be replaced. Always inspect the exact
-  release SHA and explicitly dispatch any omitted operator test.
-- Mainline merge and CI gates are **not** a claim of production
-  acceptance. Physical multi-host 429 soak, original Telegram backup
-  restore, and operator-approved legacy production cutover remain
-  pending evidence in `docs/P1_PRODUCTION_ACCEPTANCE.md`.
+- Database, Desktop, Storage API and release-verification workflows now run
+  on every configured push, and database/desktop/storage CI run on every PR;
+  narrow path filters no longer let acceptance evidence come from older SHAs.
+- Telegram Bot E2E and explicit PostgreSQL Bot multiworker E2E share one
+  repository-scoped concurrency group across branches. Telethon user E2E has
+  its **own** repository-scoped group, so the GitHub one-pending-run limit
+  cannot cancel the mandatory User E2E while Bot E2E is queued.
+  Live writes already in progress are not cancelled. Pending Bot runs may
+  be replaced by newer runs; count only completed current-SHA checks.
+- `tests/test_ci_workflows.py` now guards unfiltered workflows, checks every
+  test module is listed in at least one workflow, and verifies that Bot and
+  multiworker share the group while mandatory User E2E cannot be evicted.
+- The prior `dde5a03` Bot E2E retry 38525688266 (attempt 2) passed after
+  migrating `TELEDRIVE_E2E_BOT_CHAT_ID` from a variable to an Actions Secret.
+  This is live **dedicated test-channel** evidence, not production signoff.
+- Revalidate the seven standard checks at the newest SHA. True physical
+  multi-host 429 soak, production-representative DR and authorized legacy
+  cutover remain operator-controlled acceptance gates.
+
+
+## P1 follow-up integration: PR #5 (2026-10-14)
+
+- The base P1 PR #4 is already merged. This follow-up hardens all-SHA
+  Security, Database, Desktop, Storage API and release checks and
+  strengthens the CI contract test coverage; avoid an indefinitely
+  open CI-only PR after review.
+- The retired `feature/docker-webui-multiaccount` push trigger was
+  removed from all eight active workflows: `main` is the release
+  candidate and the only normal push CI source.
+- Dedicated Bot E2E and opt-in PostgreSQL multiworker share a repo-scoped
+  Telegram writer group; Telethon user E2E uses its own group to protect
+  each required lane from GitHub pending-run eviction.
+- A real Bot E2E with opt-in 19 MiB + 7 B payload caught an **invalid
+  test assumption**, not a data corruption: 19 MiB fixed chunk sizing
+  necessarily produced two physical Telegram messages. The single-chunk
+  test now configures `chunk_size=size` so the 19 MiB + 7 B case really
+  probes one Telegram document near the 20 MiB download cap.
+  The normal checksum, byte retrieval and Range assertions remain.
+- Passing merge/CI alone does not establish physical multi-host 429
+  soak, operator DR restore or authorized legacy cutover acceptance.

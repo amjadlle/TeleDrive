@@ -5,33 +5,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - "app/**"
-      - "teledrive/**"
-      - "tests/test_desktop_*.py"
-      - "tests/test_storage_engine.py"
-      - "tests/test_s3_p0_final.py"
-      - "scripts/**"
-      - "installer/**"
-      - "requirements.txt"
-      - "pyproject.toml"
-      - "docs/IMPLEMENTATION_STATUS.md"
-      - "docs/P0_ACCEPTANCE.md"
-      - ".github/workflows/desktop-ci.yml"
   pull_request:
-    paths:
-      - "app/**"
-      - "teledrive/**"
-      - "tests/test_desktop_*.py"
-      - "tests/test_storage_engine.py"
-      - "tests/test_s3_p0_final.py"
-      - "scripts/**"
-      - "installer/**"
-      - "requirements.txt"
-      - "pyproject.toml"
-      - "docs/IMPLEMENTATION_STATUS.md"
-      - "docs/P0_ACCEPTANCE.md"
-      - ".github/workflows/desktop-ci.yml"
 
 permissions:
   contents: read

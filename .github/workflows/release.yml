@@ -7,11 +7,6 @@ on:
     # On these branch updates validate the release gate without publishing.
     branches:
       - main
-    paths:
-      - ".github/workflows/release.yml"
-      - "tests/test_ci_workflows.py"
-      - "docs/IMPLEMENTATION_STATUS.md"
-      - "docs/P0_ACCEPTANCE.md"
 
 permissions:
   contents: read

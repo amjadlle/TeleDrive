@@ -15,8 +15,7 @@ jobs:
   three-process-telegram:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[p1-live-multiworker]') }}
     concurrency:
-      # Same channel as regular Bot E2E, even across different refs.
-      group: teledrive-live-bot
+      group: teledrive-live-bot-${{ github.repository }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20

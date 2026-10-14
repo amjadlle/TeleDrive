@@ -26,8 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  # One writer group for push/manual across refs.
-  group: teledrive-live-bot
+  group: teledrive-live-bot-${{ github.repository }}
   # In-progress Telegram writes must finish their cleanup.
   cancel-in-progress: false
 
