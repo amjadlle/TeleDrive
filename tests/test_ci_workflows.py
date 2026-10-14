@@ -255,11 +255,12 @@ def test_explicit_multi_process_live_postgres_bot_acceptance_not_auto_spammed():
     assert "workflow_dispatch" in wf["on"]
     assert "push" in wf["on"] and "pull_request" not in wf["on"]
     assert wf["permissions"]["contents"] == "read"
-    assert wf["concurrency"]["cancel-in-progress"] == "false"
-    assert wf["concurrency"]["group"] == workflow(
+    job = wf["jobs"]["three-process-telegram"]
+    assert "concurrency" not in wf  # skipped opt-in may not evict Bot queue
+    assert job["concurrency"]["cancel-in-progress"] == "false"
+    assert job["concurrency"]["group"] == workflow(
         "telegram-bot-e2e.yml"
     )["concurrency"]["group"]
-    job = wf["jobs"]["three-process-telegram"]
     assert "postgres" in job["services"]
     assert "postgres:17-alpine" in job["services"]["postgres"]["image"]
     assert "[p1-live-multiworker]" in job["if"]
