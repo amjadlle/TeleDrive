@@ -336,7 +336,18 @@ def test_e2e_chat_bootstrap_migration_hides_value_and_removes_old_variable(
     example_private_peer = "-100" + "987654321012"
     observed = {}
     monkeypatch.setattr(setup, "require_github_cli", lambda repo: None)
-    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: example_private_peer)
+    from subprocess import CompletedProcess
+    subprocess_calls = []
+
+    def masked_variable_read(cmd, **kwargs):
+        subprocess_calls.append((cmd, kwargs))
+        return CompletedProcess(cmd, 0, stdout=example_private_peer.encode(), stderr=b"")
+
+    monkeypatch.setattr(setup.subprocess, "run", masked_variable_read)
+    monkeypatch.setattr(
+        setup.getpass, "getpass",
+        lambda prompt: pytest.fail("Existing Actions variable must not be prompted"),
+    )
     monkeypatch.setattr(
         setup, "store_secret",
         lambda repo, key, value: observed.update(
@@ -357,6 +368,11 @@ def test_e2e_chat_bootstrap_migration_hides_value_and_removes_old_variable(
     captured = capsys.readouterr()
     assert example_private_peer not in captured.out + captured.err
     assert "Saved GitHub Actions secret" in captured.out
+    assert subprocess_calls == [(
+        ["gh", "variable", "get", "TELEDRIVE_E2E_BOT_CHAT_ID",
+         "--repo", "some-owner/some-repo"],
+        {"capture_output": True, "check": False},
+    )]
 
 
 @pytest.mark.parametrize("bad", [
@@ -370,6 +386,11 @@ def test_e2e_chat_bootstrap_rejects_invalid_private_channel_before_write(
 
     writes = []
     monkeypatch.setattr(setup, "require_github_cli", lambda repo: None)
+    from subprocess import CompletedProcess
+    monkeypatch.setattr(
+        setup.subprocess, "run",
+        lambda cmd, **kwargs: CompletedProcess(cmd, 1, stdout=b"", stderr=b""),
+    )
     monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: bad)
     monkeypatch.setattr(
         setup, "store_secret",
@@ -436,3 +457,28 @@ def test_e2e_chat_variable_cleanup_fails_closed_on_unverifiable_state(
                         lambda cmd, **kw: result)
     with pytest.raises(RuntimeError, match="Actions variable"):
         setup.remove_public_bot_chat_variable("some-owner/some-repo")
+
+
+def test_e2e_chat_migration_rejects_untrusted_existing_variable_without_writing(
+    monkeypatch,
+):
+    from scripts import setup_telegram_e2e as setup
+    from subprocess import CompletedProcess
+
+    monkeypatch.setattr(setup, "require_github_cli", lambda repo: None)
+    monkeypatch.setattr(
+        setup.subprocess, "run",
+        lambda cmd, **kwargs: CompletedProcess(
+            cmd, 0, stdout=b"unsafe\r\n::warning::hijack", stderr=b"",
+        ),
+    )
+    monkeypatch.setattr(
+        setup.getpass, "getpass",
+        lambda prompt: pytest.fail("Malformed available variable must not be prompted"),
+    )
+    monkeypatch.setattr(
+        setup, "store_secret",
+        lambda *args: pytest.fail("Unvalidated channel ID must never be stored"),
+    )
+    with pytest.raises(ValueError, match="numeric private channel"):
+        setup.secure_existing_bot_chat_id("some-owner/some-repo")
