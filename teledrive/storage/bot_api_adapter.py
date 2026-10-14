@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import BigInteger, Column, Integer, Index, MetaData, String, Table, and_, func, insert, select, delete
+from sqlalchemy import BigInteger, Column, Integer, Index, MetaData, String, Table, and_, case, func, insert, select, delete, update
 
 from .manifest import ChunkReference, chunks
 
@@ -66,6 +66,18 @@ _bot_send_intents = Table(
     Column("ordinal", Integer, primary_key=True),
     Column("sha256", String(64), nullable=False),
     Column("size", BigInteger, nullable=False),
+)
+
+
+# A process-local asyncio.Lock cannot coordinate independent Bot workers
+# sharing a Telegram channel. Reserve start slots in durable shared SQL.
+# One committed UPDATE serializes competing processes on PostgreSQL/MySQL
+# and SQLite. A slot is never proof that a Telegram send was accepted.
+_bot_chat_slots = Table(
+    "storage_bot_chat_send_slots", _bot_metadata,
+    Column("account", String(255), primary_key=True),
+    Column("chat_id", BigInteger, primary_key=True),
+    Column("next_allowed_ms", BigInteger, nullable=False),
 )
 
 
@@ -141,6 +153,66 @@ class BotFileIndex:
             _bot_send_intents.c.size == size,
         ))
         self.db.commit()
+
+    def reserve_send_slot(self, account: str, chat_id: int,
+                          interval_seconds: float, *,
+                          now_ms: int | None = None) -> float:
+        """Reserve one globally serialized per-chat send start time.
+
+        Returns a nonnegative delay in seconds. Shared SQL serialization
+        prevents independent workers from all starting Telegram sends in
+        the same second; only actual HTTP 429 means a definite rejection.
+        Hosts must have synchronized wall clocks. No slot grants exclusive
+        ownership of a message or authorizes retransmission.
+        """
+        if (not account or type(chat_id) is not int or not chat_id
+                or not 0 <= interval_seconds <= 60):
+            raise ValueError("Invalid Bot API channel rate interval")
+        gap = int(interval_seconds * 1000 + 0.5)
+        if gap == 0:
+            return 0.0
+        timestamp = int(time.time() * 1000) if now_ms is None else now_ms
+        if type(timestamp) is not int or timestamp < 0:
+            raise ValueError("Invalid shared Bot time")
+        predicate = (
+            _bot_chat_slots.c.account == account,
+            _bot_chat_slots.c.chat_id == chat_id,
+        )
+        # The insert can race across workers. Roll back only the failed
+        # transaction, then reserve on the now-existing row.
+        exists = self.db.connection.execute(
+            select(_bot_chat_slots.c.account).where(*predicate)
+        ).first()
+        if exists is None:
+            try:
+                self.db.connection.execute(insert(_bot_chat_slots).values(
+                    account=account, chat_id=chat_id,
+                    next_allowed_ms=timestamp,
+                ))
+                self.db.commit()
+            except BaseException:
+                self.db.connection.rollback()
+                # Do not hide a SQL outage as an upload attempt. The row
+                # must exist after a valid concurrent insertion.
+                if self.db.connection.execute(
+                    select(_bot_chat_slots.c.account).where(*predicate)
+                ).first() is None:
+                    raise
+        result = self.db.connection.execute(update(_bot_chat_slots).where(
+            *predicate
+        ).values(next_allowed_ms=case(
+            (_bot_chat_slots.c.next_allowed_ms > timestamp,
+             _bot_chat_slots.c.next_allowed_ms + gap),
+            else_=timestamp + gap,
+        )))
+        if result.rowcount != 1:
+            self.db.connection.rollback()
+            raise BotApiError("Bot API shared rate slot could not be reserved")
+        next_ms = self.db.connection.execute(select(
+            _bot_chat_slots.c.next_allowed_ms
+        ).where(*predicate)).scalar_one()
+        self.db.commit()
+        return max(0.0, (int(next_ms) - gap - timestamp) / 1000)
 
     def get_send_intent(self, *, account: str, chat_id: int,
                         object_id: str, ordinal: int) -> dict | None:
@@ -494,7 +566,12 @@ class BotApiChunkTransport:
             # it proves the previous send was rejected. An unknown network
             # failure can mean an ACK was lost after upload; never retry it.
             for attempt in range(2):
-                pause = max(0.0, self._next_upload - time.monotonic())
+                # The SQL slot is shared by every worker using this
+                # account/channel, not just this transport instance.
+                shared_wait = self.index.reserve_send_slot(
+                    self.account, self.chat_id, self._min_upload_interval,
+                )
+                pause = max(shared_wait, self._next_upload - time.monotonic(), 0.0)
                 if pause:
                     await asyncio.sleep(pause)
                 try:
