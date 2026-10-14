@@ -71,7 +71,7 @@ def seed(tmp_path, size):
             catalog.manifests, transport, chunk_size=64 * 1024,
             scratch_directory=root,
         ).put_file("dr-test", "restore/sample.bin", source))
-        catalog.publish(stored.id)
+        catalog.publish(stored.id, now=int(time.time()))
         assert stored.sha256 == hashlib.sha256(payload).hexdigest()
     finally:
         db.close()
