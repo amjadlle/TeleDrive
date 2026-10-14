@@ -1013,3 +1013,23 @@ Do not mark P1 fully finished until those distinct production receipts exist.
   credentials and Bot file-ID provenance, real physically separate
   production hosts over prolonged soak, an isolated restoration using
   production backup/keys, and an approved legacy read cutover.
+
+## P1 final gated test evidence refresh (2026-10-14)
+
+- All newly introduced operator CLI/SQL/DR/cutover regression tests
+  passed the expanded offline release run, apart from a duplicated old
+  `15`-minute Bot workflow contract assertion. Both deadline checks are
+  now aligned to the explicit bounded `25`-minute live workload.
+- The real independent-process PostgreSQL/Bot multiworker acceptance
+  succeeded on SHA `beb7b438` with live test-owned message cleanup.
+  This is separate evidence; no physical multi-host production deployment
+  or production credentials were used.
+- The next same-SHA final run explicitly requests cross-client original
+  channel ACK proof, five-message 4 MiB+1 B Bot/Telethon readback,
+  Bot 5/16 MiB multipart, twelve-object paced Bot soak, and independently
+  sealed SQLite archive restore against the real Telegram Bot channel.
+  The optional multiworker workflow is intentionally not re-triggered
+  concurrently against the same Bot channel after its successful prior run.
+- Production acceptance requires original production secrets, owner file
+  ID evidence, true separate hosts, an isolated real backup restore and
+  explicit legacy read switchover. CI cannot fabricate these receipts.
