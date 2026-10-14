@@ -14,7 +14,8 @@
 ## 2. Engineering backlog
 
 - [ ] Implement full version-aware, writer-fenced physical garbage collection **only after** sealed independent payload backup, ownership/alias/retention checks, an actual restore drill and explicit two-person approval.
-- [ ] Extend trustworthy recovery of unknown original Telegram history without inventing bucket/key or missing version metadata.
+- [x] Add a bounded, read-only marker inventory for one owner-authorized Telegram channel, with private output and synthetic regression coverage; candidate hints are not recovery proofs.
+- [ ] Extend trustworthy recovery of unknown original Telegram history beyond candidate markers without inventing bucket/key, full SHA-256 or missing version metadata.
 - [ ] Complete tested S3 capabilities beyond the documented subset (for example lifecycle, policies, SSE and currently unsupported checksum modes).
 - [ ] Establish longer-duration real-environment capacity benchmarks on owner-controlled infrastructure.
 

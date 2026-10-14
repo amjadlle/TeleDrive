@@ -151,7 +151,19 @@ python scripts/rebuild_from_telegram.py \
   --target ORIGINAL_TELEGRAM_CHANNEL
 ~~~
 
-**Limits:** captions alone do not establish the original bucket/key mapping, all historical versions or a complete unknown-message inventory. Automated discovery without trustworthy independent metadata is still open work. Bot unknown-ACK recovery needs an independently reliable `file_id`. This reconstruction does **not** upload or delete Telegram media.
+**Bounded history candidate inventory:** `scripts/inventory_telegram_history.py` scans at most 10,000 readable messages from **one explicitly authorized original Telegram channel**, checks canonical TeleDrive UUID/ordinal/SHA-prefix markers and outgoing/channel/media hints, and creates a new private JSON report (mode `0600`). It downloads no media and writes no SQL. Missing and repeated ordinals are flagged; the report never claims that the channel scan represents all historical sources.
+
+~~~bash
+# Use the same protected TELEDRIVE_REBUILD_API_ID, _API_HASH and _SESSION
+# environment variables as the isolated rebuild command.
+python scripts/inventory_telegram_history.py \
+  --account original-user \
+  --target ORIGINAL_TELEGRAM_CHANNEL \
+  --limit 1000 \
+  --output /secure/isolated-history-candidates.json
+~~~
+
+**Limits:** inventory markers are **unverified candidates**, not an importable rebuild plan. They do not prove the original bucket/key mapping, complete chunk SHA-256 or sizes, whole-object hash, historical versions, or the existence of messages outside the scanned window/channel. Actual isolated reconstruction still requires independent metadata and byte-level verification. Automated discovery without trustworthy independent metadata is still open work. Bot unknown-ACK recovery needs an independently reliable `file_id`. This reconstruction does **not** upload or delete Telegram media.
 
 ### 4.3 Capacity and recovery endurance
 
