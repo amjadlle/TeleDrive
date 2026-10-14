@@ -987,3 +987,29 @@ touch production. Real original Telegram channel provenance, production
 secrets, actual physically separate host soak, live backup DR and
 business-authorized legacy read cutover remain external operator signoffs.
 Do not mark P1 fully finished until those distinct production receipts exist.
+
+## Dedicated real E2E reconciliation and DR acceptance update (2026-10-14)
+
+- An opt-in GitHub Actions **three-process** Bot/PostgreSQL 17 test
+  succeeded at `beb7b438`, with a dedicated real Bot channel, TLS-backed
+  Telegram retrieval, published SQL object verification and test-owned cleanup.
+  This is not three physical production hosts.
+- The real durable-job Bot E2E now also creates a sealed SQLite online backup
+  of a completed **actual Telegram** upload, clones that archive, downloads
+  the original Telegram chunks and independently verifies full-body SHA-256,
+  size and Range consistency before deleting only test-owned messages.
+- The Bot E2E `run_ack_proof` opt-in compares the exact original Bot
+  file ID with an **independently authenticated Telethon user's original
+  channel post**, including the immutable caption and binary SHA-256.
+  SQL receipt updates require a successful dry run followed by explicit
+  apply. No unknown-outcome upload is ever automatically retransmitted.
+- The GitHub Actions regular Bot and multiworker workflows now share
+  channel serialization **only for running jobs**. A skipped opt-in
+  multiworker job cannot cancel a pending ordinary Bot job. The
+  bounded real Bot acceptance deadline is 25 minutes to accommodate
+  5/16 MiB and twelve-object size-soak alongside DR/proof tests.
+- The following live-only step remains an external authorized operator
+  action, **not** an automatic GitHub CI pass: original production
+  credentials and Bot file-ID provenance, real physically separate
+  production hosts over prolonged soak, an isolated restoration using
+  production backup/keys, and an approved legacy read cutover.
