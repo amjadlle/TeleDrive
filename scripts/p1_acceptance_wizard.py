@@ -235,7 +235,10 @@ def ask_bot_identity():
     print("  DR: ÖZGÜN Telegram Bot ve özgün mesajların kanalı gerekir.")
     token = secret("Üretim Telegram Bot token")
     account = ask("TeleDrive Bot account alias (kullanıcı adı değil)")
-    chat_id = int(secret("Orijinal Telegram kanal ID"))
+    chat_text = secret("Orijinal Telegram kanal ID")
+    if not re.fullmatch(r"-100[0-9]{5,16}", chat_text):
+        raise ValueError("Telegram kanalı -100... biçiminde olmalı")
+    chat_id = int(chat_text)
     bucket = ask("Mevcut S3 bucket")
     key = ask("Mevcut S3 object key")
     if not all((token, account, chat_id, bucket, key)):
@@ -333,11 +336,11 @@ def native_restore(kind: str, source: dict, target: dict,
                     env=target_env, timeout=1800).returncode:
             raise RuntimeError("İzole pg_restore başarısız")
         from sqlalchemy.engine import URL
-        return str(URL.create(
+        return URL.create(
             "postgresql+psycopg", username=target["user"],
             password=target["password"], host=target["host"],
             port=target["port"], database=target["dbname"],
-        ))
+        ).render_as_string(hide_password=False)
     for executable in ("mysqldump", "mysql"):
         if not shutil.which(executable):
             raise RuntimeError("Gerekli MySQL aracı yok: " + executable)
@@ -380,11 +383,11 @@ def native_restore(kind: str, source: dict, target: dict,
         if loaded.returncode:
             raise RuntimeError("İzole MySQL restore başarısız")
         from sqlalchemy.engine import URL
-        return str(URL.create(
+        return URL.create(
             "mysql+pymysql", username=target["user"],
             password=target["password"], host=target["host"],
             port=target["port"], database=target["dbname"],
-        ))
+        ).render_as_string(hide_password=False)
     finally:
         for path in (original_opt, restored_opt):
             if path is not None:
@@ -534,9 +537,10 @@ def ack_stage(result: dict, session_path: Path):
         report_status(result, "bot_ack", "NOT_APPLICABLE",
                       "Operatör belirsiz Bot gönderimi bulunmadığını beyan etti")
         return
-    if not session_path.exists():
+    if (not session_path.is_file() or session_path.is_symlink()
+            or session_path.stat().st_mode & 0o077):
         report_status(result, "bot_ack", "BLOCKED",
-                      "Ayrı Telegram kullanıcı session dosyası yok")
+                      "Güvenli, mode 0600 Telegram kullanıcı session dosyası yok")
         return
     if not yes("Orijinal message_id VE orijinal güvenilir Bot file_id mevcut mu?"):
         report_status(result, "bot_ack", "BLOCKED",
@@ -607,7 +611,10 @@ def main():
     if not sys.stdin.isatty():
         parser.error("Interaktif terminal gerekli. 'python - <<PY' kullanmayın")
     os.umask(0o077)
-    evidence = options.evidence_dir.expanduser().resolve()
+    requested_evidence = options.evidence_dir.expanduser()
+    if requested_evidence.is_symlink():
+        parser.error("Kanıt dizini symlink olmamalı")
+    evidence = requested_evidence.resolve()
     if evidence.is_symlink():
         parser.error("Kanıt dizini symlink olmamalı")
     evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
