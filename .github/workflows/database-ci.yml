@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - feature/docker-webui-multiaccount
     paths:
       - "teledrive/db.py"
       - "teledrive/storage/**"

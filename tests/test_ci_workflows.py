@@ -22,6 +22,7 @@ EXPECTED = (
     "desktop-ci.yml",
     "telegram-storage-e2e.yml",
     "telegram-bot-e2e.yml",
+    "telegram-multiworker-e2e.yml",
     "release.yml",
 )
 
@@ -640,3 +641,30 @@ def test_bot_variable_discovery_parses_full_name_listing(monkeypatch):
     assert legacy_name in names
     assert len(names) == 41
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("name", EXPECTED)
+def test_mainline_ci_ignores_retired_feature_branch(name):
+    """Every active workflow must run on main, not the retired P1 branch."""
+    doc = workflow(name)
+    assert "push" in doc["on"]
+    branches = doc["on"]["push"].get("branches", [])
+    assert "main" in branches, name
+    assert "feature/docker-webui-multiaccount" not in branches, name
+
+
+def test_bot_writers_share_cross_ref_concurrency_without_canceling_active_uploads():
+    """Normal Bot E2E and opt-in multiworker cannot write concurrently."""
+    bot = workflow("telegram-bot-e2e.yml")
+    multi = workflow("telegram-multiworker-e2e.yml")
+    bot_group = bot["concurrency"]
+    worker = multi["jobs"]["three-process-telegram"]
+    assert bot_group["group"] == "teledrive-live-bot"
+    assert worker["concurrency"]["group"] == bot_group["group"]
+    assert bot_group["cancel-in-progress"] == "false"
+    assert worker["concurrency"]["cancel-in-progress"] == "false"
+    # An ordinarily skipped opt-in workflow must not take a global queue slot.
+    assert "concurrency" not in multi
+    assert "workflow_dispatch" in multi["on"]
+    assert "[p1-live-multiworker]" in worker["if"]
+    assert multi["on"]["push"]["branches"] == ["main"]

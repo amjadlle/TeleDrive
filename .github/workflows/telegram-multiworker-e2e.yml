@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feature/docker-webui-multiaccount
+      - main
 
 permissions:
   contents: read
@@ -15,7 +15,8 @@ jobs:
   three-process-telegram:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[p1-live-multiworker]') }}
     concurrency:
-      group: teledrive-live-bot-${{ github.ref }}
+      # Same channel as regular Bot E2E, even across different refs.
+      group: teledrive-live-bot
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20

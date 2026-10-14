@@ -1117,3 +1117,28 @@ Do not mark P1 fully finished until those distinct production receipts exist.
 - Production physical multi-host rate-limit acceptance is still open:
   SQL-sharing deterministic tests and one process on CI do not substitute
   for an independently evidenced one-hour deployment soak.
+
+
+## P1 CI consolidation on main (2026-10-14)
+
+- PR #4 merged the P1 implementation into `main`. All eight active
+  GitHub Actions workflow push triggers now track `main` rather than
+  the retired `feature/docker-webui-multiaccount` branch.
+- The opt-in three-process PostgreSQL + real Bot Telegram E2E workflow
+  is available on `main` via workflow_dispatch or the intentional
+  `[p1-live-multiworker]` push marker.
+- Standard Bot E2E and opt-in multiworker share the cross-ref
+  `teledrive-live-bot` concurrency group. `cancel-in-progress=false`
+  protects in-flight tests' own-message cleanup. The opt-in worker
+  deliberately retains **job-level** concurrency so skipped ordinary
+  pushes cannot evict a pending standard Bot E2E.
+- Workflow contract tests include the multiworker YAML in the common
+  mandatory SHA-pinned action and parse checks, and verify all active
+  push branch filters and Bot concurrency coordination.
+- GitHub concurrency groups do not promise a durable backlog: more
+  than one pending run may be replaced. Always inspect the exact
+  release SHA and explicitly dispatch any omitted operator test.
+- Mainline merge and CI gates are **not** a claim of production
+  acceptance. Physical multi-host 429 soak, original Telegram backup
+  restore, and operator-approved legacy production cutover remain
+  pending evidence in `docs/P1_PRODUCTION_ACCEPTANCE.md`.
