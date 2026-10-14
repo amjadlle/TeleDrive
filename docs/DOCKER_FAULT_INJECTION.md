@@ -1,10 +1,10 @@
 # Docker fault injection — sıfırdan kur, boz, kurtar
 
-**Bu test altyapısı ilerideki bütün özellikler için yeniden kullanılır.** Geliştirme geliştirme kabulü için mevcut bir
+**Bu test altyapısı ilerideki bütün özellikler için yeniden kullanılır.** Geliştirme kabulü için mevcut bir
 production sunucusu, gerçek legacy dosyası, operatör imzası, bir saatlik
 production soak veya production Telegram kanalı **gerekli değildir**.
 Bunlar dağıtım öncesi sonraki aşamanın ayrı
-[`Geliştirme_PRODUCTION_ACCEPTANCE.md`](Geliştirme_PRODUCTION_ACCEPTANCE.md) kapılarıdır.
+[`P1_PRODUCTION_ACCEPTANCE.md`](P1_PRODUCTION_ACCEPTANCE.md) kapılarıdır.
 
 ## Tek komut
 
@@ -73,3 +73,24 @@ Kontrol edilmemiş ortamda `production_acceptance_signed_off` alanı
 daima `false` kalır. `legacy_cutover_required` geliştirme modu
 için `false` olmak zorundadır; *bu* legacy migration'ın test
 edildiği anlamına gelmez.
+
+
+## CI regresyonu: gönderim slotundan önce sentetik 429 üretme
+
+14 Ekim 2026, `fc255a86` üzerinde Docker kurulumu, iki WebUI health
+kontrolü ve SQL manifest seed aşaması başarılıydı. Test senaryosu,
+`BotFileIndex.impose_shared_cooldown()` çağrısına gönderim slotunu
+`reserve_send_slot()` ile önceden ayırmadan girdiği için
+`BotApiError: Bot API shared cooldown row missing` ile durdu.
+Bu **üretim protokolünün fail-closed korumasıdır**, Bot API/storage
+motorundaki bir hata değildir.
+
+Docker senaryosu artık sırasıyla (1) `interval_seconds=0` ile ortak
+SQL gönderim slotunu kalıcı ayırır, (2) sentetik ve kesin 429'u uygular,
+(3) bekleme süresinin 7 saniyeye yükseldiğini doğrular, (4) yeni SQL
+bağlantısından cooldown ve durable 429 sayacını tekrar doğrular ve
+(5) aynı SQL'i iki ayrı Web node üzerinden okur. Testler gerçek Telegram'a
+gitmez; doğal üretim 429 kanıtı sayılmaz. Ayrı offline regresyon testi,
+eksik slotun reddedilmeye devam etmesini ve doğru sıra sonrası cooldown
+başarısını doğrular. Bu kontrol güvenli protokolü gevşetmeden CI hatasını
+giderir.

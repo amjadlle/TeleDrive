@@ -375,3 +375,41 @@ def test_explicit_429_counter_failure_rolls_back_cooldown_and_send_slot(tmp_path
         assert index.shared_cooldown_wait("bot", -100905, now_ms=1000) == 15
     finally:
         db.close()
+
+
+def test_fault_fixture_requires_prebooked_zero_interval_slot(tmp_path):
+    """A synthetic definitive 429 must follow the real send-slot protocol.
+
+    This contract caught the Docker DEV acceptance failure at fc255a8:
+    pre-send intent alone is not a rate reservation and must not allow
+    cooldown publication with a missing SQL row.
+    """
+    from teledrive.storage.bot_api_adapter import BotApiError
+
+    db_path = str(tmp_path / "docker-fault-cooldown.db")
+    first = connect_database(db_path)
+    second = connect_database(db_path)
+    try:
+        sender = BotFileIndex(first)
+        peer = BotFileIndex(second)
+        with pytest.raises(BotApiError, match="shared cooldown row missing"):
+            sender.impose_shared_cooldown(
+                "fake-dev-telegram", -100700800900123, 7, now_ms=1000,
+            )
+        assert sender.total_explicit_429_observations() == 0
+
+        # Even when normal send pacing is disabled, a real sender reserves
+        # a durable shared slot BEFORE an explicit server 429 can occur.
+        assert sender.reserve_send_slot(
+            "fake-dev-telegram", -100700800900123, 0, now_ms=1000,
+        ) == 0
+        sender.impose_shared_cooldown(
+            "fake-dev-telegram", -100700800900123, 7, now_ms=1000,
+        )
+        assert peer.total_explicit_429_observations() == 1
+        assert peer.shared_cooldown_wait(
+            "fake-dev-telegram", -100700800900123, now_ms=1000,
+        ) == 7
+    finally:
+        second.close()
+        first.close()

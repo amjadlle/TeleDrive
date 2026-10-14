@@ -179,14 +179,21 @@ def seed():
         ) if x["object_id"] == missing)
         assert candidate["reference_blocked"] is True
         assert candidate["approved_for_deletion"] is False
-        # Synthetic Telegram 429: shared SQL counter, not a real Telegram event.
+        # Synthetic Telegram 429: a real sender ALWAYS reserves its shared
+        # account/channel SQL slot before it can receive a definitive 429.
+        # The fault fixture must preserve this ordering, rather than
+        # weakening the production fail-closed rate-limit contract.
+        assert index.reserve_send_slot(ACCOUNT, CHAT, 0, now_ms=1000) == 0
         index.impose_shared_cooldown(ACCOUNT, CHAT, 7, now_ms=1000)
+        assert index.shared_cooldown_wait(ACCOUNT, CHAT, now_ms=1000) == 7
         db.close()
         reopened = connect_database(DB_URL)
         try:
             idx = BotFileIndex(reopened)
             assert idx.unresolved_count() == 1
             assert idx.total_explicit_429_observations() == 1
+            assert idx.shared_cooldown_wait(ACCOUNT, CHAT, now_ms=1000) == 7
+            assert idx.reserve_send_slot(ACCOUNT, CHAT, 0, now_ms=1000) == 7
         finally:
             reopened.close()
         nodes = check_two_web_nodes()
