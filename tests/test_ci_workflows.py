@@ -438,7 +438,7 @@ def test_e2e_chat_variable_cleanup_never_logs_unmasked_value(
         setup.remove_public_bot_chat_variable("some-owner/some-repo")
     assert calls[0][0] == [
         "gh", "variable", "list", "--repo", "some-owner/some-repo",
-        "--json", "name",
+        "--json", "name", "--limit", "1000",
     ]
     assert all(kwargs["capture_output"] for _, kwargs in calls)
     assert [cmd[2] for cmd, _ in calls] == (
@@ -616,3 +616,27 @@ def test_secure_bot_id_cli_help_requires_no_telethon_install():
     assert finished.returncode == 0, finished.stderr
     assert "--secure-bot-chat-id" in finished.stdout
     assert "ModuleNotFoundError" not in finished.stderr
+
+
+def test_bot_variable_discovery_reads_beyond_gh_default_page(monkeypatch):
+    """An unmasked ID outside gh's first 30 variables must still be found."""
+    from subprocess import CompletedProcess
+    import json
+    from scripts import setup_telegram_e2e as setup
+
+    legacy_name = "TELEDRIVE_E2E_BOT_CHAT_ID"
+    entries = [{"name": f"OTHER_{n}"} for n in range(40)]
+    entries.append({"name": legacy_name})
+    calls = []
+
+    def all_variable_names(cmd, **kwargs):
+        calls.append(cmd)
+        assert kwargs["capture_output"] is True
+        assert cmd[-2:] == ["--limit", "1000"]
+        return CompletedProcess(cmd, 0, stdout=json.dumps(entries).encode())
+
+    monkeypatch.setattr(setup.subprocess, "run", all_variable_names)
+    names = setup.legacy_bot_chat_variable_names("some-owner/some-repo")
+    assert legacy_name in names
+    assert len(names) == 41
+    assert len(calls) == 1
