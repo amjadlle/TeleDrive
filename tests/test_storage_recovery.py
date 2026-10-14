@@ -265,3 +265,50 @@ def test_unknown_account_reference_does_not_trigger_deletion(db_store):
     with pytest.raises(UnsafeCleanup, match="does not belong"):
         run(RecoveryManager(db_store, remote, min_age_seconds=3600).cleanup(ident, dry_run=False))
     assert not remote.deleted
+
+
+def test_physical_cleanup_rejects_published_version_even_if_object_failed(db_store):
+    """A failed but historically indexed object cannot lose its original bytes."""
+    from sqlalchemy import insert
+    from teledrive.storage.catalog import BucketCatalog, published_versions
+
+    ident, chunk = failed_object(db_store)
+    BucketCatalog(db_store)
+    db_store.db.connection.execute(insert(published_versions).values(
+        object_id=ident, bucket="ci", key_hash="a" * 64, committed_ns=123,
+    ))
+    db_store.db.commit()
+    transport = FakeRecoveryTransport()
+    transport.messages[chunk.identity] = chunk
+    with pytest.raises(UnsafeCleanup, match="another SQL reference"):
+        run(RecoveryManager(db_store, transport, min_age_seconds=3600).cleanup(
+            ident, dry_run=False
+        ))
+    assert not transport.deleted and chunk.identity in transport.messages
+
+
+def test_physical_cleanup_rejects_copy_alias_and_unresolved_bot_receipt(db_store):
+    from sqlalchemy import insert
+    from teledrive.storage.manifest import object_aliases
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+
+    ident, chunk = failed_object(db_store)
+    copy = db_store.begin("ci", "copy-alias", 0, int(time.time()) - 9000)
+    db_store.db.connection.execute(insert(object_aliases).values(
+        object_id=copy, source_object_id=ident,
+    ))
+    db_store.db.commit()
+    transport = FakeRecoveryTransport()
+    transport.messages[chunk.identity] = chunk
+    manager = RecoveryManager(db_store, transport, min_age_seconds=3600)
+    with pytest.raises(UnsafeCleanup, match="another SQL reference"):
+        run(manager.cleanup(ident, dry_run=False))
+    db_store.db.connection.execute(object_aliases.delete().where(
+        object_aliases.c.object_id == copy
+    ))
+    db_store.db.commit()
+    index = BotFileIndex(db_store.db)
+    index.start_send("primary", 12345, ident, 0, hashlib.sha256(b"abcdef").hexdigest(), 6)
+    with pytest.raises(UnsafeCleanup, match="another SQL reference"):
+        run(manager.cleanup(ident, dry_run=False))
+    assert transport.deleted == []

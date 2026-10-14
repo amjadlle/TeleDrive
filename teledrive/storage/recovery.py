@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import time
 from typing import Literal, Protocol
 
-from sqlalchemy import select, update
+from sqlalchemy import inspect, or_, select, update
 
 from .manifest import ChunkReference, ManifestError, ManifestStore, chunks, objects
 
@@ -95,6 +95,44 @@ class RecoveryManager:
         if int(row[1]) > now - self.min_age_seconds:
             raise UnsafeCleanup("Failure has not aged beyond the cleanup safety interval")
 
+    def _require_no_sql_references(self, object_id: str) -> None:
+        """A remote ownership marker alone never authorizes physical deletion.
+
+        Checks every installed reference table. Historic published versions,
+        logical deletions, aliases, active multipart parts and unresolved Bot
+        ACKs remain retained regardless of the current S3 HEAD. Rechecked
+        during the delete loop because remote operations release SQL locks.
+        """
+        from teledrive.storage.catalog import heads, published_versions, removed_versions
+        from teledrive.storage.manifest import object_aliases
+        from teledrive.s3.multipart import parts
+        from teledrive.storage.bot_api_adapter import _bot_send_intents, _bot_receipts
+
+        connection = self.manifests.db.connection
+        inspector = inspect(self.manifests.db.engine)
+        checks = (
+            ("storage_object_heads", heads.c.object_id == object_id, heads),
+            ("storage_published_versions", published_versions.c.object_id == object_id, published_versions),
+            ("storage_removed_versions", removed_versions.c.object_id == object_id, removed_versions),
+            ("storage_object_aliases", or_(
+                object_aliases.c.object_id == object_id,
+                object_aliases.c.source_object_id == object_id,
+            ), object_aliases),
+            ("storage_multipart_parts", parts.c.object_id == object_id, parts),
+            ("storage_bot_send_intents", _bot_send_intents.c.object_id == object_id, _bot_send_intents),
+            ("storage_bot_upload_receipts", _bot_receipts.c.object_id == object_id, _bot_receipts),
+        )
+        # If one half of the Bot reconciliation schema is missing, never
+        # treat the other half's absence as confirmation of no remote ACK.
+        if inspector.has_table("storage_bot_send_intents") != inspector.has_table(
+            "storage_bot_upload_receipts"
+        ):
+            raise UnsafeCleanup("Bot reconciliation schema is incomplete")
+        for name, condition, table in checks:
+            if inspector.has_table(name):
+                if connection.execute(select(table).where(condition).limit(1)).first():
+                    raise UnsafeCleanup("Telegram media retained by another SQL reference")
+
     async def cleanup(self, object_id: str, *, dry_run: bool = True) -> CleanupReport:
         """Reconcile journal+Telegram, optionally delete; must run with uploader stopped.
 
@@ -116,6 +154,7 @@ class RecoveryManager:
             # If it points to unrelated Telegram media, refuse ALL deletion.
             missing = 0
             for part in journal:
+                self._require_no_sql_references(object_id)
                 verdict = await self.transport.probe(part, object_id=object_id)
                 if verdict == "mismatch":
                     raise UnsafeCleanup("Journaled message does not belong to this object")
@@ -144,6 +183,7 @@ class RecoveryManager:
                                      orphaned, missing, 0, True, False)
 
             self._eligible(object_id, int(time.time()))
+            self._require_no_sql_references(object_id)
             deleted = 0
             for part in all_refs.values():
                 # Lease expiration must fail closed, never continue deleting.
@@ -164,6 +204,7 @@ class RecoveryManager:
             if not db.renew_lease(lease_name, holder, int(time.time()), 300):
                 raise UnsafeCleanup("Cleanup lease lost during final scan")
             self._eligible(object_id, int(time.time()))
+            self._require_no_sql_references(object_id)
 
             # Do not publish a tombstone if state was changed by another actor.
             result = db.connection.execute(
