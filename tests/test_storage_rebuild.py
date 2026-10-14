@@ -100,3 +100,89 @@ def test_rebuild_rejects_unverified_remote_ownership_even_with_correct_bytes(tmp
     with pytest.raises(ValueError, match="ownership"):
         asyncio.run(restore_isolated_catalog(plan, WrongOwner({100:b"exact-bytes"}), dest))
     assert not dest.exists()
+
+
+def test_two_distinct_objects_publish_together_in_one_catalog(tmp_path):
+    from teledrive.storage.rebuild import restore_isolated_catalog_batch
+    first = make_plan([b"abc", b"def"])
+    second = make_plan([b"final"])
+    second["key"] = "original/second.bin"
+    second["chunks"][0]["message_id"] = 301
+    source = TelegramSource({100: b"abc", 101: b"def", 301: b"final"})
+    path = tmp_path / "isolated-batch.db"
+    receipt = asyncio.run(restore_isolated_catalog_batch([first, second], source, path))
+    assert receipt["object_count"] == 2
+    assert receipt["verified_bytes"] == 11
+    assert not receipt["production_database_modified"]
+    db = connect_database(str(path))
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        assert catalog.get(first["bucket"], first["key"]).item.id == first["object_id"]
+        assert catalog.get(second["bucket"], second["key"]).item.id == second["object_id"]
+    finally:
+        db.close()
+
+
+def test_invalid_second_object_never_exposes_partial_database(tmp_path):
+    from teledrive.storage.rebuild import restore_isolated_catalog_batch
+    first = make_plan([b"good"])
+    second = make_plan([b"corrupt"])
+    second["key"] = "second"
+    second["chunks"][0]["message_id"] = 999
+    destination = tmp_path / "no-half-catalog.db"
+    with pytest.raises(ValueError, match="hash/length"):
+        asyncio.run(restore_isolated_catalog_batch(
+            [first, second], TelegramSource({100: b"good", 999: b"tampered"}),
+            destination,
+        ))
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".teledrive-rebuild-*"))
+
+
+@pytest.mark.parametrize("kind", ["duplicate-id", "duplicate-head", "duplicate-message", "oversized"])
+def test_invalid_cross_object_metadata_rejected_before_remote_io(tmp_path, kind):
+    from teledrive.storage.rebuild import restore_isolated_catalog_batch
+    first = make_plan([b"one"])
+    second = make_plan([b"two"])
+    second["key"] = "second"
+    second["chunks"][0]["message_id"] = 301
+    if kind == "duplicate-id":
+        second["object_id"] = first["object_id"]
+    elif kind == "duplicate-head":
+        second["key"] = first["key"]
+    elif kind == "duplicate-message":
+        second["chunks"][0]["message_id"] = first["chunks"][0]["message_id"]
+    else:
+        second["size"] = 1024**3
+    remote = TelegramSource({100: b"one", 301: b"two"})
+    destination = tmp_path / "invalid.db"
+    with pytest.raises(ValueError):
+        asyncio.run(restore_isolated_catalog_batch([first, second], remote, destination))
+    assert remote.reads == 0
+    assert not destination.exists()
+
+
+def test_batch_must_not_replace_preexisting_database(tmp_path):
+    from teledrive.storage.rebuild import restore_isolated_catalog_batch
+    plan = make_plan([b"unchanged"])
+    target = tmp_path / "prod.db"
+    target.write_bytes(b"production metadata preserved")
+    with pytest.raises(FileExistsError):
+        asyncio.run(restore_isolated_catalog_batch([plan], TelegramSource({100:b"unchanged"}), target))
+    assert target.read_bytes() == b"production metadata preserved"
+
+
+def test_nonmatching_second_remote_owner_fails_the_entire_batch(tmp_path):
+    from teledrive.storage.rebuild import restore_isolated_catalog_batch
+    first = make_plan([b"first"])
+    second = make_plan([b"second"])
+    second["key"] = "other"
+    second["chunks"][0]["message_id"] = 301
+    class OwnerMismatch(TelegramSource):
+        async def probe(self, chunk, *, object_id):
+            return "mismatch" if chunk.message_id == 301 else "verified"
+    target = tmp_path / "blocked.db"
+    with pytest.raises(ValueError, match="ownership"):
+        asyncio.run(restore_isolated_catalog_batch(
+            [first, second], OwnerMismatch({100:b"first", 301:b"second"}), target))
+    assert not target.exists()

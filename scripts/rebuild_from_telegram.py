@@ -14,7 +14,9 @@ import json
 import os
 from pathlib import Path
 
-from teledrive.storage.rebuild import restore_isolated_catalog, validate_plan
+from teledrive.storage.rebuild import (
+    restore_isolated_catalog, restore_isolated_catalog_batch, validate_batch,
+)
 from teledrive.storage.telethon_adapter import TelethonChunkTransport
 
 
@@ -23,7 +25,10 @@ async def execute(plan: dict, destination: Path, *, account: str, target: str,
     from telethon import TelegramClient
     from telethon.sessions import StringSession
 
-    refs, _ = validate_plan(plan)
+    is_batch = isinstance(plan, dict) and set(plan) == {"objects"}
+    plans = plan["objects"] if is_batch else [plan]
+    validated = validate_batch(plans)
+    refs = [ref for _, entries in validated for ref in entries]
     if not refs:
         raise ValueError("Live source ownership requires at least one Telegram message")
     if any(ref.account != account for ref in refs):
@@ -34,6 +39,8 @@ async def execute(plan: dict, destination: Path, *, account: str, target: str,
         if any(ref.chat_id != original_chat for ref in refs):
             raise ValueError("Original Telegram channel does not match the recovery plan")
         remote = TelethonChunkTransport({account: (client, entity)})
+        if is_batch:
+            return await restore_isolated_catalog_batch(plans, remote, destination)
         return await restore_isolated_catalog(plan, remote, destination)
 
 
