@@ -173,6 +173,8 @@ The manually triggered [Capacity Soak workflow](../.github/workflows/endurance-c
 
 ### 4.4 Advanced S3 protocol parity
 
+Use the [S3 Specifications and Compatibility Matrix](S3_SPECS.md) as the operation-level P2 Advanced S3 backlog. It distinguishes verified bounded routes from partial AWS semantics and deliberately unsupported APIs; this status page remains the source for production acceptance boundaries.
+
 Only SQL-only incomplete-multipart lifecycle abort is now supported, applied by the hourly one-service scheduler; no Telegram messages or completed versions are deleted. Full object lifecycle expiration/transitions, SSE, advanced checksum/SDK modes, bucket policies, comprehensive delete-marker semantics and unverified third-party clients (including Cyberduck) remain unsupported or unverified until independently tested. Do not substitute an expected AWS behavior for TeleDrive's documented supported subset.
 
 ## 5. Outstanding work and release decision rules
