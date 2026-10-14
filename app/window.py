@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
-import sqlite3
+import os
+from datetime import datetime
 import sys
 from urllib.request import Request, urlopen
 
@@ -13,11 +14,16 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget, QInputDialog, QComboBox, QScrollArea, QHeaderView, QGridLayout,
+    QVBoxLayout, QWidget, QInputDialog, QComboBox, QScrollArea, QHeaderView, QGridLayout, QCheckBox,
 )
 from PySide6.QtGui import QDesktopServices
 
-from .paths import app_data_dir, config_path, state_path
+from .paths import app_data_dir, config_path
+from teledrive import uploader
+from teledrive.db import Database, connect_database, normalize_database_url, sqlite_database_path
+from teledrive.desktop_support import accounts_from_config, parse_auth_prompt, validate_account_rows, write_auth_response
+from app.pages.api_management import ApiManagementPage
+from app.pages.s3_management import S3ManagementPage
 
 STYLE = """
 QMainWindow { background: transparent; }
@@ -117,9 +123,14 @@ class MainWindow(QMainWindow):
         self.loop_timer.timeout.connect(lambda: self._start_uploader("--run-once"))
         self.awaiting_login_prompt = False
         self.pending_login_mode: str | None = None
-        self.login_code: str | None = None
+        self.pending_login_account: str | None = None
+        self._process_buffer = ""
+        self._account_widgets: list[dict] = []
+        self._last_db_error: str | None = None
         self.auth_dir = app_data_dir() / "auth"
         self.auth_dir.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            self.auth_dir.chmod(0o700)
         self._build_ui()
         self._load_settings()
         self._refresh_all()
@@ -144,6 +155,10 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._build_queue_page())
         self.pages.addWidget(self._build_history_page())
         self.pages.addWidget(self._build_settings_page())
+        self.api_page = ApiManagementPage(self._api_database_connection)
+        self.pages.addWidget(self.api_page)
+        self.s3_page = S3ManagementPage(self._api_database_connection)
+        self.pages.addWidget(self.s3_page)
         self.pages.addWidget(self._build_logs_page())
         layout.addWidget(self.pages, 1); outer.addLayout(layout, 1)
         self.setCentralWidget(root)
@@ -201,7 +216,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("PERSONAL TELEGRAM CLOUD", objectName="eyebrow"))
         layout.addSpacing(18)
         self.nav_buttons: list[QPushButton] = []
-        for index, label in enumerate(("Dashboard", "Upload Queue", "History", "Settings", "Activity Log")):
+        for index, label in enumerate(("Dashboard", "Upload Queue", "History", "Settings", "API Management", "S3 Management", "Activity Log")):
             button = QPushButton(label)
             button.setObjectName("secondary")
             button.clicked.connect(lambda _=False, i=index: self._show_page(i))
@@ -244,6 +259,9 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar()
         box.addWidget(self.stats_label); box.addWidget(self.stats_detail); box.addSpacing(6); box.addWidget(self.progress)
         layout.addWidget(card)
+        self.account_status_label = QLabel("No account status yet", objectName="fieldHint")
+        self.account_status_label.setWordWrap(True)
+        layout.addWidget(self.account_status_label)
         actions = QHBoxLayout()
         self.run_button = QPushButton("Run upload batch")
         self.run_button.clicked.connect(lambda: self._start_uploader("--run-once"))
@@ -306,10 +324,9 @@ class MainWindow(QMainWindow):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
         self.api_id = QLineEdit(); self.api_hash = QLineEdit(); self.api_hash.setEchoMode(QLineEdit.EchoMode.Password)
-        self.phone = QLineEdit(); self.phone.setPlaceholderText("+country code and number")
-        self.target = QLineEdit(); self.target.setPlaceholderText("me, @channel, or channel ID")
+        self.target = QLineEdit(); self.target.setPlaceholderText("Default: me, @channel or chat ID")
         self.source = QLineEdit(); self.source.setPlaceholderText("Select the folder containing files to upload")
-        for text_field in (self.api_id, self.api_hash, self.phone, self.target):
+        for text_field in (self.api_id, self.api_hash, self.target):
             text_field.setFixedWidth(420)
         self.source.setFixedWidth(300)
         choose = QPushButton("Choose folder"); choose.setObjectName("secondary"); choose.setFixedWidth(112); choose.clicked.connect(self._choose_folder)
@@ -327,7 +344,24 @@ class MainWindow(QMainWindow):
         self.send_mode = QComboBox(); self.send_mode.setFixedWidth(300); self.send_mode.addItem("Document (file attachment)", "document"); self.send_mode.addItem("Media (photo/video)", "media"); self.send_mode.addItem("Auto (Telegram default)", "auto")
         form.addRow(QLabel("Telegram connection", objectName="sectionTitle"))
         form.addRow("Telegram API ID", self.api_id); form.addRow("Telegram API hash", self.api_hash)
-        form.addRow("Phone number", self.phone); form.addRow("Target channel / Saved Messages", self.target)
+        form.addRow("Default upload target", self.target)
+        self.strategy = QComboBox()
+        for label, strategy in (("Single account", "single"), ("Round robin", "round_robin"),
+                                ("Failover", "failover"), ("Parallel", "parallel")):
+            self.strategy.addItem(label, strategy)
+        form.addRow("Account scheduling strategy", self.strategy)
+        self.database_url = QLineEdit()
+        self.database_url.setPlaceholderText("Any synchronous SQLAlchemy database URL")
+        form.addRow("Database URL", self.database_url)
+        form.addRow(QLabel("Telegram accounts", objectName="sectionTitle"))
+        self.accounts_panel = QWidget()
+        self.accounts_layout = QVBoxLayout(self.accounts_panel)
+        self.accounts_layout.setContentsMargins(0, 0, 0, 0)
+        form.addRow(self.accounts_panel)
+        add_account = QPushButton("Add account")
+        add_account.setObjectName("secondary")
+        add_account.clicked.connect(lambda: self._add_account_editor())
+        form.addRow(add_account)
         form.addRow(QLabel("Upload source", objectName="sectionTitle"))
         form.addRow("Source folder", source_row)
         upload_limits = QGridLayout(); upload_limits.setHorizontalSpacing(18); upload_limits.setVerticalSpacing(10)
@@ -381,8 +415,13 @@ class MainWindow(QMainWindow):
         api_id = int(telegram.get("api_id", 0) or 0)
         self.api_id.setText(str(api_id) if api_id else "")
         self.api_hash.setText(str(telegram.get("api_hash", "")))
-        self.phone.setText(str(telegram.get("phone", "")))
         self.target.setText(str(telegram.get("target", "me")))
+        self.strategy.setCurrentIndex(max(0, self.strategy.findData(telegram.get("strategy", "single"))))
+        state = raw.get("state", {})
+        self.database_url.setText(str(state.get("database_url") or state.get("db_path", "data/state.db")))
+        self._clear_account_editors()
+        for account in accounts_from_config(telegram):
+            self._add_account_editor(account)
         self.source.setText(str(upload.get("source_dir", "")))
         self.per_run.setValue(int(upload.get("max_files_per_run", 3)))
         self.per_day.setValue(int(upload.get("max_files_per_day", 100)))
@@ -395,27 +434,135 @@ class MainWindow(QMainWindow):
         mode = str(upload.get("send_mode", "document")).lower()
         self.send_mode.setCurrentIndex(max(0, self.send_mode.findData(mode)))
 
+    def _add_account_editor(self, account: dict | None = None) -> None:
+        account = dict(account or {})
+        number = len(self._account_widgets) + 1
+        frame = QFrame(objectName="card")
+        grid = QGridLayout(frame)
+        grid.setContentsMargins(8, 8, 8, 8)
+        enabled = QCheckBox("Enabled")
+        enabled.setChecked(bool(account.get("enabled", True)))
+        name = QLineEdit(str(account.get("name") or f"account{number}"))
+        phone = QLineEdit(str(account.get("phone") or ""))
+        phone.setPlaceholderText("+country code + number")
+        target = QLineEdit(str(account.get("target") or ""))
+        target.setPlaceholderText("Optional target override")
+        session = QLineEdit(str(account.get("session_path") or f"data/sessions/account{number}"))
+        api_id = QLineEdit(str(account.get("api_id") or ""))
+        api_id.setPlaceholderText("Inherit default")
+        api_hash = QLineEdit(str(account.get("api_hash") or ""))
+        api_hash.setEchoMode(QLineEdit.EchoMode.Password)
+        api_hash.setPlaceholderText("Inherit default")
+        remove = QPushButton("Remove")
+        remove.setObjectName("danger")
+        grid.addWidget(enabled, 0, 0)
+        grid.addWidget(QLabel("Name"), 0, 1)
+        grid.addWidget(name, 0, 2)
+        grid.addWidget(remove, 0, 3)
+        grid.addWidget(QLabel("Phone"), 1, 0)
+        grid.addWidget(phone, 1, 1)
+        grid.addWidget(QLabel("Target"), 1, 2)
+        grid.addWidget(target, 1, 3)
+        grid.addWidget(QLabel("Session"), 2, 0)
+        grid.addWidget(session, 2, 1, 1, 3)
+        grid.addWidget(QLabel("API ID override"), 3, 0)
+        grid.addWidget(api_id, 3, 1)
+        grid.addWidget(QLabel("API hash override"), 3, 2)
+        grid.addWidget(api_hash, 3, 3)
+        editor = {
+            "frame": frame, "enabled": enabled, "name": name,
+            "phone": phone, "target": target, "session": session,
+            "api_id": api_id, "api_hash": api_hash,
+        }
+        self._account_widgets.append(editor)
+        self.accounts_layout.addWidget(frame)
+        remove.clicked.connect(lambda: self._remove_account_editor(editor))
+
+    def _remove_account_editor(self, editor: dict) -> None:
+        self._account_widgets.remove(editor)
+        editor["frame"].setParent(None)
+        editor["frame"].deleteLater()
+
+    def _clear_account_editors(self) -> None:
+        for editor in list(self._account_widgets):
+            self._remove_account_editor(editor)
+
+    def _collect_accounts(self) -> list[dict]:
+        rows = []
+        for editor in self._account_widgets:
+            row = {
+                "name": editor["name"].text().strip(),
+                "enabled": editor["enabled"].isChecked(),
+                "phone": editor["phone"].text().strip(),
+                "session_path": editor["session"].text().strip(),
+            }
+            target = editor["target"].text().strip()
+            if target:
+                row["target"] = target
+            custom_id = editor["api_id"].text().strip()
+            if custom_id:
+                row["api_id"] = int(custom_id)
+            custom_hash = editor["api_hash"].text().strip()
+            if custom_hash:
+                row["api_hash"] = custom_hash
+            rows.append(row)
+        return rows
+
     def _save_settings(self) -> None:
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.warning(self, "Settings", "Stop the uploader before saving settings.")
+            return
+        temporary = config_path().with_suffix(".yaml.tmp")
         try:
-            api_id = int(self.api_id.text().strip())
-            if api_id <= 0 or not self.api_hash.text().strip():
-                raise ValueError("Enter your valid Telegram API ID and API hash.")
-            source = Path(self.source.text().strip())
+            default_id = int(self.api_id.text().strip() or 0)
+            source = Path(self.source.text().strip()).expanduser()
             if not source.is_dir():
                 raise ValueError("Choose an existing source folder.")
             if self.sleep_min.value() > self.sleep_max.value():
                 raise ValueError("Minimum upload delay cannot exceed maximum delay.")
-        except ValueError as exc:
-            QMessageBox.warning(self, "Settings", str(exc)); return
-        raw = yaml.safe_load(config_path().read_text(encoding="utf-8")) or {}
-        raw.setdefault("telegram", {}).update({"api_id": api_id, "api_hash": self.api_hash.text().strip(), "phone": self.phone.text().strip(), "target": self.target.text().strip() or "me"})
-        raw.setdefault("upload", {}).update({"source_dir": str(source), "max_files_per_run": self.per_run.value(), "max_files_per_day": self.per_day.value(), "sleep_min_seconds": self.sleep_min.value(), "sleep_max_seconds": self.sleep_max.value(), "retry_attempts": self.retry_attempts.value(), "backoff_base_seconds": self.backoff.value(), "floodwait_buffer_seconds": self.flood_buffer.value(), "send_mode": self.send_mode.currentData()})
-        raw.setdefault("app", {})["run_interval_minutes"] = self.run_interval.value()
-        temp = config_path().with_suffix(".yaml.tmp")
-        temp.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
-        temp.replace(config_path())
-        self.activity.appendPlainText("Settings saved.")
-        QMessageBox.information(self, "Settings", "Settings saved. On your first upload, Telegram will ask for a login code in the terminal setup flow.")
+            accounts = self._collect_accounts()
+            validate_account_rows(accounts, default_id, self.api_hash.text().strip())
+            config = config_path()
+            raw = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+            telegram = raw.setdefault("telegram", {})
+            telegram.update({
+                "api_id": default_id,
+                "api_hash": self.api_hash.text().strip(),
+                "target": self.target.text().strip() or "me",
+                "strategy": self.strategy.currentData(),
+                "accounts": accounts,
+            })
+            telegram.pop("phone", None)
+            telegram.pop("session_path", None)
+            raw.setdefault("upload", {}).update({
+                "source_dir": str(source.resolve()),
+                "max_files_per_run": self.per_run.value(),
+                "max_files_per_day": self.per_day.value(),
+                "sleep_min_seconds": self.sleep_min.value(),
+                "sleep_max_seconds": self.sleep_max.value(),
+                "retry_attempts": self.retry_attempts.value(),
+                "backoff_base_seconds": self.backoff.value(),
+                "floodwait_buffer_seconds": self.flood_buffer.value(),
+                "send_mode": self.send_mode.currentData(),
+            })
+            state = raw.setdefault("state", {})
+            state["database_url"] = self.database_url.text().strip() or "data/state.db"
+            state.pop("db_path", None)
+            raw.setdefault("app", {})["run_interval_minutes"] = self.run_interval.value()
+            fd = os.open(str(temporary), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(raw, handle, sort_keys=False)
+            cfg = uploader.load_config(str(temporary))
+            uploader.validate_config(cfg)
+            os.replace(temporary, config)
+            if os.name != "nt":
+                config.chmod(0o600)
+            self.activity.appendPlainText("Settings saved.")
+            QMessageBox.information(self, "Settings", "Settings saved; each account has its own login prompt.")
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            QMessageBox.warning(self, "Settings", str(exc))
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose source folder", self.source.text())
@@ -427,6 +574,10 @@ class MainWindow(QMainWindow):
             self._refresh_table(self.queue_table, "status IN ('pending', 'failed')")
         elif index == 2:
             self._refresh_table(self.history_table, "status = 'uploaded'")
+        elif index == 4:
+            self.api_page.refresh_keys()
+        elif index == 5:
+            self.s3_page.refresh_keys()
 
     def _check_for_updates(self) -> None:
         if self._update_worker is not None and self._update_worker.isRunning():
@@ -456,17 +607,19 @@ class MainWindow(QMainWindow):
     def _command(self, mode: str) -> list[str]:
         if getattr(sys, "frozen", False):
             return [sys.executable, "--cli", "--config", str(config_path()), "--auth-dir", str(self.auth_dir), mode]
-        return [sys.executable, str(Path(__file__).parents[1] / "uploader.py"), "--config", str(config_path()), "--auth-dir", str(self.auth_dir), mode]
+        return [sys.executable, "-m", "teledrive.uploader", "--config", str(config_path()), "--auth-dir", str(self.auth_dir), mode]
 
     def _start_uploader(self, mode: str) -> None:
         if self.process.state() != QProcess.ProcessState.NotRunning:
             QMessageBox.information(self, "Uploader", "An upload process is already running."); return
-        if not self.source.text().strip() or not self.api_hash.text().strip():
+        if not self.source.text().strip() or not any(a["enabled"].isChecked() for a in self._account_widgets):
             self.pages.setCurrentIndex(3)
             QMessageBox.information(self, "Setup required", "Complete and save the Settings page before running uploads."); return
         command = self._command(mode)
-        for auth_file in (self.auth_dir / "code.txt", self.auth_dir / "password.txt"):
-            auth_file.unlink(missing_ok=True)
+        self._process_buffer = ""
+        for auth_file in self.auth_dir.glob("*.txt"):
+            if auth_file.is_file() and not auth_file.is_symlink():
+                auth_file.unlink(missing_ok=True)
         self.activity.appendPlainText("$ " + " ".join(command))
         self.status_badge.setText("Working")
         self.run_button.setEnabled(False)
@@ -511,7 +664,7 @@ class MainWindow(QMainWindow):
         conn = self._connection()
         if conn is not None:
             try:
-                conn.execute("DELETE FROM files")
+                conn.clear_files()
                 conn.commit()
             finally:
                 conn.close()
@@ -520,38 +673,43 @@ class MainWindow(QMainWindow):
         self._refresh_all()
 
     def _read_process_output(self) -> None:
-        text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace").rstrip()
-        if text:
-            self.activity.appendPlainText(text)
-            self.log_view.appendPlainText(text)
-            self._answer_login_prompt(text)
+        chunk = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        if not chunk:
+            return
+        self.activity.appendPlainText(chunk.rstrip())
+        self.log_view.appendPlainText(chunk.rstrip())
+        # QProcess may deliver half of a login prompt in one read.
+        self._process_buffer = (self._process_buffer + chunk)[-16384:]
+        lines = self._process_buffer.split("\n")
+        self._process_buffer = lines.pop()
+        for line in lines:
+            self._answer_login_prompt(line)
 
-    def _answer_login_prompt(self, text: str) -> None:
-        if self.awaiting_login_prompt:
+    def _answer_login_prompt(self, line: str) -> None:
+        parsed = parse_auth_prompt(line)
+        if not parsed or self.awaiting_login_prompt:
             return
-        prompt = None
-        secret = False
-        if "Please enter the code" in text:
-            prompt = "Enter the Telegram code sent to your phone."
-            self.pending_login_mode = "code"
-        elif "Please enter your password" in text or "Please enter the password" in text:
-            prompt = "Enter your Telegram two-step verification password."
-            secret = True
-            self.pending_login_mode = "password"
-        if prompt is None:
-            return
+        account, kind = parsed
         self.awaiting_login_prompt = True
-        answer, ok = QInputDialog.getText(self, "Telegram sign in", prompt, QLineEdit.EchoMode.Password if secret else QLineEdit.EchoMode.Normal)
-        if ok and answer.strip() and self.pending_login_mode:
-            value = answer.strip()
-            if self.pending_login_mode == "code":
-                self.login_code = value
-            response = self.auth_dir / f"{self.pending_login_mode}.txt"
-            response.write_text(value, encoding="utf-8")
-        else:
+        self.pending_login_mode = kind
+        self.pending_login_account = account
+        try:
+            label = "login code" if kind == "code" else "two-step verification password"
+            answer, ok = QInputDialog.getText(
+                self, "Telegram sign in", f"Enter {label} for account '{account}':",
+                QLineEdit.EchoMode.Password if kind == "password" else QLineEdit.EchoMode.Normal,
+            )
+            if ok and answer.strip():
+                write_auth_response(self.auth_dir, account, kind, answer)
+            else:
+                self._stop_uploader()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Telegram sign in", str(exc))
             self._stop_uploader()
-        self.awaiting_login_prompt = False
-
+        finally:
+            self.pending_login_mode = None
+            self.pending_login_account = None
+            self.awaiting_login_prompt = False
 
     def _process_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
         self.run_button.setEnabled(True)
@@ -569,32 +727,69 @@ class MainWindow(QMainWindow):
         elif current_page == 2:
             self._refresh_table(self.history_table, "status = 'uploaded'")
 
-    def _connection(self) -> sqlite3.Connection | None:
-        if not state_path().exists(): return None
-        conn = sqlite3.connect(state_path(), timeout=2); conn.execute("PRAGMA busy_timeout=2000"); return conn
+    def _api_database_connection(self) -> Database:
+        raw = yaml.safe_load(config_path().read_text(encoding="utf-8")) or {}
+        state = raw.get("state", {})
+        value = state.get("database_url") or state.get("db_path", "data/state.db")
+        url = normalize_database_url(str(value), config_dir=config_path().parent)
+        return connect_database(url)
+
+    def _connection(self) -> Database | None:
+        try:
+            raw = yaml.safe_load(config_path().read_text(encoding="utf-8")) or {}
+            state = raw.get("state", {})
+            value = state.get("database_url") or state.get("db_path", "data/state.db")
+            url = normalize_database_url(str(value), config_dir=config_path().parent)
+            sqlite_path = sqlite_database_path(url)
+            if sqlite_path and not Path(sqlite_path).exists():
+                return None
+            self._last_db_error = None
+            return connect_database(url)
+        except Exception as exc:
+            reason = type(exc).__name__
+            if reason != self._last_db_error:
+                self._last_db_error = reason
+                self.activity.appendPlainText(f"Database unavailable: {reason}")
+            return None
 
     def _refresh_stats(self) -> None:
         conn = self._connection()
         if conn is None:
-            self.stats_label.setText("No uploads yet"); self.stats_detail.setText("Save settings, then scan the source folder."); self.progress.setValue(0); return
+            self.stats_label.setText("No database connection")
+            self.stats_detail.setText("Save settings and check database connectivity.")
+            self.account_status_label.setText("Account status unavailable")
+            self.progress.setValue(0)
+            return
         try:
-            total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-            uploaded = conn.execute("SELECT COUNT(*) FROM files WHERE status='uploaded'").fetchone()[0]
-            failed = conn.execute("SELECT COUNT(*) FROM files WHERE status='failed'").fetchone()[0]
-        except sqlite3.Error:
+            counts = conn.dashboard_counts()
+            statuses = conn.all_account_states()
+            totals = conn.uploaded_counts_by_account()
+        except Exception as exc:
+            self.stats_detail.setText(f"Database read failed: {type(exc).__name__}")
             return
         finally:
             conn.close()
+        uploaded = counts.get("uploaded", 0)
+        total = sum(counts.values())
+        failed = counts.get("failed", 0)
         self.stats_label.setText(f"{uploaded:,} uploaded  •  {max(total-uploaded, 0):,} remaining")
         self.stats_detail.setText(f"{total:,} files tracked  •  {failed:,} need attention")
         self.progress.setValue(round(uploaded * 100 / total) if total else 0)
+        self.account_status_label.setText("    |    ".join(
+            f"{name}: {state.get('state', 'unknown')} · {totals.get(name, 0)} uploaded"
+            for name, state in statuses.items()
+        ) or "No account status yet")
 
     def _refresh_table(self, table: QTableWidget, condition: str) -> None:
         conn = self._connection()
-        if conn is None: table.setRowCount(0); return
+        if conn is None:
+            table.setRowCount(0)
+            return
         try:
-            rows = conn.execute(f"SELECT path, status, attempts, datetime(last_update_ts, 'unixepoch', 'localtime') FROM files WHERE {condition} ORDER BY last_update_ts DESC LIMIT ?", (TABLE_ROW_LIMIT,)).fetchall()
-        except sqlite3.Error:
+            kind = "history" if condition == "status = 'uploaded'" else "queue"
+            rows = conn.list_files(kind, TABLE_ROW_LIMIT)
+        except Exception as exc:
+            self.activity.appendPlainText(f"File history unavailable: {type(exc).__name__}")
             return
         finally:
             conn.close()
@@ -603,10 +798,16 @@ class MainWindow(QMainWindow):
         try:
             table.clearContents()
             table.setRowCount(len(rows))
-            status_colors = {"pending": "#9a661d", "failed": "#b63838", "uploaded": "#327454"}
+            status_colors = {"pending": "#9a661d", "failed": "#b63838",
+                             "uploaded": "#327454", "uploading": "#3264a0"}
             for row_index, row in enumerate(rows):
-                for column, value in enumerate(row):
-                    text = str(value or "")
+                values = (
+                    row["path"], row["status"], row["attempts"],
+                    datetime.fromtimestamp(row["last_update_ts"]).strftime("%Y-%m-%d %H:%M:%S")
+                    if row["last_update_ts"] else "",
+                )
+                for column, value in enumerate(values):
+                    text = str(value if value is not None else "")
                     item = QTableWidgetItem(text)
                     if column == 0:
                         item.setToolTip(text)

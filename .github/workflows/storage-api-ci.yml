@@ -1,0 +1,150 @@
+name: Storage API Integration CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/docker-webui-multiaccount
+    paths:
+      - "teledrive/api_keys.py"
+      - "teledrive/db.py"
+      - "teledrive/uploader.py"
+      - "tests/test_legacy_bridge.py"
+      - "tests/test_legacy_import_admin.py"
+      - "teledrive/storage/**"
+      - "teledrive/s3/**"
+      - "web/**"
+      - "tests/test_api_keys.py"
+      - "tests/test_rest_*.py"
+      - "tests/test_storage_*.py"
+      - "tests/test_bot_storage.py"
+      - "tests/test_bot_receipt_reconcile.py"
+      - "tests/test_telegram_dr_rehearsal.py"
+      - "tests/test_legacy_cutover_acceptance.py"
+      - "tests/test_bot_rate_slots.py"
+      - "tests/test_s3_*.py"
+      - "docs/IMPLEMENTATION_STATUS.md"
+      - "docs/P0_ACCEPTANCE.md"
+      - ".github/workflows/storage-api-ci.yml"
+  pull_request:
+    paths:
+      - "teledrive/api_keys.py"
+      - "teledrive/db.py"
+      - "teledrive/uploader.py"
+      - "tests/test_legacy_bridge.py"
+      - "tests/test_legacy_import_admin.py"
+      - "teledrive/storage/**"
+      - "teledrive/s3/**"
+      - "web/**"
+      - "tests/test_api_keys.py"
+      - "tests/test_rest_*.py"
+      - "tests/test_storage_*.py"
+      - "tests/test_bot_storage.py"
+      - "tests/test_bot_receipt_reconcile.py"
+      - "tests/test_telegram_dr_rehearsal.py"
+      - "tests/test_legacy_cutover_acceptance.py"
+      - "tests/test_bot_rate_slots.py"
+      - "tests/test_s3_*.py"
+      - "docs/IMPLEMENTATION_STATUS.md"
+      - "docs/P0_ACCEPTANCE.md"
+      - ".github/workflows/storage-api-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storage-api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  storage-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install API and test runtime
+        run: |
+          python -m pip install -r requirements-web.txt
+          python -m pip install pytest httpx boto3
+          python -m pip check
+      - name: Install actual AWS CLI and rclone clients
+        run: |
+          python -m pip install awscli
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rclone
+          aws --version
+          rclone version
+      - name: Compile API and storage
+        run: python -m compileall -q teledrive web tests
+      - name: Check browser API management scripts
+        run: node --check web/static/app.js
+      - name: Actual AWS CLI and rclone process integration
+        env:
+          TELEDRIVE_REQUIRE_CLI_CLIENTS: "1"
+        run: python -m pytest -vv tests/test_s3_cli_compat.py
+      - name: Real SQL and HTTP contract tests with fake Telegram I/O
+        run: |
+          python -m pytest -q \
+            tests/test_api_keys.py \
+            tests/test_rest_api.py \
+            tests/test_rest_transfer.py \
+            tests/test_storage_engine.py \
+            tests/test_storage_recovery.py \
+            tests/test_storage_pending_admin.py \
+            tests/test_storage_jobs.py \
+            tests/test_legacy_bridge.py \
+            tests/test_legacy_import_admin.py \
+            tests/test_metadata_backup.py \
+            tests/test_storage_sigkill.py \
+            tests/test_storage_multiworker.py \
+            tests/test_metadata_snapshot_rehearsal.py \
+            tests/test_storage_versions.py \
+            tests/test_storage_ops_health.py \
+            tests/test_storage_gc_retention.py \
+            tests/test_s3_version_reads.py \
+            tests/test_s3_delete_markers.py \
+            tests/test_s3_version_listing.py \
+            tests/test_s3_version_tagging.py \
+            tests/test_s3_version_copy.py \
+            tests/test_s3_vhost.py \
+            tests/test_s3_additional_checksums.py \
+            tests/test_s3_presigned_complete.py \
+            tests/test_s3_post_policy.py \
+            tests/test_storage_catalog.py \
+            tests/test_bot_storage.py \
+            tests/test_bot_receipt_reconcile.py \
+            tests/test_telegram_dr_rehearsal.py \
+            tests/test_legacy_cutover_acceptance.py \
+            tests/test_bot_rate_slots.py \
+            tests/test_s3_gateway.py \
+            tests/test_s3_credentials.py \
+            tests/test_s3_admin.py \
+            tests/test_s3_multipart.py \
+            tests/test_s3_multipart_preconditions.py \
+            tests/test_s3_recovery.py \
+            tests/test_s3_presigned.py \
+            tests/test_s3_copy.py \
+            tests/test_s3_tagging.py \
+            tests/test_s3_batch_delete.py \
+            tests/test_s3_metadata.py \
+            tests/test_s3_bucket_location.py \
+            tests/test_s3_listing_v1.py \
+            tests/test_s3_conditions.py \
+            tests/test_s3_conditional_writes.py \
+            tests/test_s3_cors.py \
+            tests/test_s3_object_attributes.py \
+            tests/test_s3_sigv4_defense.py \
+            tests/test_s3_p0_acceptance.py \
+            tests/test_s3_p0_final.py \
+            tests/test_p0_security_matrix.py \
+            tests/test_storage_gc_audit.py \
+            tests/test_storage_gc_admin.py

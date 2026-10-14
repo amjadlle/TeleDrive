@@ -1,0 +1,44 @@
+telegram:
+  strategy: parallel
+  api_id: 123456
+  api_hash: "YOUR_API_HASH"
+  target: "me"
+  accounts:
+    - name: primary
+      enabled: true
+      phone: "+905000000001"
+      session_path: "/data/sessions/primary"
+    - name: secondary
+      enabled: true
+      phone: "+905000000002"
+      session_path: "/data/sessions/secondary"
+
+upload:
+  source_dir: "/uploads"
+  allowed_extensions: []
+  max_file_size_mb: 0
+  sleep_min_seconds: 60
+  sleep_max_seconds: 90
+  max_files_per_run: 12
+  max_files_per_day: 100
+  retry_attempts: 5
+  backoff_base_seconds: 10
+  floodwait_buffer_seconds: 5
+  caption_template: "{name}"
+  send_mode: "document"
+
+state:
+  database_url: "sqlite:////data/state.db"
+  # Or any synchronous SQLAlchemy URL whose driver/dialect is installed:
+  # database_url: "postgresql+psycopg://user:pass@db/teledrive"
+  # database_url: "mysql+pymysql://user:pass@db/teledrive"
+  # database_url: "oracle+oracledb://user:pass@db:1521/?service_name=FREEPDB1"
+  # database_url: "mssql+pyodbc://user:pass@db/teledrive?driver=ODBC+Driver+18+for+SQL+Server"
+
+logging:
+  log_path: "/data/uploader.log"
+  level: "INFO"
+
+app:
+  auto_run: false
+  run_interval_minutes: 60

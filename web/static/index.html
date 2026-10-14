@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TeleDrive</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2d;--panel2:#182238;--line:#25324d;--text:#e8eef8;--muted:#91a0b8;--accent:#65b4ff;--ok:#61d39c;--warn:#f6c85f;--bad:#ff7b8b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#0b1020e8;backdrop-filter:blur(12px);z-index:3}
+h1{font-size:20px;margin:0}.muted{color:var(--muted)}main{max-width:1400px;margin:auto;padding:24px}
+nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}.tab,.btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:9px 13px;border-radius:10px;cursor:pointer}.tab.active,.btn.primary{background:#173c63;border-color:#2a77b7}.btn.danger{background:#51202a}.btn:disabled{opacity:.5;cursor:not-allowed}
+.page{display:none}.page.active{display:block}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.metric b{display:block;font-size:28px;margin-top:5px}.section{margin-top:16px}.accounts{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#24314a;font-size:12px}.pill.ready,.pill.idle{background:#173a31;color:#8ae2bb}.pill.cooldown{background:#49391e;color:#ffda8a}.pill.error,.pill.unavailable{background:#4b2029;color:#ff9caa}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:12px}th{color:#b5c1d3;background:#141d31}.scroll{overflow:auto;border-radius:12px}
+label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,select,textarea{width:100%;background:#0f1728;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.account-edit{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.row .compact{flex:0 0 auto}.prompt{display:none;background:#332a15;border:1px solid #6d5928;padding:12px;border-radius:12px;margin-bottom:16px}.prompt.show{display:block}.logs{white-space:pre-wrap;background:#080c16;border:1px solid var(--line);padding:14px;border-radius:12px;min-height:300px;max-height:600px;overflow:auto;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.toast{position:fixed;right:18px;bottom:18px;padding:12px 16px;border-radius:10px;background:#173a31;border:1px solid #285b4a;display:none}.toast.bad{background:#4b2029;border-color:#7d3342}.tiny{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header><div><h1>TeleDrive Web UI</h1><div class="muted" id="subtitle">Loading…</div></div><div class="row"><a class="btn" style="text-decoration:none" href="/docs" title="OpenAPI / Swagger documentation" target="_blank" rel="noopener">API Docs ↗</a><button class="btn primary" id="runBtn">Run batch</button><button class="btn" id="scanBtn">Scan only</button><button class="btn danger" id="stopBtn">Stop</button></div></header>
+<main>
+<div id="authPrompt" class="prompt"><b id="authTitle"></b><div class="row" style="margin-top:8px"><input id="authValue" class="input" autocomplete="one-time-code"><button class="btn primary compact" id="authSubmit">Submit</button></div></div>
+<nav>
+<button class="tab active" data-page="dashboard">Dashboard</button>
+<button class="tab" data-page="queue">Queue</button>
+<button class="tab" data-page="history">History</button>
+<button class="tab" data-page="settings">Settings</button>
+<button class="tab" data-page="api-management">API Management</button>
+<button class="tab" data-page="logs">Logs</button>
+</nav>
+
+<section id="dashboard" class="page active">
+<div class="grid">
+<div class="card metric"><span class="muted">Pending</span><b id="mPending">0</b></div>
+<div class="card metric"><span class="muted">Failed</span><b id="mFailed">0</b></div>
+<div class="card metric"><span class="muted">Uploaded</span><b id="mUploaded">0</b></div>
+<div class="card metric"><span class="muted">Today</span><b id="mToday">0</b></div>
+</div>
+<div class="section card"><div class="row"><div><b>Strategy</b><div class="muted" id="strategyView">-</div></div><div><b>Database</b><div class="muted" id="dbView">-</div></div><div><b>Uploader</b><div class="muted" id="processView">-</div></div></div></div>
+<div class="section"><h3>Accounts</h3><div class="accounts" id="accounts"></div></div>
+</section>
+
+<section id="queue" class="page"><div class="scroll"><table><thead><tr><th>Path</th><th>Status</th><th>Attempts</th><th>Account</th><th>Error</th></tr></thead><tbody id="queueRows"></tbody></table></div></section>
+<section id="history" class="page"><div class="scroll"><table><thead><tr><th>Path</th><th>Account</th><th>Message ID</th><th>Uploaded</th></tr></thead><tbody id="historyRows"></tbody></table></div></section>
+
+<section id="settings" class="page">
+<div class="card">
+<h3>Telegram</h3>
+<div class="form-grid">
+<div><label>Strategy</label><select id="strategy"><option>single</option><option>round_robin</option><option>failover</option><option>parallel</option></select></div>
+<div><label>Default API ID</label><input class="input" id="apiId" type="number"></div>
+<div><label>Default API hash</label><input class="input" id="apiHash"></div>
+<div><label>Default target</label><input class="input" id="tgTarget"></div>
+</div>
+<div class="section"><div class="row"><h3 style="margin:0">Accounts</h3><button class="btn compact" id="addAccount">Add account</button></div><div id="accountEditors"></div></div>
+</div>
+
+<div class="card section"><h3>Upload</h3><div class="form-grid">
+<div><label>Source directory</label><input class="input" id="sourceDir"></div>
+<div><label>Send mode</label><select id="sendMode"><option>document</option><option>media</option><option>auto</option></select></div>
+<div><label>Max files / run</label><input class="input" id="perRun" type="number"></div>
+<div><label>Max files / day</label><input class="input" id="perDay" type="number"></div>
+<div><label>Sleep min (sec)</label><input class="input" id="sleepMin" type="number"></div>
+<div><label>Sleep max (sec)</label><input class="input" id="sleepMax" type="number"></div>
+<div><label>Retry attempts</label><input class="input" id="retryAttempts" type="number"></div>
+<div><label>Backoff base (sec)</label><input class="input" id="backoff" type="number"></div>
+<div><label>FloodWait buffer (sec)</label><input class="input" id="floodBuffer" type="number"></div>
+<div><label>Max file size MB (0=unlimited)</label><input class="input" id="maxFileSize" type="number"></div>
+<div><label>Caption template</label><input class="input" id="captionTemplate"></div>
+<div><label>Allowed extensions (comma separated)</label><input class="input" id="extensions"></div>
+</div></div>
+
+<div class="card section"><h3>Database</h3>
+<label>SQLAlchemy database URL</label><input class="input" id="databaseUrl" placeholder="sqlite:////data/state.db or any synchronous SQLAlchemy URL">
+<div class="tiny" style="margin-top:7px">No vendor whitelist. Any synchronous SQLAlchemy dialect works when its dialect/DBAPI driver is installed in the image.</div>
+</div>
+
+<div class="card section"><h3>Automation</h3><div class="form-grid">
+<div><label><input type="checkbox" id="autoRun"> Run upload batches automatically</label></div>
+<div><label>Interval (minutes)</label><input class="input" id="runInterval" type="number"></div>
+</div></div>
+<div class="section"><button class="btn primary" id="saveSettings">Save settings</button></div>
+</section>
+
+<section id="api-management" class="page">
+<div class="card">
+<h3>REST API access keys</h3>
+<p class="muted">Keys are stored hashed. Secret values are shown once and cannot be recovered. Keep admin keys private; give integrations only the scopes they need.</p>
+<div class="form-grid">
+<div><label>Key name</label><input class="input" id="keyName" maxlength="120" placeholder="Backup client"></div>
+<div><label>Expiry (optional, UTC)</label><input class="input" id="keyExpiry" type="datetime-local"></div>
+</div>
+<div class="section" id="keyScopes">
+<label>Permissions</label>
+<div class="form-grid">
+<label><input type="checkbox" value="objects:read"> Read objects</label>
+<label><input type="checkbox" value="objects:write"> Write objects</label>
+<label><input type="checkbox" value="objects:delete"> Delete object pointers</label>
+<label><input type="checkbox" value="buckets:read"> List buckets</label>
+<label><input type="checkbox" value="buckets:manage"> Manage buckets</label>
+<label><input type="checkbox" value="jobs:read"> Read jobs</label>
+<label><input type="checkbox" value="jobs:manage"> Manage jobs</label>
+<label><input type="checkbox" value="accounts:read"> Read account status</label>
+<label><input type="checkbox" value="accounts:manage"> Manage accounts</label>
+<label><input type="checkbox" value="settings:read"> Read settings</label>
+<label><input type="checkbox" value="settings:manage"> Change settings</label>
+<label><input type="checkbox" value="keys:manage"> Manage keys</label>
+<label><input type="checkbox" value="admin:*"> Full admin (exclusive)</label>
+</div></div>
+<div class="section row"><button class="btn primary compact" id="createKey">Create API key</button><button class="btn compact" id="refreshKeys">Refresh list</button></div>
+<div class="section card" id="createdKeyCard" style="display:none">
+<b>New API key — copy now; it will not be shown again</b>
+<textarea id="createdKeySecret" class="input" readonly rows="2" spellcheck="false"></textarea>
+<div class="row"><button class="btn compact" id="copyKey">Copy</button><button class="btn compact" id="dismissKey">Hide secret</button></div>
+</div>
+</div>
+<div class="card section">
+<h3>Existing keys</h3>
+<div class="scroll"><table><thead><tr><th>Name</th><th>Key prefix</th><th>Permissions</th><th>Created / last used</th><th>Status</th><th>Actions</th></tr></thead><tbody id="apiKeysRows"></tbody></table></div>
+</div>
+<div class="card section">
+<h3>S3-compatible gateway (initial core)</h3>
+<p class="muted">Telegram is the only payload backend. S3 credentials are encrypted at rest, scoped independently of REST keys, and displayed once. Configure the S3 master key before issuing credentials.</p>
+<div class="form-grid">
+<div><label>S3 access name</label><input class="input" id="s3KeyName" maxlength="120" placeholder="AWS CLI backup"></div>
+<div><label>Expiry (optional)</label><input class="input" id="s3KeyExpiry" type="datetime-local"></div>
+</div>
+<div class="section" id="s3Permissions"><label>Allowed S3 actions</label><div class="form-grid">
+<label><input type="checkbox" value="s3:ListAllMyBuckets" checked> List buckets</label>
+<label><input type="checkbox" value="s3:ListBucket" checked> List bucket contents</label>
+<label><input type="checkbox" value="s3:GetBucketLocation" checked> Get bucket location</label>
+<label><input type="checkbox" value="s3:GetObject" checked> Get/Head object</label>
+<label><input type="checkbox" value="s3:GetObjectAttributes"> Read object ETag/size attributes</label>
+<label><input type="checkbox" value="s3:GetObjectTagging"> Read object tags</label>
+<label><input type="checkbox" value="s3:PutObjectTagging"> Write object tags</label>
+<label><input type="checkbox" value="s3:DeleteObjectTagging"> Delete object tags</label>
+<label><input type="checkbox" value="s3:GetBucketTagging"> Read bucket tags</label>
+<label><input type="checkbox" value="s3:GetBucketCORS"> Read bucket CORS</label>
+<label><input type="checkbox" value="s3:PutBucketCORS"> Configure bucket CORS</label>
+<label><input type="checkbox" value="s3:PutBucketTagging"> Write bucket tags</label>
+<label><input type="checkbox" value="s3:DeleteBucketTagging"> Delete bucket tags</label>
+<label><input type="checkbox" value="s3:PutObject"> Put object</label>
+<label><input type="checkbox" value="s3:DeleteObject"> Delete object pointer</label>
+<label><input type="checkbox" value="s3:CreateBucket"> Create bucket</label>
+<label><input type="checkbox" value="s3:DeleteBucket"> Delete bucket</label>
+</div></div>
+<div class="row section"><button class="btn primary compact" id="createS3Key">Create S3 credentials</button><button class="btn compact" id="refreshS3Keys">Refresh S3 list</button></div>
+<div class="section card" id="createdS3Card" style="display:none">
+<b>S3 credentials — copy now. Secret cannot be recovered.</b>
+<div class="form-grid"><div><label>Access Key ID</label><input id="s3NewAccess" class="input" readonly spellcheck="false"></div><div><label>Secret Access Key</label><input id="s3NewSecret" type="password" class="input" readonly spellcheck="false"></div></div>
+<div class="row section"><button class="btn compact" id="copyS3Credentials">Copy AWS credentials</button><button class="btn compact" id="hideS3Credentials">Hide secret</button></div>
+</div>
+</div>
+<div class="card section"><h3>Existing S3 credentials</h3>
+<div class="scroll"><table><thead><tr><th>Name</th><th>Access Key ID</th><th>Permissions</th><th>Created</th><th>Status</th><th>Actions</th></tr></thead><tbody id="s3KeysRows"></tbody></table></div>
+<p class="tiny">Local S3 endpoint: <code>http://127.0.0.1:9000</code> (enable with Docker Compose profile <code>s3</code>). Supports signed path-style bucket/object operations, multipart uploads and checksum-bound presigned URLs. Advanced S3 operations are still being developed.</p>
+</div>
+<div class="card section">
+<h3>S3 multipart recovery</h3>
+<p class="muted">Review abandoned <code>completing</code> uploads before recovery. Only leases expired for at least one hour are eligible. Recovery returns an upload to <code>active</code> for a client retry; it never deletes Telegram messages.</p>
+<div class="row"><button class="btn compact" id="refreshS3Recovery">Scan stale completions</button></div>
+<div class="scroll section"><table><thead><tr><th>Bucket</th><th>Object key</th><th>Upload ID</th><th>Lease expired</th><th>Action</th></tr></thead><tbody id="s3RecoveryRows"></tbody></table></div>
+</div>
+<div class="card section">
+<h3>Immutable object history and restore</h3>
+<p class="muted">Inspect known published versions of a key and restore an immutable snapshot. A restore creates a new version pointing at the original Telegram chunks; no Telegram payload is copied or deleted. Versions published before the history index was installed might not appear.</p>
+<div class="form-grid section">
+<div><label>Bucket</label><input id="historyVersionBucket" class="input" placeholder="backup-bucket"></div>
+<div><label>Object key</label><input id="historyVersionKey" class="input" placeholder="archives/archive.bin"></div>
+</div>
+<div class="row section"><button class="btn compact" id="loadObjectVersions">Load versions</button><button class="btn compact" id="indexCurrentVersions">Preview / index pre-upgrade current HEADs</button><span class="muted" id="objectVersionGeneration"></span></div>
+<div class="scroll section"><table><thead><tr><th>Version ID</th><th>Bytes</th><th>SHA-256</th><th>Published</th><th>Action</th></tr></thead><tbody id="objectVersionsRows"></tbody></table></div>
+</div>
+<div class="card section">
+<h3>Durable Telegram upload jobs</h3>
+<p class="muted">Queue an existing local file under the operator-configured <code>TELEDRIVE_JOB_SOURCE_ROOT</code>. The source remains on disk until uploaded to Telegram. Jobs survive SQL restart, use expiring worker leases and never overwrite a concurrently changed object head. Retrying a failed upload can create new Telegram chunks; historical media remains protected.</p>
+<div class="form-grid section">
+<div><label>Bucket</label><input id="storageJobBucket" class="input" placeholder="backup-bucket"></div>
+<div><label>Object key</label><input id="storageJobKey" class="input" placeholder="archives/archive.bin"></div>
+<div><label>Existing absolute source path (inside approved root)</label><input id="storageJobSource" class="input" placeholder="/data/uploads/archive.bin"></div>
+</div>
+<div class="row section">
+<button class="btn primary compact" id="queueStorageJob">Queue file</button>
+<button class="btn compact" id="runStorageJob">Run next job</button>
+<button class="btn compact" id="refreshStorageJobs">Refresh jobs</button>
+<button class="btn compact" id="refreshStorageHealth">Storage health</button>
+</div>
+<div class="section"><h4>Legacy folder → durable job queue</h4>
+<p class="muted">Explicitly import files from the configured legacy source folder, preserving path layout and filters. Requires the legacy source to be within TELEDRIVE_JOB_SOURCE_ROOT. Preview before importing. No Telegram upload starts during import; stop the old uploader before using the durable worker.</p>
+<div class="form-grid">
+<div><label>Existing destination bucket</label><input id="legacyImportBucket" class="input" placeholder="backup-bucket"></div>
+<div><label>Relative object-key prefix</label><input id="legacyImportPrefix" class="input" placeholder="legacy"></div>
+<div><label>Maximum new jobs</label><input id="legacyImportLimit" type="number" min="1" max="1000" value="100" class="input"></div>
+</div>
+<div class="row section">
+<button class="btn compact" id="previewLegacyImport">Preview legacy import</button>
+<button class="btn compact" id="executeLegacyImport">Queue legacy files</button>
+</div>
+<pre id="legacyImportReport" class="section" style="white-space:pre-wrap;overflow-wrap:anywhere">Not scanned</pre>
+</div>
+<pre id="storageHealthSummary" class="section" style="white-space:pre-wrap;overflow-wrap:anywhere">Not checked</pre>
+<div class="scroll section"><table><thead><tr><th>Bucket / key</th><th>Source</th><th>Status</th><th>Attempts</th><th>Updated</th><th>Action</th></tr></thead><tbody id="storageJobsRows"></tbody></table></div>
+</div>
+<div class="card section">
+<h3>Abandoned PENDING upload reconciliation</h3>
+<p class="muted">Inspect uploads whose SQL writer lease expired. Only an explicitly selected expired writer can be marked failed; Telegram messages and chunk journals are retained. A live lease, a READY object or a legacy upload without writer token cannot be touched.</p>
+<div class="row"><button class="btn compact" id="refreshPendingRecovery">Scan stale PENDING uploads</button></div>
+<div class="scroll section"><table><thead><tr><th>Bucket</th><th>Object key</th><th>Object ID</th><th>Chunks</th><th>Expired</th><th>Action</th></tr></thead><tbody id="pendingRecoveryRows"></tbody></table></div>
+</div>
+<div class="card section">
+<h3>Telegram storage reference audit</h3>
+<p class="muted">Non-destructive inventory covering live objects, historical manifests, copied-object aliases and multipart parts. No Telegram messages can be deleted from this screen.</p>
+<div class="row"><button class="btn compact" id="runGCAudit">Inspect protected storage references</button></div>
+<pre class="section" id="gcAuditSummary" style="white-space:pre-wrap;overflow-wrap:anywhere">Not scanned</pre>
+</div>
+<div class="card section"><h3>API endpoints</h3>
+<p><code>/api/v1/buckets</code> · <code>/api/v1/buckets/{bucket}/objects</code></p>
+<p class="tiny">Use <code>Authorization: Bearer &lt;token&gt;</code> for scoped endpoints. Administrative key management still requires the WebUI Basic login and CSRF header. The Telegram binary upload and S3 protocol endpoints are under development.</p>
+<a href="/docs" target="_blank" rel="noopener">OpenAPI / Swagger documentation ↗</a>
+</div>
+</section>
+
+<section id="logs" class="page"><div id="logBox" class="logs"></div></section>
+</main>
+<div id="toast" class="toast"></div>
+
+<script src="/static/app.js" defer></script>
+</body></html>

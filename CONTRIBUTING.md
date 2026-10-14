@@ -1,16 +1,14 @@
 # Contributing to TeleDrive
 
-Thanks for helping improve TeleDrive.
+TeleDrive includes a Docker Web UI, a PySide6 desktop client, and an Astro marketing website.
 
-## Before opening a pull request
+- Keep pull requests focused and explain changes and verification.
+- Never commit Telegram sessions, API hashes, authentication codes, database credentials, env files or logs.
+- Run Python regression tests: `python -m pytest -q`.
+- Compile Python modules: `python -m compileall -q teledrive web app tests`.
+- Validate Compose: `docker compose config --quiet`.
+- For website changes: `cd website && npm ci && npm run build`.
+- Update the **root README.md** for user-facing instructions; do not introduce additional README files.
+- Send vulnerability reports privately as described in [SECURITY.md](SECURITY.md).
 
-- Explain the problem and the proposed change.
-- Keep changes focused and user-facing behavior clear.
-- Do not include API credentials, Telegram sessions, personal paths, logs, or state databases.
-- Run `python -m py_compile app\window.py` and test the affected workflow.
-- Update the README when installation or behavior changes.
-
-## Pull requests
-
-Use a descriptive title and include verification steps. Small, focused pull requests
-are easier to review and merge.
+Packaging helpers are in **scripts/** and Docker Web UI sources in **web/**.

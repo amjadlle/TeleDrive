@@ -6,7 +6,7 @@ from .window import MainWindow
 def main() -> int:
     if "--cli" in sys.argv:
         sys.argv.remove("--cli")
-        from uploader import main as uploader_main
+        from teledrive.uploader import main as uploader_main
         return uploader_main()
     app = QApplication(sys.argv)
     app.setApplicationName("TeleDrive")

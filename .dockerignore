@@ -1,0 +1,19 @@
+.git
+__pycache__
+*.pyc
+data
+uploads
+config
+.env
+dist
+build
+
+# Keep the runtime image context minimal
+website/
+app/
+scripts/
+installer/
+tests/
+examples/
+.github/
+*.md
