@@ -1,74 +1,59 @@
 # Security Policy
 
-GitHub recognizes this policy at `docs/SECURITY.md`; report vulnerabilities privately.
+> **Scope:** vulnerability reporting, trust boundaries, network exposure, secret handling, and security validation for the TeleDrive fork.
+> **Do not report vulnerabilities or post credentials in public issues.**
 
-## Reporting a vulnerability
+## 1. Report a vulnerability privately
 
-Please do not publish credentials, Telegram session files, or exploitable details in
-a public issue. Report security concerns privately through the repository's GitHub
-security contact/private vulnerability reporting when available.
+Use the repository's [GitHub Security tab](https://github.com/babico/TeleDrive/security) and private vulnerability reporting when available. Include the affected release or commit, operating system, minimal reproduction steps, expected/observed impact, and carefully redacted logs.
 
-When reporting an issue, include the affected version, operating system, steps to
-reproduce, and the potential impact. Remove personal data and secrets from logs.
+Do **not** submit active credentials, session files, database connection URLs, Telegram messages or exploitable details in a public issue. If private reporting is unavailable, contact the repository maintainer through an appropriately private channel rather than exposing an unpatched exploit.
 
-Never share your Telegram API hash, login code, two-step password, database
-credentials, Web UI password, or session file.
+## 2. Threat model and trusted components
 
-## Trust model
+TeleDrive is primarily a **single-administrator** application. The WebUI can manage Telegram accounts, target channels, local source paths, credential issuance and metadata state. Treat this authority as sensitive.
 
-TeleDrive is a single-administrator application. The Web UI provides administrative
-control over Telegram accounts, upload targets, source paths, and the state database.
+The host OS administrator, Docker daemon, host user managing mounted files, SQL server administrator, reviewed Python/database drivers and Telegram itself are **trusted boundaries**. TeleDrive does not sandbox a malicious host administrator who can modify mounts or binaries while the service runs.
 
-The Docker host/daemon, the host user controlling mounted TeleDrive data, the
-configured database server, installed Python/database-driver packages, and Telegram
-itself are trusted boundaries. TeleDrive does not try to sandbox a malicious host
-administrator who can rewrite mounted files while the application is running.
+Telegram Saved Messages and ordinary cloud channels are **not end-to-end encrypted**. Encrypt sensitive payloads separately if Telegram must not see their contents.
 
-Treat these as secrets:
+## 3. Secrets and credentials
 
-- Telethon `*.session` files;
-- `config.yaml`;
-- Web UI password/password file;
-- database connection URLs;
-- Telegram login codes and 2FA passwords.
+Treat all of the following as secrets:
 
-## Network exposure
+| Secret | Consequence if exposed |
+| --- | --- |
+| Telethon `*.session`, Telegram API hash, login codes and 2FA | User-account and channel access |
+| Bot token and private channel identifiers | Storage Bot access and remote-object exposure |
+| `config.yaml`, `.env`, Web password | Administrative control and deployment information |
+| SQL URL and SQL backups | Object manifests, references, jobs and potentially encrypted credential metadata |
+| `config/s3-master.key` and S3 access keys | S3 key decryption and object API access |
 
-Docker Compose binds the Web UI to `127.0.0.1` by default. For remote access, use
-an HTTPS reverse proxy or VPN, configure `TELEDRIVE_ALLOWED_HOSTS`, use a unique
-Web password of at least 16 characters, and restrict network access further where
-practical. HTTP Basic authentication must not be exposed over untrusted plaintext
-HTTP.
+Store secrets in protected volumes or a secrets manager with restrictive file permissions. Never commit them, print them to CI logs, or paste them into bug reports. When a secret is compromised, rotate/revoke it using the applicable Telegram, WebUI or S3 credential controls; review the dependent backups and sessions.
 
-## Telegram confidentiality
+## 4. Network exposure
 
-Normal Telegram cloud chats/channels and Saved Messages are not Secret Chats.
-TeleDrive is therefore not an end-to-end encrypted backup system. Encrypt sensitive
-files before upload if your threat model requires confidentiality independent of
-Telegram.
+The default Docker Compose deployment uses **one container with two loopback-bound listeners**:
 
-## Database and driver security
+| Interface | Default host binding | Authentication |
+| --- | --- | --- |
+| WebUI / REST | `127.0.0.1:8080` | Basic admin and scoped REST Bearer tokens |
+| S3 | `127.0.0.1:9000` | Scoped S3 SigV4 access/secret keys |
 
-`state.database_url` accepts synchronous SQLAlchemy dialects and intentionally has
-no vendor whitelist. Install only reviewed dialect/DBAPI packages, pin additional
-driver versions where practical, enable the database vendor's TLS options for remote
-connections, and scope the database identity to the TeleDrive schema/database.
+Do not expose either endpoint over untrusted plaintext HTTP. For remote access, use an HTTPS reverse proxy or VPN, set `TELEDRIVE_ALLOWED_HOSTS` appropriately, use a unique Web password of at least 16 characters, and restrict firewall access.
 
-Initial schema creation/migration requires DDL permissions. Those permissions may be
-reduced after migrations if your operating process supports that.
+The unified server dispatches by its actual socket-local listener port, **not** by client-supplied Host or forwarding headers. REST Bearer tokens are not interchangeable with S3 SigV4 keys. S3 master-key material must not be embedded in URLs or requests.
 
-## Runtime defenses
+## 5. Database, files and runtime defenses
 
-The Docker deployment defaults to non-root execution, dropped Linux capabilities,
-`no-new-privileges`, a read-only root filesystem, read-only `/uploads`, restrictive
-secret-file permissions, storage path allowlists, symlink/non-regular-file rejection,
-a distributed uploader lease, atomic per-file claims, Web authentication rate
-limiting, Host validation, CSRF protection, security headers, and credential
-redaction.
+`state.database_url` accepts synchronous SQLAlchemy dialects without a hardcoded vendor whitelist. Review and pin additional driver packages, use database TLS where available, and scope the SQL principal to the intended schema/database. Initial schema creation/migrations may need DDL privileges; reduce privileges after migrations when operationally feasible.
 
-## CI
+The Docker default includes non-root execution, dropped Linux capabilities, `no-new-privileges`, a read-only root filesystem, a read-only `/uploads` mount, protected secret files, source/session/log/SQL path allowlists, non-regular and symlink checks, upload leases and atomic claims, rate limiting, Host validation, CSRF protection, security headers and credential redaction.
 
-Security CI performs compilation, regression tests, `pip check`, Bandit,
-`pip-audit`, Docker build, and Trivy scanning for fixable HIGH/CRITICAL image
-vulnerabilities. GitHub Actions are pinned to immutable commit SHAs and Dependabot
-monitors Python, Docker, and Actions dependencies.
+A SQL snapshot alone cannot restore lost Telegram payloads or S3 master keys. Independent originals and rehearsed recovery are required. Physical Telegram garbage collection remains disabled pending the [production recovery and safety controls](IMPLEMENTATION_STATUS.md#41-physical-telegram-garbage-collection-disabled).
+
+## 6. Security testing and release evidence
+
+The [Security and Regression workflow](../.github/workflows/quality-security.yml) covers Python compilation/regression, `pip check`, Bandit, `pip-audit`, Docker image build, Trivy and application listener smoke tests. GitHub Actions are pinned to immutable revisions; Dependabot monitors Python, Docker and Actions dependencies.
+
+A successful scanner run is **not** permission to expose the administration UI publicly or a substitute for owner-approved production penetration testing. Consult the [CI and Test Guide](CI_WORKFLOWS.md) and distinguish test-channel E2E from actual production data.

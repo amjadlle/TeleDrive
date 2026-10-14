@@ -1,81 +1,97 @@
-# TeleDrive — CI ve geliştirme testleri
+# Continuous Integration and Test Guide
 
-Bu dosya **GitHub Actions iş akışlarının, Docker arıza testinin ve P1 geliştirme kabulünün tek kaynağıdır**. Projenin hangi aşamada olduğu, production onayları ve P2 backlog'u için [Proje durumu ve kabul rehberi](IMPLEMENTATION_STATUS.md) kullanılır.
+> **Audience:** contributors, maintainers, and CI operators.
+> **Scope:** automated workflows, local validation, fault-injection acceptance, and evidence interpretation.
+> **Not covered:** production approval, original-data disaster recovery, and physical Telegram deletion. See [Project Status](IMPLEMENTATION_STATUS.md).
 
-## GitHub Actions grupları
+## 1. Workflow matrix
 
-GitHub Actions kenar çubuğu gerçek klasör/grup desteklemediği için adların başındaki sayılar birer görsel gruptur. İş akışı dosya yolları, job ID'leri, secret gereksinimleri ve concurrency kuralları görünüm için değiştirilmez.
+GitHub Actions does not support workflow folders in its sidebar. The numeric prefixes in display names group related checks; workflow files live under [`.github/workflows/`](../.github/workflows/).
 
-| Grup | Workflow | Test kapsamı |
+| Group | Workflow | Validates |
 | --- | --- | --- |
-| 01 Quality | [Security & Regression](../.github/workflows/quality-security.yml) | Regresyon, güvenlik, bağımlılık ve container smoke testleri |
-| 02 Integration | [Databases](../.github/workflows/integration-databases.yml) | Gerçek PostgreSQL/MySQL, native yedek ve izole restore |
-| 02 Integration | [REST & S3](../.github/workflows/integration-storage.yml) | REST, SigV4/S3, boto3, AWS CLI ve rclone uyumluluk testleri |
-| 02 Integration | [Desktop](../.github/workflows/integration-desktop.yml) | Linux ve Windows desktop/CLI/paketleme kontrolleri |
-| 03 Resilience | [Docker Fault Injection](../.github/workflows/resilience-docker.yml) | Gerçek PostgreSQL, iki WebUI, arıza enjeksiyonu, geri yükleme, 13 DEV kapısı |
-| 04 Live Telegram | [Bot API E2E](../.github/workflows/live-telegram-bot.yml) | Özel Telegram test kanalında gerçek Bot aktarımı ve readback |
-| 04 Live Telegram | [User MTProto E2E](../.github/workflows/live-telegram-user.yml) | Gerçek Telethon oturumu, SHA ve Range |
-| 04 Live Telegram | [Multiworker PostgreSQL E2E](../.github/workflows/live-telegram-multiworker.yml) | Ortak PostgreSQL kullanan üç bağımsız worker ve gerçek Telegram |
-| 05 Delivery | [Release Gate & Packages](../.github/workflows/delivery-release.yml) | Release regresyonları, Linux/Windows paketleri, sürüm yayını |
-| 06 Endurance | [Offline 60m Capacity Soak](../.github/workflows/endurance-capacity.yml) | **Manuel** 60–110 dk: gerçek SQLite/engine, diskte sentetik Telegram, SQL restart ve p95 |
+| 01 · Quality | [Security & Regression](../.github/workflows/quality-security.yml) | Python regression, security checks, dependencies, Docker image and listener smoke tests |
+| 02 · Integration | [Databases](../.github/workflows/integration-databases.yml) | PostgreSQL/MySQL, native backups and isolated restores |
+| 02 · Integration | [REST & S3](../.github/workflows/integration-storage.yml) | API contracts, SigV4, boto3, AWS CLI, rclone and shared storage catalog |
+| 02 · Integration | [Desktop](../.github/workflows/integration-desktop.yml) | Windows/Linux desktop, CLI and packaging |
+| 03 · Resilience | [Docker Fault Injection](../.github/workflows/resilience-docker.yml) | Disposable PostgreSQL, two Web instances, crash/restart, corruption and recovery |
+| 04 · Live Telegram | [Bot API E2E](../.github/workflows/live-telegram-bot.yml) | Real test-channel Bot uploads, readback, hashes, ranges and cleanup |
+| 04 · Live Telegram | [User MTProto E2E](../.github/workflows/live-telegram-user.yml) | Real Telethon user session, checksum and range recovery |
+| 04 · Live Telegram | [Multiworker PostgreSQL E2E](../.github/workflows/live-telegram-multiworker.yml) | Three independent workers sharing PostgreSQL and a real Telegram test target |
+| 05 · Delivery | [Release Gate & Packages](../.github/workflows/delivery-release.yml) | Release regression, gated Linux/Windows packages and publishing |
+| 06 · Endurance | [Isolated Capacity Soak](../.github/workflows/endurance-capacity.yml) | Manually dispatched 60–110-minute synthetic-media SQLite durability test |
 
-**Dokuz ana workflow** her `main` push'unda çalışır. `06 Endurance` manuel `workflow_dispatch` testidir ve her push'ta bir saatlik iş başlatmaz. Her job, `GITHUB_STEP_SUMMARY` içine sonucunu yazar. Gerçek Telegram E2E'leri test kanalı secret'larına bağımlıdır; Docker DEV testinin secret ihtiyacı yoktur.
+The **first nine workflows** form the normal `main` validation matrix. The endurance workflow is deliberately manual (`workflow_dispatch`). The live Telegram workflows require dedicated **test** credentials; synthetic Docker validation does not.
 
-### CI sonucunun anlamı
+### Interpreting CI results
 
-- **PASS:** Belirtilen SHA üzerindeki ilgili testler geçti; başka bir SHA veya production kabulü için geçerli değildir.
-- **FAIL:** Log ve artifact incelenmeli, neden çözülüp **yeni SHA** üzerinde yeniden denenmelidir.
-- **CANCELLED / SKIPPED / QUEUED:** Zorunlu kabul testlerinde başarı kanıtı sayılamaz.
-- **Release:** `main` üzerinde doğrulama yapılır; paket yayınlama sürüm tag'i veya açık `[publish-release]` işaretiyle tetiklenir. Yayın yolu aynı SHA'nın bağımsız CI matrisini doğrular ve mevcut sürümü yanlışlıkla ezmez.
-- **06 Endurance:** Telegram kullanıcısı/production host testi değildir. Tek başına fiziksel multi-host veya doğal Telegram 429 kanıtı vermez.
+- **Success:** the specified checks passed at the workflow's exact commit SHA. It is not evidence for a later SHA or for production operation.
+- **Failure:** inspect the failing step and logs, fix the cause, and run checks on the updated SHA.
+- **Cancelled, queued, or skipped:** not a successful acceptance result. An optional test case skipped inside a successful workflow is also not evidence that the optional scenario ran.
+- **Release gate vs. published release:** the gate can succeed without publishing binaries. Packaging and GitHub Release creation follow their explicit tag/`[publish-release]` rules and release preconditions.
+- **Synthetic vs. real Telegram:** AWS CLI/rclone compatibility and Docker fault injection use fake remote Telegram I/O with real SQL. Separate live Telegram workflows verify actual remote bytes.
+- **Production sign-off:** requires a different, owner-authorized evidence process documented in [Project Status](IMPLEMENTATION_STATUS.md#3-production-acceptance-not-yet-signed-off).
 
-## P1 geliştirme kabulü — Docker fault injection
+## 2. Run checks locally
 
-**Geliştirme aşamasında gerekli kabul kapısı budur.** Önceden kurulmuş TeleDrive, gerçek legacy dosyaları, Telegram API kimliği, Bot token, production SQL veritabanı veya operatör imzası **gerekmez**.
+Python 3.11+, the appropriate dependencies, and optional Docker Engine/Compose v2 are required.
 
-### Tek komut
+~~~bash
+python -m pip install -r requirements/server.txt pytest
+python -m pytest -q
+python -m compileall -q teledrive web app tests
+docker compose config --quiet
+~~~
 
-Docker Engine + Docker Compose v2 gerekir. GitHub Actions bunu kendi izole runner'ında kurar; yerel makinede kurulum mümkün değilse [Docker P1 workflow'unun](../.github/workflows/resilience-docker.yml) `success` sonucu ve artifact'i kullanılır.
+For the desktop application, install `requirements/desktop.txt` separately. Docker integration jobs install the tools and database services they need inside disposable runners; they do not require a pre-existing TeleDrive deployment.
+
+### One-command Docker fault-injection acceptance
 
 ~~~bash
 bash scripts/run_docker_fault_injection.sh
-# Eşdeğer varsayılan geliştirme kabul sihirbazı:
+# Optional interactive operator wrapper:
 python scripts/acceptance.py
 ~~~
 
-Komut, rastgele isimli Compose projesi ve özel çalışma alanında şu servisleri oluşturur: **PostgreSQL 17**, ayrı iki gerçek TeleDrive WebUI/API container'ı ve gerçek SQLAlchemy/TelegramObjectStorage motorunu kullanan senaryo container'ı. Telegram'ın yerine **diske yazan sentetik taşıma** geçer; gerçek Telegram'a bağlanılmaz. Dış dünyaya servis portu açılmaz.
+**Purpose:** development acceptance, not a simulated production cutover. The runner creates a randomly named, isolated Compose project with **PostgreSQL 17, two TeleDrive Web containers, and a fault-scenario container** using actual SQLAlchemy and `TelegramObjectStorage`. The Telegram side is persistent, disk-backed synthetic media. Test credentials, a deployed production instance, an original Telegram account and a legacy folder are **not required**.
 
-### DEV-01–13 makine tarafından doğrulanan kriterler
+The **normal production Compose** has only **one** `teledrive` container. Its single Python process exposes WebUI/REST on port 8080 and S3 on port 9000. Two separate Web containers in **this fault test** deliberately exercise shared-state behavior and crashes; they are not the deployment layout.
 
-| Kapı | Sınanan arıza / davranış | Geçme şartı |
+## 3. Fault-injection acceptance gates
+
+All 13 gates and the teardown must pass. The identifiers are evidence labels, not development feature names.
+
+| Gate | Fault or operation | Acceptance requirement |
 | --- | --- | --- |
-| DEV-01 | Temiz PostgreSQL + iki gerçek WebUI süreci | Her iki Basic Auth health endpoint'i başarılı; anonim erişim reddedilir |
-| DEV-02 | 0B, 1B, 4097B, 65537B ve 5MiB+7B veri | Kalıcı SQL HEAD/manifest ve disk-backed chunk eşleşir |
-| DEV-03 | Yükleme sonrası yerel kaynak kaldırılır | Tam SHA-256 ve chunk sınırı aşan Range readback geçer |
-| DEV-04 | Telegram send sonrası belirsiz ACK / SQL crash | Önceden yazılmış send intent kalır; kör çift gönderim engellenir |
-| DEV-05 | Eski FAILED nesne ve GC koruması | Belirsiz ACK korunur; fiziksel silme etkinleştirilmez |
-| DEV-06 | Sentetik Telegram 429 | Önce SQL gönderim slotu ayrılır; ortak cooldown/ölçüm iki node'da görünür |
-| DEV-07 | Gerçek `pg_dump` + bağımsız `pg_restore` | Object ID, SHA-256, chunk offset ve Range korunur |
-| DEV-08 | Bozulmuş SQL arşivi | Native restore/`pg_restore --list` hasarlı kopyayı reddeder |
-| DEV-09 | Bozuk uzak medya | Checksum hatası kısmi çıktı yayınlamaz; onarım sonrası readback geçer |
-| DEV-10 | İzole yaşam döngüsü | Yalnızca rastgele Compose projesi ve volume'leri kaldırılır |
-| DEV-11 | Gerçek Web `SIGKILL` + PostgreSQL restart | HEAD, send fence, cooldown ve medya yeniden okunabilir |
-| DEV-12 | Eksik chunk ve ikinci chunk'ta timeout | Sağlam mevcut hedef değişmez; onarım sonrası SHA geçer |
-| DEV-13 | Birleşik kabul / teardown | Dört doğrulanmış stage, 13/13 kontrol ve başarılı scoped cleanup |
+| DEV-01 | Fresh PostgreSQL + two Web instances | Both authenticated health checks work; anonymous access fails |
+| DEV-02 | 0 B, 1 B, 4,097 B, 65,537 B, and 5 MiB + 7 B | Durable SQL heads/manifests match the disk-backed chunks |
+| DEV-03 | Remove local source after upload | Full SHA-256 and cross-chunk range readback match |
+| DEV-04 | Lost Telegram ACK / SQL crash | Persisted send intent prevents unsafe duplicate sends |
+| DEV-05 | Aged failed object / GC guard | Unknown ACK remains protected; physical deletion is not enabled |
+| DEV-06 | Synthetic Telegram HTTP 429 | SQL send slot reserved first; cooldown/metrics shared across nodes |
+| DEV-07 | Real `pg_dump` and isolated `pg_restore` | Object IDs, chunk offsets, SHA-256 and range reads survive |
+| DEV-08 | Corrupt SQL archive | Native restore validation rejects the damaged dump |
+| DEV-09 | Corrupt remote bytes | Hash mismatch never publishes partial output; repair permits readback |
+| DEV-10 | Isolated project teardown | Only the randomly named Compose project and its volumes are removed |
+| DEV-11 | Web `SIGKILL` and PostgreSQL restart | Head, send fence, cooldown and remote bytes remain recoverable |
+| DEV-12 | Missing chunk / second-chunk timeout | Existing destination remains intact; repair restores checksums |
+| DEV-13 | Overall acceptance and cleanup | Four verified stages, all 13 gates and successful scoped cleanup |
 
-### Test akışı ve kanıt
+### Execution flow
 
-1. Gerçek Web konfigürasyon yükleyicisiyle iki node doğrulanır; anonim erişim reddedilir.
-2. Sentetik boyutlarda kaynaklar yüklenir, SQL manifest/HEAD yazılır, kaynaklar silinir; byte ve Range doğrulaması yapılır.
-3. Lost ACK ve **önce slot ayrılmış** sentetik 429 enjekte edilir; send fence / cooldown ortak SQL'de yeniden okunur.
-4. `web-a` öldürülür, PostgreSQL yeniden başlatılır; yeniden bağlanan node'lar kalıcı kayıtları okur.
-5. Gerçek `pg_dump` alınır, bozuk kopya reddedilir, ayrı restore veritabanında readback tekrarlanır.
-6. Uzak chunk bozulması, eksik medya ve ikinci chunk timeout'u sırasında sağlam hedef korunur.
-7. `seed.json`, `restarted.json`, `restored.json` ve `acceptance.json` birleştirilir; **13 kapı ve cleanup** geçmeden PASS raporlanmaz.
+1. Start fresh database and Web instances; exercise real application configuration parsing and authenticated endpoints.
+2. Upload size-boundary fixtures, persist immutable manifests, remove sources, and verify checksums and byte ranges.
+3. Inject an uncertain upload acknowledgment and a rate limit after reserving a SQL send slot.
+4. Kill `web-a` and restart PostgreSQL; assert shared persistent state from reconnected workers.
+5. Dump and restore into an **independent** database; reject a deliberately corrupted dump.
+6. Inject remote-media corruption, a missing chunk and an interrupted second chunk; confirm fail-closed output behavior.
+7. Collect `seed.json`, `restarted.json`, `restored.json` and `acceptance.json` and complete narrowly scoped teardown.
 
-Çıktı: varsayılan `.docker-fault-evidence/docker-fault-<random>.json`; isteğe bağlı `TELEDRIVE_FAULT_REPORT_DIR`. Kanıt dosyaları mode `0600`; parola/token/session/private chat/DB URL rapora girmez. Temizlik sadece benzersiz Compose projesini `down -v` ile kapsar; **`docker system prune` veya global volume silme yoktur**.
+### Artifacts and evidence
 
-Örnek zorunlu sonuç alanları:
+Reports are written under `.docker-fault-evidence/docker-fault-<random>.json` by default; `TELEDRIVE_FAULT_REPORT_DIR` can override the directory. Evidence files use permission mode `0600` and must not contain passwords, Bot tokens, Telegram sessions or database credentials. The runner uses only its own project-scoped `docker compose down -v`—never `docker system prune` or global volume cleanup.
+
+The following is a **schema illustration, not an actual run result**:
 
 ~~~json
 {
@@ -89,23 +105,26 @@ Komut, rastgele isimli Compose projesi ve özel çalışma alanında şu servisl
 }
 ~~~
 
-Bu sadece **beklenen şema örneğidir**, gerçekleşmiş koşu çıktısı değildir. Gerçek raporda dört stage, `stages.acceptance.checks_count == 13` ve `all_checks_verified == true` bulunmalı; arıza/temizlik başarısızsa CI kırmızı olmalıdır.
+An actual PASS requires the complete four-stage evidence and `stages.acceptance.checks_count == 13` with `all_checks_verified == true`. Cleanup failure or a missing gate is a failure.
 
-### Korunması gereken regresyonlar
+## 4. Regression invariants
 
-- Ortak cooldown, SQL `reserve_send_slot` çağrısı **önce** yapılmadan dayatılamaz. Senaryolar güvenlik protokolünü gevşetmez.
-- Container'ın `/api/health` yanıtı tek başına Web yapılandırmasının geçerli olduğuna kanıt değildir. Fault harness'ı gerçek `load_config` ayrıştırıcısını iki node'da da kullanır; zorunlu `sleep_min_seconds` / `sleep_max_seconds` / `max_files_per_run` / `max_files_per_day` alanları atlanmamalıdır.
-- REST/S3/yerel-kuyruk ortak katalog testi `tests/test_unified_service.py` ve tek-container iki-port Docker smoke testinde doğrulanır. Gerçek Bot/User/üç-worker testleri **ayrı** workflow'lardır. Geliştirme Docker'daki sentetik 429 doğal production 429 kanıtı değildir.
+- The Bot API's shared cooldown must be preceded by `reserve_send_slot`; tests cannot bypass send fencing to manufacture a passing 429.
+- The Web `/api/health` endpoint alone does not validate full configuration; fault tests use the actual `load_config` parser, including `sleep_min_seconds`, `sleep_max_seconds`, `max_files_per_run` and `max_files_per_day`.
+- `tests/test_unified_service.py` verifies REST-to-S3, S3-to-REST, local-job-to-S3 data visibility and the shared generation/catalog. The Security workflow checks both listeners **inside one container**.
+- Live Bot, User and Multiworker E2E are distinct from synthetic fault tests. A generated 429 is not a measured production rate limit.
+- Offline capacity soak tests real SQLite operations, durable synthetic media, SQL restarts and historical readback. It does not exercise original Telegram media, independent physical hosts or real-world long-term Telegram behavior.
 
-## Kabul sınırı ve ilgili belgeler
+## 5. Source layout and related guides
 
-P0/P1 DEV geliştirme kapanışı ve bunun production'dan farkı, operatörün gerçek host/DR/cutover prosedürü, Telegram GC sınırı ve P2 backlog'u tek yerde: **[Proje durumu, kabul ve P2](IMPLEMENTATION_STATUS.md)**.
+| Path | Role |
+| --- | --- |
+| [`.github/workflows/`](../.github/workflows/) | GitHub Actions YAML definitions |
+| [`.github/ci/fault-injection/`](../.github/ci/fault-injection/) | Test-only Dockerfile, ignore rules and Compose project |
+| [`docker-compose.yml`](../docker-compose.yml) | **One-container** default WebUI/REST/S3 deployment |
+| [`scripts/run_docker_fault_injection.sh`](../scripts/run_docker_fault_injection.sh) | Fault test entrypoint |
+| [`scripts/docker_fault_scenarios.py`](../scripts/docker_fault_scenarios.py) | Synthetic fault scenarios and evidence |
+| [`requirements/server.txt`](../requirements/server.txt) | Headless API/runtime dependencies |
+| [`requirements/desktop.txt`](../requirements/desktop.txt) | Desktop GUI dependencies |
 
-SQL backup'ın genel uygulaması: [Backup & Restore](BACKUP_RESTORE.md). Test altyapısı: [Docker Compose tanımı](../.github/ci/fault-injection/compose.yml), [senaryolar](../scripts/docker_fault_scenarios.py) ve [çalıştırıcı](../scripts/run_docker_fault_injection.sh).
-
-## Dosya düzeni ve çalışma profilleri
-
-- GitHub Actions tanımları yalnızca [`.github/workflows/`](../.github/workflows/) içindedir. Resilience testinin Docker build bağlamı ve yardımcı Dockerfile'ı [`.github/ci/fault-injection/`](../.github/ci/fault-injection/) altında tutulur; GitHub Actions bu dosyaları ayrıca workflow olarak çalıştırmaz.
-- Bağımlılıklar [`requirements/server.txt`](../requirements/server.txt) (başsız Web/S3) ve [`requirements/desktop.txt`](../requirements/desktop.txt) (PySide6 masaüstü) olarak ayrılmıştır. GUI paketlerini server image'ına yüklemeyiz. Ortak Python çekirdeğinin metadata'sı `pyproject.toml` içindedir.
-- [`docker-compose.yml`](../docker-compose.yml) **tek** `teledrive` container'ı çalıştırır. Tek Python/ASGI sunucu süreci, socket'in gerçek yerel portuna göre WebUI/REST (`8080`) veya S3 (`9000`) uygulamasına yönlendirir; S3 imzalanmış URL path/Host bilgisini değiştirmez. İki arayüz aynı SQL HEAD/manifest, Telegram taşıması ve kalıcı upload-job kuyruğunu kullanır. `--profile s3` ve ikinci container yoktur. `/uploads` içindeki dosyalar açık admin job isteği ile kuyruğa alınır; otomatik dosya taraması yapılmaz.
-- Docker arıza senaryosunda **gerçek** PostgreSQL ve iki ayrı Web container'ı kasıtlıdır: çoklu servis crash/restart testi bunu gerektirir. Bunlar production container'ları değildir.
+For feature status and production release boundaries, see [Project Status](IMPLEMENTATION_STATUS.md). For actual database backups and restore procedures, see [Backup and Restore](BACKUP_RESTORE.md). For security reporting, see [Security Policy](SECURITY.md).

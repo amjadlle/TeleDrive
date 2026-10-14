@@ -1,44 +1,69 @@
-# TeleDrive — proje durumu, P0/P1 kabulü ve P2 planı
+# Project Status, Acceptance, and Recovery Roadmap
 
-**Tek güncel proje/acceptance kaynağı.** Sürüm kanıtı, P0, P1 geliştirme, production operator adımları ve P2 kalanları burada toplanır. CI workflow'ları, Docker kurulumu ve 13 DEV testinin **teknik ayrıntısı** [CI ve test rehberinde](CI_WORKFLOWS.md). Güncel TODO: [TODO.md](../TODO.md). Geçmiş çalışma notları Git tarihinde kalır.
+> **Audience:** contributors, release maintainers, and deployment owners.
+> **Scope:** supported features, development evidence, production sign-off, recovery limits, and remaining engineering work.
+> **Source of test details:** [CI and Test Guide](CI_WORKFLOWS.md). **Source of executable backup procedures:** [Backup and Restore](BACKUP_RESTORE.md).
+>
+> **Do not treat a successful CI run as approval to operate on production data or physically delete Telegram messages.**
 
-## 1. Sürüm ve kabul sınırı
+## 1. Current release and supported scope
 
-| Aşama | Durum | Ne kanıtlandı? |
+| Area | State | Evidence and limitations |
 | --- | --- | --- |
-| **P0 — desteklenen uploader/REST/S3 alt kümesi** | **DEV kabul edildi** | Temel transfer, doğrulama, kimlik/izin testleri; tam AWS S3 paritesi **değil** |
-| **P1 — Docker geliştirme kabulü** | **DEV kabul edildi** | İki WebUI + gerçek PostgreSQL, 13 arıza/restore/temizlik kapısı; Telegram **sentetik** |
-| **P1 — gerçek test kanalı** | **DEV kabul edildi** | Bot, User MTProto, üç bağımsız worker + PostgreSQL E2E |
-| **P1 — gerçek production/operator** | **ONAYLANMADI** | Fiziksel bağımsız sunucu, orijinal kanal DR ve sahip onayı olmadan verilemez |
-| **P2 — gelişmiş kurtarma/GC/S3** | **DEV sürüyor** | Aşağıda yapılanlar ve kalan güvenlik kapıları ayrılmıştır |
+| P0 — basic upload and supported REST/S3 subset | **Development-validated** | Transfer, authentication, integrity and tested client subset; not complete AWS S3 parity |
+| P1 — disposable Docker acceptance | **Development-validated** | Two Web processes, real PostgreSQL, 13 resilience and cleanup gates; Telegram I/O is synthetic |
+| P1 — real test-channel transfers | **Development-validated** | Bot API, Telethon user, three-worker PostgreSQL integration; not the owner's original production media |
+| P1 — physical production operation | **Not signed off** | Independent host identity, owner data recovery and authorized change control not established |
+| P2 — advanced recovery, GC and compatibility | **In development** | Rebuild and offline verification components exist; production safeguards and further protocol work remain |
 
-**Yayınlanmış kilometre taşı:** [TeleDrive v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7), kaynak SHA `747747652cd1ca36878453d49daf627d8c0a60ad`. Linux ve Windows paketleri mevcut. Release kaynak SHA'sı ile daha yeni `main` üzerindeki P2 geliştirme kodu **aynı sürüm değildir**. Yeni release kabulü için tüm zorunlu CI testleri **aynı yeni SHA** üzerinde başarıyla bitmelidir; iptal/atlanan test sayılmaz.
+**Published release:** [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7), source SHA `747747652cd1ca36878453d49daf627d8c0a60ad`. Published release contents are not automatically updated when new development commits reach `main`. Release notes and binaries belong on [GitHub Releases](https://github.com/babico/TeleDrive/releases), not in a separate per-version Markdown file.
 
-### P0 geliştirme kabul kriterleri ve kanıtlar
+**Verified newer development baseline:** `aa44bd67e01495ad590af4460350cab1da8c28ac`; all nine normal CI workflows completed successfully on that SHA. For any *later* source SHA, read its own [Actions runs](https://github.com/babico/TeleDrive/actions) before making a CI claim. A cancelled, pending or fully skipped required workflow is not evidence of successful live acceptance.
 
-- **Kalıcı transfer:** SQLAlchemy (SQLite/PostgreSQL/MySQL), immutable manifest/chunk, SHA-256 tam/Ranges, dayanıklı job journal, fencing, kaynak değişimi ve belirsiz Bot ACK'de fail-closed tutum.
-- **HTTP/API güvenliği:** Ayrı REST ve S3 yetkileri, süre/iptal koşulları, erişim kontrolleri, SigV4 doğrulaması, idempotent/koşullu işlemler; desteklenmeyen davranışların sessiz başarı sayılmaması.
-- **Uyumlu alt küme:** REST ve S3 gateway; CRUD, multipart, conditional, copy, sürüm/etiket/CORS ve sınırlı presigned işlemler; boto3, AWS CLI, rclone için gerçek süreç testleri. Cyberduck ve AWS'nin bütün lifecycle/policy/SSE davranışları onaylı değildir.
-- **Orijinal test-kanalı Telegram:** Gerçek Bot ve User E2E ile PostgreSQL'e bağlı üç bağımsız worker; bunlar **production kaynak medyası** değildir.
-- **Arıza/restore:** PostgreSQL/MySQL native yedek/geri yükleme, Docker fault injection ve Linux/Windows masaüstü testleri.
+### P0: implementation boundaries
 
-Tek-SHA başarılı DEV taban çizgisi: `a7e3adf`. Kanıt koşuları: [Security](https://github.com/babico/TeleDrive/actions/runs/38565237975), [REST/S3](https://github.com/babico/TeleDrive/actions/runs/38565238070), [Database](https://github.com/babico/TeleDrive/actions/runs/38565238030), [Desktop](https://github.com/babico/TeleDrive/actions/runs/38565237852), [Bot](https://github.com/babico/TeleDrive/actions/runs/38565237802), [User](https://github.com/babico/TeleDrive/actions/runs/38565237851), [Multiworker](https://github.com/babico/TeleDrive/actions/runs/38565237918), [Docker P1](https://github.com/babico/TeleDrive/actions/runs/38565237956) ve [Release gate](https://github.com/babico/TeleDrive/actions/runs/38565237938). [Tüm güncel Actions](https://github.com/babico/TeleDrive/actions).
+- **State and durability:** SQLAlchemy with SQLite/PostgreSQL/MySQL integration testing, immutable object/chunk manifests, SHA-256 verification, ranged reads, fencing and persistent job history.
+- **API and credentials:** separately scoped REST Bearer credentials and S3 SigV4 credentials, signed request checks, conditional writes, restricted administrative operations and fail-closed unsupported inputs.
+- **Supported S3 subset:** object/bucket operations, a bounded multipart implementation, conditional operations, selected versioning, tags, copies, CORS and presigned requests. Tested clients include boto3, AWS CLI and rclone.
+- **Not complete S3:** arbitrary AWS lifecycle and bucket policy behavior, SSE, every checksum mode, full delete-marker semantics and untested client combinations are not warranted.
+- **Telegram transports:** dedicated test-channel Bot API and user MTProto scenarios plus a shared PostgreSQL multiworker scenario. Credentials and private test channel are isolated from production.
+- **Backups:** native PostgreSQL/MySQL backups and separate SQL restore rehearsals, plus disposable Docker fault injection. These exercises do not certify recovery of the owner's original Telegram account or channel.
 
-### P1 geliştirme kabulü
+### P1: development acceptance
 
-P1 DEV için Docker senaryosunda **DEV-01–DEV-13'ün tamamı**, dört stage kanıtı ve cleanup zorunludur. **Gerçek Bot/User/Multiworker workflow'ları** da kendi test kanalında çalışmalıdır. Bunun tek komutu ve kontrol matrisi [CI rehberinde](CI_WORKFLOWS.md#p1-geliştirme-kabulü--docker-fault-injection) tutulur; burada ikinci, zamanla farklılaşacak 13 maddelik kopya yoktur.
+The development acceptance criteria consist of the 13 Docker fault-injection gates, four evidence stages and scoped cleanup, plus the distinct real test-channel Bot/User/Multiworker workflows. Run the documented [fault-injection command and checklist](CI_WORKFLOWS.md#3-fault-injection-acceptance-gates); do not maintain a second copy of the 13 gates here.
 
-Production ortamı henüz kurulmadıysa orijinal legacy folder, bir saatlik **production** Telegram 429, production kanal medya geri yüklemesi veya operatör imzası **DEV kriteri değildir**.
+A production installation, original legacy files, signed operator approval, an hour of real production rate limits, and restoration of original production media are **not** prerequisites for declaring disposable *development* acceptance. They are separate owner/operator responsibilities.
 
-## 2. Production/operator kabulü — henüz yapılmadı
+## 2. Architecture and unified storage contract
 
-Bu bölüm ancak gerçek host'lar, sahibine ait Telegram hesabı ve saklanan orijinal SQL/medya var olduğunda uygulanır. **CI PASS production imzası değildir.** Token, session, DB URL veya gerçek orijinal kanal verilerini GitHub'a yüklemeyin.
+### A single service deployment
 
-### A. Fiziksel bağımsız host ve doğal 429 soak
+The default [`docker-compose.yml`](../docker-compose.yml) creates **one `teledrive` container** and one Python process with two local listeners:
 
-En az iki **fiziksel olarak ayrı** uygulama host'u ve ortak PostgreSQL/MySQL kurulur. Her host'un bağımsız gözlemle elde edilmiş, SHA-256 ile saklanan makine kimliği ile ortak SQL kimliği kayıt altına alınır. İki farklı URL'nin aynı makineye çıkması kabul edilmez. Doğal Telegram 429 trafik altında görülür; Telegram limitlerini zorlamak için flood yapılmaz.
+| Interface | Local endpoint | Auth model | Storage |
+| --- | --- | --- | --- |
+| WebUI and REST v1 | `http://127.0.0.1:8080` | Basic admin + scoped REST Bearer tokens | Shared SQL catalog and Telegram object engine |
+| S3-compatible API | `http://127.0.0.1:9000` | Scoped S3 credentials with SigV4 | **Same** SQL catalog and Telegram object engine |
+| Local-folder durable jobs | Admin job API on 8080 | Basic admin + CSRF | **Same** catalog; files under allowed read-only mount are explicitly queued |
 
-Korunan ortamda `TELEDRIVE_P1_HEALTH_HOSTS` (iki–sekiz farklı HTTPS endpoint'i içeren `label`/`url` JSON), `TELEDRIVE_P1_BASIC_USERNAME` ve `TELEDRIVE_P1_BASIC_PASSWORD` sağlandıktan sonra:
+An S3 request and a REST request can address the same bucket/key and observe the same published object and generation. A local file is **not** automatically imported merely by copying it into `/uploads`. Create an authenticated job for that path; Compose enables `TELEDRIVE_JOB_AUTO_RUN=1` to process explicitly queued jobs. This is distinct from the original user-account Telethon folder scanner/batch uploader, which remains a compatibility workflow rather than an automatically cross-indexed REST/S3 writer.
+
+For REST/S3 payload I/O, configure a private test/production **Bot API** storage channel, the necessary Bot permissions and the S3 master key/credentials as appropriate. Launching the listeners alone does not provision those secrets. See the [README](../README.md) for installation and examples and [Security Policy](SECURITY.md) for network exposure rules.
+
+### Metadata and physical payloads
+
+SQL stores heads, version records, chunk identities/hashes, copy aliases, jobs and encrypted S3 key metadata. Actual object payload chunks reside in Telegram. SQL backups alone do **not** restore missing Telegram media. Both endpoints must enforce checksum verification and fail closed when an immutable chunk cannot be trusted.
+
+## 3. Production acceptance (not yet signed off)
+
+The following gates apply **only after** an owner has provided actual hosts, a suitable private Telegram target, sealed independent backups, and permission to conduct production-equivalent drills. Never upload sessions, tokens, connection URLs or original media identifiers to this public repository.
+
+### 3.1 Independent physical hosts and rate-limit soak
+
+Provide at least two **physically independent** application hosts sharing an explicitly identified SQL database. Record independently observed SHA-256 machine identities and a common DB identity. Two URLs terminating on the same host do not satisfy the requirement.
+
+Configure `TELEDRIVE_P1_HEALTH_HOSTS` with two to eight unique `label`/`url` HTTPS entries, alongside `TELEDRIVE_P1_BASIC_USERNAME` and `TELEDRIVE_P1_BASIC_PASSWORD` in a protected environment. Then:
 
 ~~~bash
 python scripts/monitor_host_soak.py \
@@ -47,41 +72,48 @@ python scripts/monitor_host_soak.py \
   --interval-seconds 60
 ~~~
 
-Rapor `telemetry_gate_passed=true`, en az bir saat, her host için gerçek pozitif 429 gözlemi, ortak counter uyumu, unresolved ACK olmaması ve boşalan kuyruk göstermelidir. Bu **yalnızca telemetri** kanıtıdır; fiziksel bağımsızlık ayrı doğrulanır.
+The evidence must demonstrate a run of at least one hour, `telemetry_gate_passed=true`, real observed Telegram 429s as required by the gate, shared counter coherence, no unresolved send acknowledgment and drained queues. It is still **telemetry evidence**, not independent proof of physical host separation. Do not intentionally flood Telegram to force 429s.
 
-### B. Orijinal Telegram medyası ile DR
+### 3.2 Recovery of original Telegram media
 
-Kaynak SQL snapshot ve Telegram credential ayrı korunan alanlarda saklanır. Geri yükleme **ayrı staging veritabanında** yapılır. SQLite için [Backup & Restore](BACKUP_RESTORE.md) rehberindeki `scripts/backup_metadata.py` ve `scripts/verify_metadata_backup.py` araçları kullanılır. Kaynağın **orijinal Bot hesabı ve kanalıyla**:
+Keep the original SQL snapshot, expected archive SHA-256, Telegram account credentials and destination/channel identifiers in separate protected storage. Restore into an **isolated staging database**, never over the live production DB.
+
+SQLite backup validation is described in [Backup and Restore](BACKUP_RESTORE.md). With an original, owner-authorized Bot account and channel:
 
 ~~~bash
 python scripts/rehearse_telegram_dr.py \
   --snapshot /secure/backups/sealed.db \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
-  --bucket ORIGINAL_BUCKET --key ORIGINAL_KEY \
-  --account ORIGINAL_ACCOUNT --chat-id ORIGINAL_CHAT_ID
+  --bucket ORIGINAL_BUCKET \
+  --key ORIGINAL_KEY \
+  --account ORIGINAL_ACCOUNT \
+  --chat-id ORIGINAL_CHAT_ID
 ~~~
 
-Araç mühürlü arşiv SHA'sını, izole SQL verisini, gerçek Telegram'dan tam SHA/size ve cross-chunk Range'i doğrular; upload/delete yapmaz. PostgreSQL/MySQL için native dump ve ayrı restore yapılır; yalnızca SQL'in açılması **orijinal Telegram verisinin kurtarıldığını kanıtlamaz**.
+The drill checks archive identity, published SQL metadata, original Telegram bytes, object SHA/length and cross-chunk ranges without reuploading or deleting media. PostgreSQL/MySQL installations must use their appropriate native backups and independent restore databases. A consistent SQL dump **alone** is insufficient original-data disaster-recovery proof.
 
-### C. Gerçek legacy varsa cutover (yoksa atlanır)
+### 3.3 Legacy cutover only if original legacy sources exist
 
-Legacy uploader durdurulur, kaynak dizin yazmaya kapatılır, lease güvenceye alınır, onaylı kaynak köküne sınırlandırılır. Gerçek legacy kaynak **yoksa** sahte test veya cutover üretmeyin: bağımsız owner kanıtıyla `no_legacy_source_attested=true`, cutover `{"not_applicable":true}` kaydedilebilir.
+If real legacy files exist, stop the legacy uploader, make its source directory read-only, fence concurrent writes, constrain paths to approved roots and verify original Telegram bytes and the current SQL heads. This is a **controlled operator action**, not an automated development acceptance step.
 
 ~~~bash
 python scripts/verify_legacy_cutover.py \
   --database /secure/isolated.db \
-  --source-root /approved/legacy --allowed-root /approved \
-  --scratch-dir /secure/scratch --bucket ORIGINAL_BUCKET \
-  --account ORIGINAL_ACCOUNT --chat-id ORIGINAL_CHAT_ID
+  --source-root /approved/legacy \
+  --allowed-root /approved \
+  --scratch-dir /secure/scratch \
+  --bucket ORIGINAL_BUCKET \
+  --account ORIGINAL_ACCOUNT \
+  --chat-id ORIGINAL_CHAT_ID
 ~~~
 
-`verified=true`, eksiksiz tarama, sıfır queued/inconsistent, bütün kaynak inode/revizyon/SHA değerlerinin güncel HEAD ve orijinal Telegram bytes ile eşleşmesi gereklidir. Operatör onayı olmadan canlı yönlendirme değiştirilmez.
+Require `verified=true`, a complete scan, zero inconsistent/queued items, and exact source inode/revision/hash correspondence with the published head and original media. If **no legacy installation exists**, obtain an independent owner attestation (`no_legacy_source_attested=true`) and record `{"not_applicable":true}` rather than inventing a test. No live traffic cutover occurs without change approval.
 
-### D. İki imzalı production kanıtı
+### 3.4 Two-person evidence review
 
-`scripts/verify_production_bundle.py`; `release_sha`, `topology`, `soak`, `dr`, `cutover`, `original_telegram_data_attested` ve iki bağımsız imzayı kabul eder. `topology.hosts` her host için `label`, `machine_id_sha256` ve ortak `shared_database_sha256` taşır; `independent_hosts_owner_attested=true` gerekir. `soak` / `dr` / `cutover` alanları **gerçek araçların çıktısı** olmalıdır.
+The offline verifier `scripts/verify_production_bundle.py` consumes `release_sha`, `topology`, `soak`, `dr`, `cutover`, `original_telegram_data_attested` and two independent approvals. Each host's topology entry includes `label`, `machine_id_sha256` and `shared_database_sha256`, with `independent_hosts_owner_attested=true`.
 
-Aynı kanonik JSON (imza `approvals` alanı hariç) iki farklı kişi tarafından ayrı Ed25519 private key ile imzalanır; `approvals.owner` ve `approvals.operator` base64 imzadır. 32 baytlık public key dosyaları bağımsız elde edilir:
+The same canonical JSON (excluding `approvals`) must be signed by **two different people** using separate Ed25519 private keys. Provide independently obtained 32-byte public keys:
 
 ~~~bash
 python scripts/verify_production_bundle.py \
@@ -91,27 +123,27 @@ python scripts/verify_production_bundle.py \
   --operator-public-key /secure/keys/operator.pub
 ~~~
 
-Yanlış SHA, eksik koşu, aynı fiziksel host, hatalı mesaj/medya ve eksik imza **fail-closed** reddedilir. Bu denetimin başarılı olması **otomatik deployment onayı değildir**: `production_acceptance_signed_off=false` ve `physical_telegram_deletion_enabled=false` kalır. Son karar orijinal sistem sahibine ve ayrı change-control'a aittir.
+An incorrect SHA, incomplete drill, duplicate host identity, invalid media proof or missing approval fails closed. Even a verified bundle is **not** an automatic deployment action or authorization to delete Telegram messages. Explicit owner change control remains necessary.
 
-## 3. P2 — güvenli GC, kurtarma, kapasite ve S3
+## 4. P2 recovery and safety roadmap
 
-### Fiziksel Telegram GC: DEV güvenlik koruması var, silme izni **yok**
+### 4.1 Physical Telegram garbage collection: disabled
 
-**Var:** `StorageGCInventory` retention/FAILED ve HEAD/alias/published-version/multipart/Bot ACK referanslarını tarar. `RecoveryManager.cleanup` silme yolunda SQL HEAD, yayınlanmış/removed sürümler, copy alias, multipart part, pre-send intent ve Bot receipt gibi referansları tekrar kontrol eder. Telethon probe hesap/kanal/marker eşleşmesi arar.
+**Implemented safeguards:** `StorageGCInventory` performs retention/reference previews; `RecoveryManager.cleanup` checks SQL heads, published and removed history, copy aliases, multipart references, send intents and Bot receipts. The Telethon ownership probe also checks account/channel/marker identity.
 
-**Henüz yok:** Bütün sürümleri kapsayan transactional mark/sweep; eşzamanlı writer bariyeri; uzaktan silme öncesi bağımsız tam sahiplik taraması ve **kurtarılabilir orijinal medya yedeği**; eksiksiz audit/iki-personel izni. Telegram'dan silinen **orijinal message ID geri alınamaz**; sıradan SQL backup geri yüklemesi rollback sayılmaz. Bu nedenle WebUI/API üzerinde otomatik fiziksel GC **kapalıdır**. Riskli durumları “test geçsin” diye açmayın.
+**Not yet authorized/complete:** transactional version-aware mark/sweep across concurrent writers, a complete writer barrier, independently verified media backups, complete ownership audit, explicit two-person deletion approval and a tested disaster-recovery alternative. Deleted Telegram **message IDs cannot simply be restored from SQL**. Automatic physical GC in WebUI/API remains disabled. Unknown Bot ACKs and ambiguous ownership must stay protected.
 
-Güvenli yayın şartı: imzalı dry-run planı, complete scan, HEAD/sürüm/alias/retention doğrulaması, bağımsız payload snapshot + kurtarma provası, writer fencing ve iki kişinin açık yetkilendirmesi. Belirsiz Bot ACK nesneleri korunur.
+Do not enable physical deletion merely because offline integrity tests pass. Require a signed dry-run plan, complete remote inventory, retention/reference validation, independent payload snapshot plus successful restore drill, writer fencing and recorded approval.
 
-### Telegram'dan metadata rebuild: kanıtlanmış nesnelerde destekleniyor
+### 4.2 Rebuild metadata from verified original Telegram messages
 
-`teledrive.storage.rebuild.restore_isolated_catalog_batch` ve `scripts/rebuild_from_telegram.py`; orijinal Telethon oturumuyla Telegram mesajını, tam UUID/ordinal/SHA-prefix marker'ını, account/chat/message kimliğini ve **bağımsız verilen** tam chunk ve nesne SHA-256 değerlerini kontrol eder. Çıktı **mevcut production SQL'in üzerine değil, yepyeni izole SQLite veritabanına** alınır.
+`teledrive.storage.rebuild.restore_isolated_catalog_batch` and `scripts/rebuild_from_telegram.py` verify original Telethon message identifiers, stable UUID/ordinal/SHA-prefix markers, account/channel/message identity, full per-chunk checksums and an **independently supplied** whole-object SHA-256. They create a **new isolated SQLite database**, not a replacement for the live database.
 
-Tek nesnelik plan alanları: `object_id`, `bucket`, `key`, `sha256`, `size` ve `chunks` dizisi; her chunk'ta `ordinal`, `account`, `chat_id`, `message_id`, `size`, `sha256` zorunludur. Çoklu plan biçimi `{"objects":[ ...tam nesne planları... ]}`. 1–128 nesne, en fazla 4.096 chunk ve toplam 1 GiB sınırı vardır. Tüm uzaktan medya doğrulanmadan SQL yayınlanmaz; geçici DB `PRAGMA integrity_check` ile kontrol edilir, `0600` izniyle mevcut hedef ezilmeden atomik yayınlanır. Bir nesnenin bozulması **kısmi katalog bırakmaz**.
+Each plan requires `object_id`, `bucket`, `key`, `sha256`, `size` and `chunks`. Each chunk requires `ordinal`, `account`, `chat_id`, `message_id`, `size` and `sha256`. Multiple plans use `{"objects":[...]}`. The bounded batch accepts 1–128 objects, up to 4,096 chunks and 1 GiB total; the staging database is privately validated (`PRAGMA integrity_check`) and atomically published with mode `0600` only after **all** source bytes verify. A failed object never exposes a partial destination catalog.
 
 ~~~bash
-# TELEDRIVE_REBUILD_API_ID / TELEDRIVE_REBUILD_API_HASH /
-# TELEDRIVE_REBUILD_SESSION korunan ortamdan sağlanır.
+# Supply TELEDRIVE_REBUILD_API_ID, TELEDRIVE_REBUILD_API_HASH,
+# and TELEDRIVE_REBUILD_SESSION through a secure environment.
 python scripts/rebuild_from_telegram.py \
   --plan /secure/verified-plan.json \
   --new-database /secure/isolated-rebuilt.db \
@@ -119,34 +151,25 @@ python scripts/rebuild_from_telegram.py \
   --target ORIGINAL_TELEGRAM_CHANNEL
 ~~~
 
-**Sınır:** Telegram mesaj caption'ı tek başına bucket/key, kayıp sürüm geçmişi veya bilinmeyen bütün mesajların güvenilir eşlemesini kanıtlamaz. Orijinal metadata yoksa otomatik tam keşif **açık P2 işidir**. Bot unknown-ACK için bağımsız güvenilir `file_id` gerekir. Geri kurma komutu remote upload/delete yapmaz.
+**Limits:** captions alone do not establish the original bucket/key mapping, all historical versions or a complete unknown-message inventory. Automated discovery without trustworthy independent metadata is still open work. Bot unknown-ACK recovery needs an independently reliable `file_id`. This reconstruction does **not** upload or delete Telegram media.
 
-### P2 kapasite: sentetik ve gerçek host testleri ayrıdır
+### 4.3 Capacity and recovery endurance
 
-[Manuel 60–110 dk dayanıklılık workflow'u](../.github/workflows/endurance-capacity.yml) gerçek SQLite/engine, diskte kalıcı sentetik Telegram, periyodik SQL restart, geçmiş nesne readback, SHA ve p50/p95 ölçer. Normal `main` push'unda bir saatlik iş tüketmez. **Gerçek Telegram, doğal 429, fiziksel host, production soak değil.**
+The manually triggered [Capacity Soak workflow](../.github/workflows/endurance-capacity.yml) runs the real SQLite/object engine with persistent **synthetic** Telegram files, periodic SQL restarts, historical SHA readback and p50/p95 timings. It does not prove actual Telegram bandwidth, natural 429 behavior, physically separate hosts or an hour of production operation. Those require a separate owner-authorized environment and measured evidence.
 
-Gerçek production sunucusu olduğunda en az 1 saatlik host telemetrisi ve uzun-dönem kapasite/latency profili ayrıca toplanacaktır.
+### 4.4 Advanced S3 protocol parity
 
-### P2 S3 ve istemci kapsamı
+Full AWS lifecycle policies, SSE, advanced checksum/SDK modes, bucket policies, comprehensive delete-marker semantics and unverified third-party clients (including Cyberduck) remain unsupported or unverified until independently tested. Do not substitute an expected AWS behavior for TeleDrive's documented supported subset.
 
-AWS lifecycle, bucket policies, SSE, ileri checksum/SDK davranışları, eksik S3 varyantları ve kanıtlanmamış üçüncü taraf istemciler (örn. Cyberduck) halen açığa alınmamış özelliklerdir. Desteklenen P0/P1 alt kümesiyle karıştırmayın.
+## 5. Outstanding work and release decision rules
 
-## 4. Açık işler ve kapanış politikası
+- [x] Publish bounded v1.0.7 development milestone with separate release artifacts and evidence.
+- [x] Implement disposable 13-gate Docker validation and distinct live test-channel Bot/User/Multiworker workflows.
+- [x] Implement fail-closed recovery guards, owner-proofed isolated one/multi-object rebuild and an offline dual-approval evidence verifier.
+- [x] Verify nine normal workflows on the newer `aa44bd6` development baseline (not the published v1.0.7 SHA).
+- [ ] Verify **every required workflow on the exact SHA** of any subsequent release candidate.
+- [ ] Obtain owner-supplied physical-host identities, original-media disaster-recovery evidence and legacy cutover/no-legacy attestation.
+- [ ] Implement and independently rehearse the complete physical GC safety/rollback alternative before authorizing deletion.
+- [ ] Complete unknown-history discovery, additional S3 parity tests and long-duration real-environment capacity profiling.
 
-- [x] P0/P1 **geliştirme** kanıtlarının bağlı olduğu v1.0.7 milestone yayımlandı.
-- [x] Docker 13 kapılı DEV, ayrı gerçek test-kanalı E2E ve release matrix kontrolü eklendi.
-- [x] Korumalı kurtarma, tek/çok nesneli izole Telegram rebuild ve iki imzalı offline production rapor denetimi geliştirildi.
-- [ ] Sonraki release SHA'sının bütün zorunlu workflow'ları tek SHA'da başarılı olmalı (başka SHA'nın yeşili geçmez).
-- [ ] Production owner fiziksel host, orijinal medya DR ve varsa legacy cutover kanıtını sağlamalı.
-- [ ] Fiziksel GC için bağımsız restore kanıtı + writer bariyeri + onay tamamlanmadan deletion açılamaz.
-- [ ] Otomatik bilinmeyen Telegram geçmişi keşfi, P2 advanced S3 ve production ölçek testleri geliştirilmeli.
-
-Operatörlerin toplu iş listesi: [TODO.md](../TODO.md). Sürüm günlüğü için ayrı `docs/RELEASE_NOTES_*` dosyaları tutulmaz; [GitHub Releases](https://github.com/babico/TeleDrive/releases) sayfası notları üretir.
-
-## Kaynak ağacının bakımı
-
-GitHub Actions YAML'ları [`.github/workflows/`](../.github/workflows/), bunların özel Docker yardımcıları [`.github/ci/fault-injection/`](../.github/ci/fault-injection/) altında yer alır. Script ve test dosyaları P0/P1/P2 faz adını değil davranışı adlandırır: `acceptance.py`, `monitor_host_soak.py`, `capacity_probe.py`; `test_acceptance_cli.py`, `test_host_soak.py`, `test_capacity_probe.py` vb. Güvenlik politikası GitHub'ın desteklediği [`docs/SECURITY.md`](SECURITY.md) yolundadır. Desktop ve sunucu bağımlılıkları [`requirements/`](../requirements/) klasöründe ayrıdır.
-
-## Tek container ile ortak veri sözleşmesi
-
-Varsayılan Compose servisi yalnızca `teledrive` container'ıdır; aynı proses `8080` (WebUI/REST) ve `9000` (SigV4 S3) dinler. REST ve S3 `BucketCatalog` ile `TelegramObjectStorage` üzerinden aynı SQL ve Telegram verisine yazıp okur. `/uploads` yolu, admin durable-job API'si ve otomatik işleyici üzerinden aynı kataloğa bağlanır; eski Telethon batch uploader bağımsız legacy moddur, REST/S3 nesnesiymiş gibi yanlış sunulmaz. S3 için master key, scope'lu erişim anahtarı ve Telegram Bot kimlik bilgileri ayrıca yapılandırılır. Gerçek storage taşımaları otomatik olarak farklı bir servise kopyalanmaz.
+Use [TODO.md](../TODO.md) for the short working checklist. Update this file when the verified *behavior or acceptance boundary* changes; do not paste every transient CI run log here. Separate per-version Markdown release notes are intentionally not maintained; use [GitHub Releases](https://github.com/babico/TeleDrive/releases).

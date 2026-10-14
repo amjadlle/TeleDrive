@@ -1,20 +1,33 @@
 # TeleDrive
 
-> **Dokümantasyon:** [CI, otomatik testler ve Docker arıza senaryoları](docs/CI_WORKFLOWS.md) · [P0/P1 durumu, production kabulü ve P2 planı](docs/IMPLEMENTATION_STATUS.md).
+**Telegram-backed personal file storage and automation** with a single-container Web UI/REST/S3 service, a Windows/Linux desktop application, and a command-line uploader.
+
+TeleDrive stores object payloads in Telegram and keeps object metadata, upload state, and references in a local or external SQL database. This fork supports multiple Telegram accounts for the original folder uploader and a Bot-backed, shared object catalog for REST, S3, and durable local-file jobs.
+
+> **Security:** ordinary Telegram cloud chats and Saved Messages are **not end-to-end encrypted**. Encrypt sensitive content before uploading if it must be confidential from Telegram.
 >
-> Docker geliştirme testi: `bash scripts/run_docker_fault_injection.sh`. Gerçek Telegram/production verisi gerekmez. Production operatör kabulü **ayrıdır**.
+> **Release boundary:** [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7) is the published milestone. Newer `main` features may not be included in those binaries. Refer to [Project Status](docs/IMPLEMENTATION_STATUS.md) before treating unreleased features as production-ready.
 
+## Documentation
 
-**Telegram personal backup uploader** — Docker Web UI, Windows/Linux desktop app and an automation CLI. This fork adds multi-account scheduling and SQLAlchemy-backed persistent state.
+| Guide | Use it for |
+| --- | --- |
+| **[README](README.md)** | Installation, configuration, primary workflows and supported interfaces |
+| [CI and Test Guide](docs/CI_WORKFLOWS.md) | GitHub Actions, local tests, Docker fault injection and development acceptance |
+| [Project Status and Acceptance](docs/IMPLEMENTATION_STATUS.md) | P0/P1/P2 capabilities, release boundaries, original-data production acceptance and recovery risks |
+| [Backup and Restore](docs/BACKUP_RESTORE.md) | Database backup commands, isolation and restore checks |
+| [Security Policy](docs/SECURITY.md) | Responsible disclosure, trusted components, credentials and network isolation |
+| [Contributing](CONTRIBUTING.md) | Development workflow and documentation rules |
+| [Working Checklist](TODO.md) | Short, actionable outstanding tasks |
 
-> Telegram Saved Messages and ordinary Telegram cloud chats are **not end-to-end encrypted**. Encrypt sensitive files before uploading when confidentiality from Telegram is required.
+**Contents:** [Quick start](#1-quick-start-docker) · [Architecture](#2-storage-architecture) · [REST API](#3-rest-api) · [S3 gateway](#4-s3-compatible-api) · [Local jobs](#5-local-file-upload-jobs) · [Desktop/CLI](#6-desktop-and-command-line-usage) · [Databases](#7-database-configuration) · [Security](#8-security-and-operational-limits) · [Development](#9-development-and-testing).
 
-## Quick start: Docker Web UI
+## 1. Quick start: Docker
 
-The server/NAS deployment has a browser dashboard, upload queue, history, account management, Telegram login prompts and logs.
+Prerequisites: Docker Engine, Docker Compose v2 and a Telegram account for the legacy uploader. For REST/S3 object storage, additionally configure a Bot with posting permission in a dedicated private Telegram channel.
 
 ~~~bash
-git clone -b main https://github.com/babico/TeleDrive.git
+git clone https://github.com/babico/TeleDrive.git
 cd TeleDrive
 mkdir -p config data uploads
 cp .env.example .env
@@ -22,338 +35,126 @@ cp examples/config.docker.yaml config/config.yaml
 chmod 600 .env config/config.yaml
 ~~~
 
-Edit **.env** and set a unique **TELEDRIVE_WEB_PASSWORD** (minimum 16 characters). Set **PUID** and **PGID** to the host user owning the mounted folders if they differ from 1000. Then:
+In `.env` set a unique `TELEDRIVE_WEB_PASSWORD` of at least 16 characters; adjust `PUID` and `PGID` to match the owner of the mounted directories. In `config/config.yaml` set the Telegram API ID/hash and account configuration as appropriate.
 
 ~~~bash
 docker compose up -d --build
+docker compose ps
 docker compose logs -f teledrive
 ~~~
 
-Open **http://127.0.0.1:8080** on the Docker host. The port binds to loopback by default. For remote administration use an SSH tunnel, VPN or HTTPS reverse proxy. Never expose HTTP Basic authentication over untrusted plaintext HTTP.
+| Endpoint | Host-local address | Purpose |
+| --- | --- | --- |
+| Web UI, admin REST API, Swagger | [`http://127.0.0.1:8080`](http://127.0.0.1:8080) | Account management, jobs, REST and API keys |
+| SigV4 S3 gateway | `http://127.0.0.1:9000` | Path-style S3 endpoint for SDKs and CLI clients |
 
-In **Settings**, enter the Telegram API ID/hash from [my.telegram.org](https://my.telegram.org/apps), each enabled account's phone number and upload target, then select a strategy. Choose **Run batch**; the browser prompts for login codes and 2FA passwords as needed.
+**One service, one container, one Python process.** Both listeners use the **same SQL catalog and Telegram object engine**. You do not need `docker compose --profile s3` and there is no second S3 container.
 
-**One container, all entrypoints:** `docker compose up -d --build` starts one TeleDrive Python process with WebUI/REST at `http://127.0.0.1:8080` and SigV4 S3 at `http://127.0.0.1:9000`. Both ports share the **same SQL catalog, Telegram Bot transport, version history and durable upload jobs**. S3 is no longer an opt-in service; separate Docker containers or `--profile s3` are not needed. Both listeners bind to loopback on the host by default.
+Ports bind to loopback by default (`TELEDRIVE_BIND_ADDRESS=127.0.0.1`). For remote access, use an SSH tunnel, private VPN, or an HTTPS reverse proxy; never expose Basic credentials or S3 secrets over untrusted plaintext HTTP.
 
-Docker mounts: **./config → /config** (settings), **./data → /data** (sessions, auth handoff, default SQLite DB), and **./uploads → /uploads:ro** (source files). To upload a different host directory, change only the host-side path of the **/uploads** bind mount.
+| Host folder | Container path | Purpose |
+| --- | --- | --- |
+| `./config` | `/config` | Settings and S3 master key |
+| `./data` | `/data` | Sessions, metadata and internal temporary state |
+| `./uploads` | `/uploads:ro` | Read-only source files for explicitly queued jobs |
 
-The Docker config example is [examples/config.docker.yaml](examples/config.docker.yaml). No desktop environment, X11 or PySide6 is needed inside Docker.
+To use a different source directory, change the host side of the `/uploads` mount, retaining the container-side path and read-only mode. The image has no GUI/X11/PySide6 dependency.
 
-## OpenAPI / Web API reference
+**Configure S3 before writing:** the gateway listener starts automatically, but writing S3 objects requires Telegram Bot credentials, a persistent encryption key and scoped S3 credentials. See [Section 4](#4-s3-compatible-api).
 
-The Docker Web UI publishes **authenticated interactive API documentation** at:
+## 2. Storage architecture
 
-- **/docs** — Swagger UI
-- **/redoc** — ReDoc
-- **/openapi.json** — OpenAPI JSON specification
+### Shared object catalog
 
-Example (local host):
+| Entry point | How it writes | Can REST/S3 read it? |
+| --- | --- | --- |
+| REST `PUT /api/v1/buckets/{bucket}/content` | Bot API → `TelegramObjectStorage` → `BucketCatalog` | **Yes** |
+| Signed S3 `PutObject` / multipart upload | Same Telegram chunk engine and SQL catalog | **Yes** |
+| Authenticated local-file upload job | Explicit queued file → same Bot-backed object catalog | **Yes**, after the job finishes |
+| Original Telethon folder scan/batch | User-session uploader and its legacy workflow | **Not automatically**; use the shared-job path for REST/S3 visibility |
 
-~~~bash
-curl -u admin:YOUR_PASSWORD http://127.0.0.1:8080/openapi.json
-~~~
+The SQL catalog stores object heads, generations, checksums, version references, job state and encrypted S3 credential metadata. Object payloads remain in Telegram; the temporary upload scratch directory is **not** a second primary storage backend. Completed transfers have SHA-256 checks and byte-range reads. Failed/unknown Telegram acknowledgments remain protected from unsafe physical deletion.
 
-These endpoints require the same HTTP Basic credentials as the administration UI. On requests that mutate state (`POST`, `PUT`), also send `X-TeleDrive-CSRF: 1`. The API should be accessed over an HTTPS reverse proxy or VPN when remote.
+### Telegram accounts and transport choices
 
-## Multi-account strategies
+The original uploader accepts Telegram user accounts through MTProto/Telethon; a user account can use Saved Messages (`me`), channel usernames, or supported numeric target IDs. Each account has its own session and optional API/target overrides.
 
 | Strategy | Behavior |
 | --- | --- |
-| **single** | Use the first enabled Telegram account |
-| **round_robin** | Rotate the preferred account between successive files, with fallback |
-| **failover** | Try accounts in configured priority order |
-| **parallel** | Concurrent account-affine workers, with fallback |
+| `single` | Use the first enabled account |
+| `round_robin` | Rotate preferred sending accounts between files |
+| `failover` | Try configured accounts in priority order |
+| `parallel` | Independent account-affine workers with fallback |
 
-Each account has a separate session file and optional API/target overrides. FloodWait and cooldown state are account-specific, and upload history records the sending account. Disabled accounts remain in settings without connecting.
+**Saved Messages belong to each user account separately.** Use a shared private channel if all uploader accounts must target the same destination. Respect Telegram rate limits; never share a writable Telethon session file across independent worker processes.
 
-**Saved Messages caution:** the target **me** points to a different private Saved Messages area for every account. If you want one destination, use a shared private channel and grant posting access to all accounts.
+The **REST/S3 shared object service uses the Telegram Bot API**, not a Telethon user login. It requires a Bot token and numeric private channel ID. The official hosted Bot API limits file downloads to 20 MiB per Telegram file, so the object engine uses bounded Telegram chunks (normally 16 MiB) for larger objects. These are two supported transport modes with different access/recovery constraints; they must not be conflated.
 
-Telegram limits still apply. Oversized files can be split into lossless parts before uploading.
+## 3. REST API
 
-## Database: synchronous SQLAlchemy dialects
+The Web listener publishes an authenticated interface at:
 
-Configure **state.database_url** in YAML or the Web UI. SQLite works without a database server; PostgreSQL and MariaDB/MySQL drivers are included in the Web image. Other synchronous SQLAlchemy dialects can be used when the dialect, DBAPI driver and any required OS libraries are installed. There is no hardcoded database vendor whitelist, but not every third-party dialect is necessarily tested or compatible.
-
-~~~yaml
-state:
-  database_url: "sqlite:////data/state.db"
-~~~
-
-Other database URL examples:
-
-~~~text
-postgresql+psycopg://user:password@db:5432/teledrive
-mysql+pymysql://user:password@db:3306/teledrive
-oracle+oracledb://user:password@db:1521/?service_name=FREEPDB1
-mssql+pyodbc://user:password@db/teledrive?driver=ODBC+Driver+18+for+SQL+Server
-~~~
-
-To install another trusted dialect/driver at Docker image build time, set **TELEDRIVE_DB_EXTRA_PACKAGES** in **.env**, then rebuild:
-
-~~~dotenv
-TELEDRIVE_DB_EXTRA_PACKAGES=oracledb
-~~~
-
-~~~bash
-docker compose build --no-cache
-docker compose up -d
-~~~
-
-Some drivers, especially ODBC variants, also require system libraries in a derived Docker image. For remote databases, use TLS and grant only the permissions TeleDrive needs.
-
-## Desktop app (Windows/Linux)
-
-A PySide6 desktop UI remains available, including multiple Telegram accounts, strategy selection, database URL settings, account-scoped login/2FA and SQLAlchemy-backed queue/history. The desktop example is [examples/config.desktop.yaml](examples/config.desktop.yaml); the application creates its own configuration under the user's application data directory.
-
-~~~bash
-python -m pip install -r requirements/desktop.txt
-python -m app.main
-~~~
-
-Desktop data lives in **%LOCALAPPDATA%/Telegram Auto Upload** on Windows or **~/.local/share/Telegram Auto Upload** on Linux (unless **XDG_DATA_HOME** is set).
-
-Build helpers are in **scripts/**:
-
-~~~powershell
-# Windows: portable executable, then Inno Setup installer
-./scripts/build.ps1
-./scripts/build-installer.ps1
-~~~
-
-~~~bash
-# Linux: PyInstaller package in dist-installer/
-bash scripts/build-linux.sh
-~~~
-
-The release workflow uses these scripts for version tags. Upstream's existing binary releases do **not** necessarily include this fork's Docker or multi-account features.
-
-### Desktop screenshots
-
-![Desktop dashboard](website/public/images/dashboard.png)
-![Desktop upload queue](website/public/images/upload-queue.png)
-![Desktop settings](website/public/images/settings.png)
-
-## CLI and automation
-
-The scan/upload backend also runs without a UI. Copy the desktop example to a writable config and edit its source path and Telegram credentials first.
-
-~~~bash
-cp examples/config.desktop.yaml local-config.yaml
-python -m teledrive.uploader --config local-config.yaml --scan-only
-python -m teledrive.uploader --config local-config.yaml --run-once
-~~~
-
-The Web UI's automatic batch scheduler is configured in **Settings → Automation**. Avoid running multiple client processes against the same Telegram session; state leases alone cannot make shared session files safe.
-
-## Telegram setup
-
-1. Log into [my.telegram.org](https://my.telegram.org) with your normal Telegram account, then create credentials under **API development tools**. No BotFather token is needed.
-2. Set the destination to **me** (your Saved Messages), a public **@channel**, or the numeric chat ID for a channel/group to which the account can post.
-3. Authorize each account with its Telegram login code and, if required, 2FA password.
-4. Scan a small folder and test one batch before enabling scheduling.
-
-Keep source files stable during uploads; back up your Telethon sessions and state DB before migrating hosts.
-
-## Security
-
-The Web UI is password-protected by default. Container defaults include loopback binding, non-root execution, dropped Linux capabilities, a read-only root filesystem and read-only upload source. Telegram sessions and auth handoff files have restrictive permissions; distributed leases and per-file claims help prevent duplicate uploads.
-
-See [docs/SECURITY.md](docs/SECURITY.md) for the threat model, TLS/host allowlists, secret-file authentication and database-driver trust. Default options are documented in [.env.example](.env.example) and [docker-compose.yml](docker-compose.yml).
-
-## Website and development
-
-The Astro marketing website under **website/** is separate from the Docker administration UI:
-
-~~~bash
-cd website
-npm ci
-npm run dev
-npm run build
-~~~
-
-| Path | Purpose |
+| Endpoint | Purpose |
 | --- | --- |
-| **teledrive/uploader.py** | Telegram engine, scanning, account strategies |
-| **teledrive/db.py** | SQLAlchemy state, migrations, leases and claims |
-| **teledrive/desktop.py** | Desktop executable launcher and frozen CLI dispatcher |
-| **web/** | FastAPI admin Web UI and static assets |
-| **app/** | PySide6 desktop application |
-| **scripts/** | Windows/Linux desktop packaging scripts |
-| **examples/** | Docker and desktop sample config files |
-| **tests/** | Regression/security tests |
-| **website/** | Standalone Astro marketing site |
-| **installer/** | Windows Inno Setup assets |
-
-Development checks:
+| `http://127.0.0.1:8080/docs` | Swagger UI |
+| `http://127.0.0.1:8080/redoc` | ReDoc |
+| `http://127.0.0.1:8080/openapi.json` | Machine-readable OpenAPI schema |
 
 ~~~bash
-python -m pip install -r requirements/server.txt pytest
-python -m pytest -q
-python -m compileall -q teledrive web app tests
-docker compose config --quiet
+curl -u "admin:YOUR_PASSWORD" http://127.0.0.1:8080/openapi.json
 ~~~
 
-Security CI also builds the image, exercises the live Web API/authentication, and performs dependency and image scans.
+Use HTTP Basic authentication for administrative API key issuance/rotation/revocation and include `X-TeleDrive-CSRF: 1` on administrative mutations. REST object calls use separately issued, scoped Bearer API keys; those are **not** S3 Access Key IDs.
 
-## REST API and credential management — incremental implementation
-
-TeleDrive now includes a database-backed **API Management** page in the Docker
-WebUI and Desktop UI. An administrator can create scoped Bearer API keys, list
-metadata, rotate and revoke them. Only SHA-256 token digests are persisted.
-Full secrets are shown **once**. The same metadata DB makes tokens available
-to both interfaces, provided they point at the same database.
-
-Implemented REST v1 endpoints:
-
-- `GET/POST /api/v1/admin/keys`, `POST /api/v1/admin/keys/{id}/rotate`,
-  `DELETE /api/v1/admin/keys/{id}` (Basic + CSRF, WebUI administrators).
-- `GET/POST/DELETE /api/v1/buckets` (scoped Bearer tokens).
-- `GET /api/v1/buckets/{bucket}/objects`, `DELETE` on the same path
-  with a `key` query parameter (metadata list and logical unlink).
-- `PUT /api/v1/buckets/{bucket}/content?key=...` with raw
-  `application/octet-stream`: streams to bounded temporary staging and
-  uploads to **Telegram Bot API**, then commits the object manifest/current
-  pointer before returning HTTP 201.
-- `GET /api/v1/buckets/{bucket}/content?key=...`: streams checksum-verified
-  Telegram object chunks with HTTP Range support.
-
-Example upload after generating a key with `objects:write` permission:
+Key operations include bucket management, object listing, logical unlink, full object upload/download, metadata-only HEAD and checksum-verified Range GET. Administrative keys are shown once; only digests are persisted.
 
 ~~~bash
-curl -f -X PUT 'http://127.0.0.1:8080/api/v1/buckets/backups/content?key=folder%2Ffile.bin' \
+# First create the bucket and issue a scoped REST key in API Management.
+curl -f -X PUT \
+  'http://127.0.0.1:8080/api/v1/buckets/backups/content?key=folder%2Ffile.bin' \
   -H "Authorization: Bearer $TELEDRIVE_API_KEY" \
   -H 'Content-Type: application/octet-stream' \
   --data-binary '@file.bin'
+
+curl -f -H "Authorization: Bearer $TELEDRIVE_API_KEY" \
+  'http://127.0.0.1:8080/api/v1/buckets/backups/content?key=folder%2Ffile.bin' \
+  -o restored.bin
 ~~~
 
-**Initial transport requirement:** REST binary PUT/GET currently needs a
-Telegram Bot API account with administrator/post rights in a **private Telegram
-channel**. Configure `TELEDRIVE_STORAGE_BOT_TOKEN` and
-`TELEDRIVE_STORAGE_BOT_CHAT_ID` in the private local `.env` file. The official
-Telegram-hosted Bot API limits file downloads to 20 MiB; the storage engine
-uses 16 MiB Telegram chunks to work within that limit. The default REST
-maximum upload is 2 GiB, configurable with
-`TELEDRIVE_REST_MAX_UPLOAD_BYTES`. No S3 server or S3-primary storage is
-involved. The original multi-user-account folder uploader remains available.
+The default REST upload ceiling is 2 GiB, configurable with `TELEDRIVE_REST_MAX_UPLOAD_BYTES`. Uploads require the configured Telegram storage Bot and permitted private channel. Physical Telegram message deletion is **not** implied by an HTTP object delete.
 
-**Not yet supported by REST transfer:** direct Telethon user-account sessions,
-generic asynchronous job tracking/resume, full multipart upload, presigned
-URLs, or production S3 SigV4 endpoints. API keys are not AWS S3 credentials.
-Object unlink retains immutable Telegram manifests; physical deletion waits
-for safely verified garbage collection. API tokens with unused future scopes
-do not enable those features until their endpoints are implemented.
+## 4. S3-compatible API
 
-Only expose the WebUI/API over trusted HTTPS or a VPN. The new binary route is
-subject to a configured byte quota and requires an explicit Bearer token;
-admin key issuance requires HTTP Basic authentication plus CSRF protection.
+The S3 endpoint is **part of the default container**, not a separate Compose profile. It implements a tested **subset** of S3 over the shared Telegram-backed catalog. It is **not AWS S3 feature parity**.
 
-## REST object metadata (current implementation)
+### Provision the S3 master key and credentials
 
-The authenticated REST API provides a metadata-only `HEAD` operation:
+1. Set `TELEDRIVE_STORAGE_BOT_TOKEN` and `TELEDRIVE_STORAGE_BOT_CHAT_ID` in the private `.env` file. Add the Bot as an admin with posting rights in the dedicated private Telegram channel.
+2. Generate a persistent master encryption key once, on the trusted host:
 
 ~~~bash
-curl -I -H "Authorization: Bearer <API_KEY>" \
-  "http://127.0.0.1:8080/api/v1/buckets/my-bucket/content?key=folder%2Ffile.bin"
-~~~
-
-It returns `Content-Length`, SHA-256-derived `ETag`, `Accept-Ranges`,
-and `X-TeleDrive-Object-ID` without downloading bytes from Telegram.
-Keys need the `objects:read` scope. This is REST functionality, **not yet
-a complete AWS S3 HEAD Object implementation**.
-
-## S3-compatible gateway — initial Telegram-backed core
-
-**This is an early core subset, not full AWS S3 compatibility.** Bucket and
-object payloads reside in Telegram; SQLAlchemy stores only object metadata,
-encrypted S3 credentials and chunk/file IDs. No MinIO or external S3 backend
-is used. The gateway is a **separate Docker Compose profile** and is disabled
-by default.
-
-### First-time S3 setup
-
-1. Configure `TELEDRIVE_STORAGE_BOT_TOKEN` and
-   `TELEDRIVE_STORAGE_BOT_CHAT_ID` in your local `.env`, following the
-   Telegram Bot storage instructions. The bot must be an administrator in the
-   dedicated private Telegram channel.
-2. Generate a persistent S3 encryption master key on the Docker host:
-
-~~~bash
-mkdir -p config data
 python - <<'PY'
 from pathlib import Path
 from cryptography.fernet import Fernet
-p = Path("config/s3-master.key")
-if p.exists():
-    raise SystemExit("Refusing to overwrite existing master key")
-with p.open("xb") as stream:
+target = Path("config/s3-master.key")
+if target.exists():
+    raise SystemExit("Refusing to replace the existing S3 master key")
+with target.open("xb") as stream:
     stream.write(Fernet.generate_key() + b"\n")
-p.chmod(0o600)
+target.chmod(0o600)
 PY
 ~~~
 
-Install `cryptography` locally if needed: `python -m pip install cryptography`.
-Ensure the TeleDrive container's `PUID`/`PGID` can read this file. **Back up the
-master key securely**; losing it makes all issued S3 secrets unusable, and
-replacing it does not restore old credentials.
+3. Install the `cryptography` package on the host if necessary. Ensure the container's `PUID`/`PGID` can **read** this file. Back up the key separately: losing it makes stored S3 secrets undecryptable.
+4. Start the default Compose service and issue a **scoped** S3 access key and secret in **WebUI → API Management → S3-compatible gateway** (or the desktop S3 Management page). The secret appears once and is encrypted in SQL. When sharing metadata with Desktop, point it at the **same** master key rather than silently creating another.
 
-3. Start TeleDrive (one container, both WebUI/REST and S3):
-
-~~~bash
-docker compose up -d --build
-~~~
-
-The gateway binds **127.0.0.1:9000** by default. For remote clients, put
-it behind an HTTPS reverse proxy or private VPN. Do not expose plaintext
-HTTP or the Telegram bot token to the internet.
-
-### Same object storage for REST, S3 and local files
-
-The default Docker deployment exposes **one catalog**, not three separate
-uploads directories. REST `/api/v1/buckets/{bucket}/content`, signed S3
-`PUT /{bucket}/{key}`, and local-folder **durable upload jobs** all publish
-through `BucketCatalog` + `TelegramObjectStorage` with the same object
-versions, SQL leases, checksum validation and recoverability.
-
-To upload an existing `./uploads/example.bin` through that same catalog,
-first create the destination bucket through REST or S3, then queue the file
-from WebUI's authenticated administrative API:
-
-~~~bash
-curl -fsS -u "$TELEDRIVE_WEB_USER:$TELEDRIVE_WEB_PASSWORD" \
-  -H "X-TeleDrive-CSRF: 1" -H "Content-Type: application/json" \
-  -d '{"bucket":"backups","key":"local/example.bin","source_path":"/uploads/example.bin"}' \
-  http://127.0.0.1:8080/api/v1/admin/storage/jobs
-~~~
-
-`TELEDRIVE_JOB_AUTO_RUN=1` (enabled by default in Compose) processes explicitly
-queued files with the same Telegram Bot credentials and SQL metadata as S3/REST.
-To pause background job execution set `TELEDRIVE_JOB_AUTO_RUN=0`; files remain
-queued. **Simply copying a file into the mounted directory does not automatically
-upload it.** The original legacy Telethon uploader/batch workflow remains a
-separate compatibility mode; use the durable-job path if the file must be
-visible through REST/S3.
-
-**Provisioning:** S3 data writes require a configured storage Bot, S3 master
-key and scoped S3 access credentials. Those are not generated silently.
-The container starts both API listeners even before S3 is provisioned.
-
-4. Open **WebUI → API Management → S3-compatible gateway** or the Desktop
-**S3 Management** page. Issue an S3 Access Key ID and Secret Access Key,
-selecting only the required permissions. The secret is displayed once,
-encrypted in the DB and revocable immediately.
-
-On Desktop, set `TELEDRIVE_S3_MASTER_KEY_FILE` to the path of the **same**
-master key used by the Docker instance when sharing the same database.
-The app will refuse S3 key creation if the master key is missing. Desktop
-does not silently generate a different encryption key.
-
-Example using boto3 (simple path-style, signed-payload requests):
+### SDK example
 
 ~~~python
 import boto3
 from botocore.config import Config
 
-s3 = boto3.client(
+client = boto3.client(
     "s3",
     endpoint_url="http://127.0.0.1:9000",
     aws_access_key_id="YOUR_ACCESS_KEY_ID",
@@ -366,592 +167,165 @@ s3 = boto3.client(
         response_checksum_validation="when_required",
     ),
 )
-s3.create_bucket(Bucket="backup-bucket")
-s3.put_object(Bucket="backup-bucket", Key="test.txt", Body=b"Hello Telegram")
-assert s3.get_object(Bucket="backup-bucket", Key="test.txt")["Body"].read() == b"Hello Telegram"
+client.create_bucket(Bucket="backup-bucket")
+client.put_object(Bucket="backup-bucket", Key="hello.txt", Body=b"Hello Telegram")
+assert client.get_object(Bucket="backup-bucket", Key="hello.txt")["Body"].read() == b"Hello Telegram"
 ~~~
 
-**Implemented now:** SigV4 header authentication (15-minute timestamp window),
-individually scoped and encrypted access keys, ListBuckets, CreateBucket,
-HeadBucket, GetBucketLocation, ListObjectsV1 (marker) and ListObjectsV2
-(with delimiter/CommonPrefixes, signed V2 continuation tokens, and URL-encoded
-list responses), PutObject, GetObject, HeadObject,
-DeleteObject (logical unlink), DeleteBucket (only physically empty),
-and single byte-range GET. Object writes are acknowledged only after Telegram
-upload and manifest commit.
+### Implemented features and limits
 
-**Legacy S3 listing compatibility:** ListObjectsV1 is supported with
-`prefix`, `delimiter`, `marker`, `max-keys` and `NextMarker`.
-The V1 marker and V2 continuation token are separate protocols; mixing
-them is rejected. Both V1 and V2 support `encoding-type=url`, percent
-encoding UTF-8 key names and XML control characters inside XML responses.
-The gateway uses immutable catalog entries from the same Telegram-backed
-manifest system as normal GET/HEAD. Boto3 tests verify V1, V2, delimiter
-pagination and encoded object names. `us-east-1` bucket discovery is exposed
-through the independently scoped `s3:GetBucketLocation` permission.
+| Feature group | Available behavior |
+| --- | --- |
+| Authentication | Scoped encrypted S3 keys, SigV4 request checks, bounded signed/presigned operations |
+| Buckets and listing | Create/Head/DeleteBucket; V1/V2 object listing, prefixes, delimiters, marker/continuation and URL encoding |
+| Objects | Put/Get/Head/Delete (logical unlink), Range, CopyObject, conditional GET/HEAD and signed conditional writes/deletes |
+| Multipart | UploadPart, Complete/Abort and guarded stale-completion recovery through an admin-only API |
+| Metadata and versions | Selected published VersionId reads/listing, object/bucket tags, metadata, CopySource, CORS and GetObjectAttributes (`ETag`/`ObjectSize` only) |
+| Checksums | SHA-256, SHA-1, Content-MD5 and CRC32C validation where explicitly implemented |
+| Known gaps | General lifecycle, bucket policies, SSE, CRC64NVME, full AWS delete-marker semantics, every multipart POST variant and unverified clients |
 
-**S3 bucket CORS (browser clients):** Signed `GetBucketCors`, `PutBucketCors`
-and `DeleteBucketCors` manage bounded CORS XML rules, stored in SQL rather
-than Telegram payloads. Scope S3 keys with `s3:GetBucketCORS` and
-`s3:PutBucketCORS` (also available in WebUI/Desktop credential management).
-Public `OPTIONS` preflight requests consult the bucket's configured rules,
-checking the Origin, requested method and requested headers. **CORS does
-not authenticate requests:** every actual S3 read/write still requires
-normal SigV4 authorization and the appropriate object permissions. Rules
-cannot silently expose private objects or bypass the signed request scope.
+**Safety:** `UNSIGNED-PAYLOAD` writes are accepted only when an appropriately **signed, verifiable** checksum binds the actual received bytes. Public ACLs and unsupported archival tiers must not be inferred from AWS-style parameters. Failed conditional publications may retain protected, unpublished Telegram manifests rather than deleting uncertain remote media.
 
-~~~python
-s3.put_bucket_cors(
-    Bucket="backup-bucket",
-    CORSConfiguration={"CORSRules": [{
-        "AllowedOrigins": ["https://backup.example.com"],
-        "AllowedMethods": ["GET", "PUT", "HEAD"],
-        "AllowedHeaders": ["x-amz-*", "content-type"],
-        "ExposeHeaders": ["ETag"],
-        "MaxAgeSeconds": 600,
-    }]},
-)
-assert s3.get_bucket_cors(Bucket="backup-bucket")["CORSRules"][0]["MaxAgeSeconds"] == 600
-~~~
+S3 client integrations tested in CI use **real** AWS CLI and rclone executables against the actual gateway and SQL with **synthetic Telegram transport**; real Telegram byte transfer is tested in separate live E2E workflows. For rclone use `type=s3`, `provider=Other`, `force_path_style=true` and your issued S3 key pair. Create buckets first if `no_check_bucket=true`.
 
-Cross-origin requests should use HTTPS when accessed remotely. CORS is a
-browser restriction mechanism, **not** a bucket policy, firewall or a
-substitute for signed credentials. Hostile XML, unsupported methods, oversize
-policies and invalid wildcard patterns are rejected. Live Postgres/MySQL
-and boto3 tests cover persistence and safe cleanup.
+### Non-destructive storage and multipart maintenance
 
-**S3 DeleteObjects supported:** Signed `POST /bucket?delete` now accepts
-up to 1,000 keys per request, standard `Quiet` mode and a verified
-Content-MD5/CRC32/SHA-256 checksum along with the SigV4 payload hash.
-The XML parser rejects DTDs, malformed records and unsupported `VersionId`
-selectors before any key is unlinked. Existing or missing keys are reported
-according to S3's batch-delete semantics. Like single-object DeleteObject,
-batch deletion removes only the current SQL catalog pointer; Telegram
-messages and historical manifests remain intact for verified GC.
+Before considering stale multipart recovery or garbage collection, inspect the admin-only endpoints and **dry-run** responses. The admin API provides `/api/v1/admin/s3-multipart/stale`, `/api/v1/admin/s3-multipart/{upload_id}/recover` (with `"execute": false` for preview), and `/api/v1/admin/storage/gc-candidates`. A stale completion may be explicitly returned to `active` under expiry/fencing conditions; it is not equivalent to deleting Telegram messages.
 
-~~~python
-s3.delete_objects(
-    Bucket="backup-bucket",
-    Delete={"Objects": [{"Key": "old/file1.bin"}, {"Key": "old/file2.bin"}]},
-)
-~~~
+**Physical Telegram garbage collection remains disabled** until independently verified owner/alias/version/retention/backup/fencing controls and approval exist. The [P2 safety section](docs/IMPLEMENTATION_STATUS.md#41-physical-telegram-garbage-collection-disabled) describes the incomplete safeguards.
 
-**Conditional object reads:** S3 GET and HEAD now support ETag and
-Last-Modified preconditions (`If-Match`, `If-None-Match`,
-`If-Modified-Since` and `If-Unmodified-Since`). Matching cache
-validators return `304 Not Modified` without downloading any Telegram
-bytes; failed conditions return `412 PreconditionFailed`. Conditional
-object **writes and deletes** are deliberately rejected until an atomic
-compare-and-swap writer is available. They are not silently accepted.
+## 5. Local-file upload jobs
 
-**S3 multipart now implemented (core):** CreateMultipartUpload, UploadPart,
-ListParts (paginated), ListMultipartUploads (owner-scoped, paginated),
-CompleteMultipartUpload and AbortMultipartUpload. Parts are written directly
-to Telegram using bounded-size chunks and are **not** published as live S3
-objects until Complete. Before publication, Complete re-reads and validates
-all Telegram chunks, enforces S3's 5 MiB minimum for every part except the
-last, computes multipart MD5-derived ETag, and moves existing Telegram chunk
-references to one committed object through a single SQL transaction. This
-avoids re-uploading payload bytes to Telegram during completion. Retrying
-the same completed part selection returns the committed result; a different
-selection is rejected. Completed objects support full/Range GET, HEAD, and
-ListObjectsV2 with the multipart ETag.
-
-**Current multipart boundaries:** 10,000 parts per upload; uploaded parts are
-limited by `TELEDRIVE_REST_MAX_UPLOAD_BYTES` (default 2 GiB per request).
-Telegram Bot API download chunks remain capped to below 20 MiB (16 MiB
-recommended). The current gateway requires SigV4 header-signed SHA-256
-bodies. Part sizes and multipart ETags follow S3 conventions, but this is not
-a complete AWS S3 implementation.
-
-**Implemented presigned URLs:** Query-parameter AWS SigV4 presigned
-GET, HEAD, DELETE and checksum-bound PUT are supported. URLs are limited
-to 7 days, checked against credential revocation and permission scopes, and
-rejected on signature/path/header tampering. Unlike AWS's general presigned
-PUT mode, TeleDrive intentionally requires a **SHA-256 checksum included in
-the URL's SignedHeaders**: bare unsigned-payload PUT links are refused.
-Presigned multipart POST operations are not yet supported.
-
-**CopyObject implemented:** Metadata-only copy now creates a new immutable
-object ID that references the source's existing Telegram chunk journal,
-without duplicating Telegram messages or violating the unique-message DB
-constraint. Both source `s3:GetObject` and destination `s3:PutObject`
-permissions are checked; `x-amz-copy-source` and ETag conditions must be
-SigV4-signed. Copies remain accessible after the source key is deleted or
-replaced. Copying multipart objects preserves their original multipart
-ETag. CopySource supports `bucket/key` (boto3) and `/bucket/key`, and
-cross-bucket copies work within the same Telegram storage.
-
-**CopyObject limits:** MetadataDirective=REPLACE is implemented for
-the supported signed HTTP headers and `x-amz-meta-*` user fields.
-Unsupported source VersionId, byte-range Copy and advanced copy headers
-still return explicit errors.
-Physical garbage collection MUST follow shared alias references; deleting
-source Telegram media while an alias exists would corrupt copied objects.
-
-**S3 HTTP object metadata implemented:** Normal PutObject, CreateMultipartUpload
-(followed by CompleteMultipartUpload), and CopyObject now preserve signed
-`Content-Type`, `Content-Encoding`, `Content-Language`,
-`Content-Disposition`, `Cache-Control`, `Expires`, and
-`x-amz-meta-*` user fields. GetObject, HeadObject and byte-Range GET return
-these fields from immutable SQL metadata without fetching metadata from
-Telegram. CopyObject supports `MetadataDirective=COPY` (snapshot source
-metadata) and `MetadataDirective=REPLACE` (new signed fields). An overwrite
-never alters previous object manifests or historical metadata. Upload
-publication and initial metadata writes share the same SQL transaction.
-
-User metadata names must contain ASCII letters/digits/underscore/hyphen;
-metadata values are limited to 1 KiB each and all metadata fields together
-to 2 KiB. Unsupported S3 encryption, storage class, ACL, Object Lock,
-website redirects and `aws-chunked` upload semantics are rejected before
-Telegram transfer. These safeguards prevent an S3 client from receiving
-false success for a durability/security feature the gateway does not provide.
-Metadata is not a replacement for object contents: only payload bytes live
-in Telegram.
-
-**Bucket location discovery implemented:** Signed `GetBucketLocation` returns
-the S3-compatible `us-east-1` XML location constraint. It requires its own
-`s3:GetBucketLocation` credential permission and works through boto3.
-Multi-region S3 routing is not supported.
-
-**S3 Object/ Bucket Tagging implemented:** `GetObjectTagging`,
-`PutObjectTagging`, `DeleteObjectTagging`, `GetBucketTagging`,
-`PutBucketTagging`, `DeleteBucketTagging`. Each action has an independent
-S3 key permission; normal `s3:GetObject` does **not** permit reading tags.
-Tags are stored as small SQL metadata (10 tags maximum, strict key/value
-limits), never as payloads on another storage backend. Tag editing does not
-transfer Telegram file bytes. Object tags belong to immutable object IDs;
-when a key is overwritten, the new object starts with no tags while older
-version tags remain in metadata. CopyObject snapshots its source tags
-atomically into the new object, so later source changes do not alter the copy.
-Empty bucket deletion removes its bucket tags transactionally.
-
-Example boto3 calls:
-
-~~~python
-s3.put_object_tagging(
-    Bucket="backup-bucket", Key="test.txt",
-    Tagging={"TagSet": [{"Key": "project", "Value": "TeleDrive"}]},
-)
-print(s3.get_object_tagging(Bucket="backup-bucket", Key="test.txt")["TagSet"])
-s3.delete_object_tagging(Bucket="backup-bucket", Key="test.txt")
-s3.put_bucket_tagging(
-    Bucket="backup-bucket",
-    Tagging={"TagSet": [{"Key": "team", "Value": "storage"}]},
-)
-print(s3.get_bucket_tagging(Bucket="backup-bucket")["TagSet"])
-s3.delete_bucket_tagging(Bucket="backup-bucket")
-~~~
-
-**Signed inline tags are supported:** S3 `PutObject` accepts the
-URL-encoded `x-amz-tagging` header only when included in AWS
-`SignedHeaders` and the credential has `s3:PutObjectTagging` permission.
-The tags are attached to the new immutable object in the same SQL
-transaction as publishing its current head; malformed/unauthorized tags
-are rejected **before** any Telegram upload. `CopyObject` also accepts
-`x-amz-tagging-directive: REPLACE`, with an optional signed tagging
-header, without transferring Telegram bytes. COPY of a tagged source
-requires both `s3:GetObjectTagging` and `s3:PutObjectTagging` in
-addition to normal copy permissions. Copy operations with replacement
-tags require `s3:PutObjectTagging`.
-
-**Remaining limits:** Version-specific `?versionId=` tagging is not
-implemented and is explicitly rejected. Bucket GET without a tag set
-returns S3 `NoSuchTagSet`, whereas untagged objects return an empty
-tag set. XML DTD/entities, invalid MD5/SHA-256 checksums, duplicate keys
-and exceeding tag limits are rejected.
-
-**Not yet supported:** virtual-host-style buckets, AWS chunked or
-checksum-unbound PUT bodies, ACL/policy APIs, version listing, lifecycle,
-object lock, notifications, replication, advanced multipart checksum modes
-and full SDK interoperability. Unsupported operations return explicit S3 XML
-`NotImplemented` rather than simulated success. Tests cover botocore-signed
-HTTP, boto3 GET/PUT/HEAD presigns, multipart/no-reupload, owner isolation,
-wrong checksums, expired credentials, and live PostgreSQL/MySQL chunk moves.
-
-Example boto3-generated short-lived URLs:
-
-~~~python
-import base64
-import hashlib
-
-body = b"Example Telegram-backed object"
-sha256_b64 = base64.b64encode(hashlib.sha256(body).digest()).decode("ascii")
-
-download_url = s3.generate_presigned_url(
-    "get_object",
-    Params={"Bucket": "backup-bucket", "Key": "test.txt"},
-    ExpiresIn=300,
-)
-upload_url = s3.generate_presigned_url(
-    "put_object",
-    Params={"Bucket": "backup-bucket", "Key": "new.txt",
-            "ChecksumSHA256": sha256_b64},
-    ExpiresIn=300,
-    HttpMethod="PUT",
-)
-# The client uploading to upload_url MUST send exactly:
-# x-amz-checksum-sha256: <sha256_b64>
-# together with the original bytes. Changing either is rejected.
-~~~
-
-Do not embed the master encryption key or S3 secret key in a shared URL.
-Presigned URLs themselves grant temporary access and must not be logged,
-pasted in issues or sent over insecure transport.
-
-### Inspect Telegram references before any physical GC
-
-WebUI **API Management → Telegram storage reference audit** now exposes a
-root-admin-only, read-only inventory. It includes current object heads,
-immutable CopyObject aliases, historical manifests and staged multipart
-parts. It makes **no deletion decisions** and cannot remove Telegram media.
-
-The same inventory is accessible as JSON:
+The Docker mount `./uploads:/uploads:ro` gives the service read-only access to approved source files. Use the authenticated **durable job API** to publish files into the **same REST/S3 catalog**.
 
 ~~~bash
-curl -u "ADMIN_USER:ADMIN_PASSWORD" \
-  "http://127.0.0.1:8080/api/v1/admin/storage/gc-audit?limit=100"
-~~~
-
-The response deliberately reports `physical_deletion_enabled: false`
-and `eligible_for_deletion: 0`. Historical manifests and CopyObject
-aliases remain protected until a retention-aware, version-aware GC planner
-and live Telegram message ownership verifier can prove deletion safe.
-Do not treat an unreferenced current object head as disposable media:
-CopyObject may still depend on its original Telegram messages.
-
-### Recover a stale S3 multipart completion (root admin only)
-
-An interrupted `CompleteMultipartUpload` can be retried after reclaiming
-an expired ownership lease. Check eligibility first:
-
-~~~bash
-curl -u "ADMIN_USER:ADMIN_PASSWORD" \
-  "http://127.0.0.1:8080/api/v1/admin/s3-multipart/stale?min_age_seconds=3600"
-~~~
-
-Then request a **non-destructive preview** of one upload:
-
-~~~bash
-curl -u "ADMIN_USER:ADMIN_PASSWORD" -H "X-TeleDrive-CSRF: 1" \
+# Ensure the bucket exists. Then enqueue an existing local file:
+curl -fsS -u "$TELEDRIVE_WEB_USER:$TELEDRIVE_WEB_PASSWORD" \
+  -H "X-TeleDrive-CSRF: 1" \
   -H "Content-Type: application/json" \
-  -d '{"execute":false,"min_age_seconds":3600}' \
-  "http://127.0.0.1:8080/api/v1/admin/s3-multipart/UPLOAD_ID/recover"
+  -d '{"bucket":"backups","key":"local/example.bin","source_path":"/uploads/example.bin"}' \
+  http://127.0.0.1:8080/api/v1/admin/storage/jobs
 ~~~
 
-Only if the preview reports `eligible: true`, repeat with
-`"execute":true` to return the upload to `active` so the original S3
-client can explicitly retry Complete or Abort. Recovery cannot run while
-the lease is fresh and never deletes Telegram messages or publishes data.
-The S3 credential holder is not allowed to bypass this root-admin-only
-operation. Use HTTPS or a trusted VPN for any remote admin traffic.
+In Docker Compose, `TELEDRIVE_JOB_AUTO_RUN=1` processes **explicitly queued** jobs automatically. Set it to `0` to disable background processing while retaining queue entries. **A copy into `/uploads` does not automatically trigger a scan or upload.**
 
-### S3 conditional writes and delete semantics
+Jobs are persisted in SQL and protect against source mutation, unexpected generation changes and interrupted uploads. Keep the source file until the job reaches `done`. The admin API also supports job inspection/retry, stale-pending previews, history restore and safe health checks. Failed/uncertain remote sends do not authorize physical cleanup.
 
-The SigV4-signed request headers `If-None-Match: *` and `If-Match: "<etag>"`
-now support **atomic** object creation/replacement. Conditional DELETE
-supports `If-Match`. All conditions are required to be present in SigV4
-`SignedHeaders`; unsigned conditions are rejected. A stale ETag, missing
-object or concurrent head-pointer change produces `412 PreconditionFailed`.
-The SQL update checks both generation and immutable object ID, including
-delete/recreate ABA races. A failed publication can leave a durable but
-unpublished Telegram-backed manifest; this remains protected by GC retention.
+## 6. Desktop and command-line usage
 
-Example with boto3:
+### Windows and Linux desktop
 
-~~~python
-first = s3.put_object(
-    Bucket="backup-bucket", Key="state.txt",
-    Body=b"first", IfNoneMatch="*",
-)
-s3.put_object(
-    Bucket="backup-bucket", Key="state.txt",
-    Body=b"second", IfMatch=first["ETag"],
-)
-~~~
-
-`If-Modified-Since`/`If-Unmodified-Since` on writes and date-based conditional multipart operations remain unsupported;
-signed If-Match/If-None-Match multipart Complete uses an atomic head CAS.
-
-### Real S3 client acceptance tests
-
-`Storage API Integration CI` installs the real `aws` and `rclone`
-executables, launches TeleDrive's S3 ASGI gateway, and verifies exact binary
-round trips. The CI uses a fake Telegram I/O layer with real SQL metadata;
-the separate Telegram E2E workflows test real remote transfers. No extra
-GitHub Actions secret is needed to run the AWS CLI/rclone protocol tests.
-
-For a locally provisioned bucket, configure rclone with
-`type=s3`, `provider=Other`, `force_path_style=true`, the TeleDrive
-S3 endpoint, and an issued S3 access/secret pair. Avoid
-`disable_checksum=true`: the gateway requires upload integrity checks.
-When using `no_check_bucket=true`, create buckets in TeleDrive or through
-AWS CLI before syncing; rclone may skip implicit bucket creation.
-
-`GetObjectAttributes` is available to separately scoped credentials:
-
-~~~python
-attrs = s3.get_object_attributes(
-    Bucket="backup-bucket", Key="test.txt",
-    ObjectAttributes=["ETag", "ObjectSize"],
-)
-print(attrs["ETag"], attrs["ObjectSize"])
-~~~
-
-The `Checksum`, `StorageClass` and `ObjectParts` attribute modes are
-currently rejected as unsupported instead of inventing AWS-like values.
-
-### Kalan riskler ve yapılması gerekenler (S3 denetimi)
-
-- **Stale multipart completions (recovery implemented):** Each in-progress
-  Complete has a renewable SQL lease with an unguessable ownership token.
-  Publishing the final object and moving Telegram chunk references requires
-  renewing that same token in the SQL transaction. An expired worker cannot
-  reset an upload claimed by another worker. Operator recovery is **dry-run
-  by default**, and requires the lease to be expired for at least 1 hour by
-  default. Staged Telegram messages are never deleted during recovery.
-  Pre-fencing legacy `completing` rows that have no lease remain blocked
-  for manual investigation (never guessed safe to recover).
-- **Orphan/obsolete Telegram parts and CopyObject aliases:** The
-  non-destructive GC reference audit is implemented in the WebUI and admin
-  API. It accounts for CopyObject, historical manifests and multipart parts,
-  but **physical deletion remains disabled**. Future mark-and-sweep GC must
-  preserve all copied-object source aliases, obey immutable history/version
-  retention, and verify the actual Telegram message before deletion.
-- **GetObjectAttributes (limited P1 subset implemented):** Signed
-  GetObjectAttributes supports only `ETag` and `ObjectSize`, using the
-  independent `s3:GetObjectAttributes` permission. It does not retrieve
-  Telegram bytes. Unsupported `Checksum`, `ObjectParts` and `StorageClass`
-  attributes explicitly fail rather than returning fabricated metadata.
-- **Physical lifecycle/versioning:** DeleteObject unlinks the current
-  pointer; historical Telegram manifests remain. New published versions
-  are indexed for REST history/restore and signed S3 historical GET/HEAD
-  with `?versionId=`. Published-only ListObjectVersions, historical tagging and CopySource are
-  implemented; version-specific DELETE and full AWS delete markers remain unsupported.
-- **Protocol coverage:** Presigned GET/HEAD/DELETE and checksum-bound PUT,
-  CopyObject, scoped DeleteObjects, conditional GET/HEAD, object/bucket
-  tagging, signed user metadata, bucket CORS and signed conditional
-  PutObject/DeleteObject now work. Conditional PUT uses If-None-Match: *
-  or If-Match with atomic SQL generation+object-ID fencing, and conditional
-  DELETE supports If-Match; signed multipart Complete also supports
-  If-Match or If-None-Match: * with atomic head fencing. Historical
-  Telegram data is retained after failed CAS publication; no unsafe
-  automatic cleanup. Limited signed presigned multipart Complete POST,
-  version-ID tagging, SHA-1 integrity checks and opt-in virtual-host routing
-  are now available. CRC32C (Castagnoli) verification is implemented for
-  object PUT and UploadPart. Still pending: generic multipart POST/form,
-  CRC64NVME, SSE, bucket policies and lifecycle. Standard SigV4 `UNSIGNED-PAYLOAD` PUTs
-  are accepted **only when a signed Content-MD5 or SHA-256 checksum is verified**
-  against the actual received bytes. The gateway recognizes only `private`
-  canned ACL and `STANDARD` storage-tier hints: public access and archive
-  or alternate durability classes remain unsupported.
-- **Operational tests (real AWS CLI and rclone now exercised):** The CI
-  launches real `aws` and `rclone` executables against a live local ASGI
-  S3 gateway with a deterministic fake Telegram transport and real SQL.
-  Coverage includes AWS `s3api` PUT/GET/HEAD/list/delete, high-level
-  `aws s3 sync --delete`, rclone list/copy/overwrite/delete and forced
-  5 MiB multipart transfer with SHA-256 round-trip comparison. These are
-  SDK/client-compatibility tests; they do **not** replace real Telegram E2E.
-  Cyberduck, live-Telegram process-SIGKILL/soak, long-duration rate limits
-  and concurrent session revocation still need dedicated staging acceptance.
-  A separate fake-Telegram/real-SQL upload worker is SIGKILL-tested. Real 5 MiB+ Telegram Bot multipart **has** passed with
-  `TELEDRIVE_E2E_MULTIPART=1` and end-to-end SQL restart, reparenting,
-  checksum and test-only cleanup on the feature branch. Manual
-  `04 · Live Telegram | Bot API E2E` can repeat this with `run_multipart=true`;
-  routine pushes do not enable the costly large-object case.
-
-No primary payload storage or fallback is added outside Telegram. SQL
-holds metadata and temporary upload state only; scratch files are ephemeral.
-
-## Telegram-only object storage: Phase 1 foundation
-
-A new `teledrive.storage` module provides immutable object manifests and
-Telegram-backed chunk I/O. Payload bytes are stored **only in Telegram**;
-SQLAlchemy stores message locations, offsets, SHA-256 checksums and upload
-status. Local scratch files are temporary and deleted after use.
-
-Implemented in this phase:
-
-- Bounded-memory chunk upload with a per-chunk DB journal.
-- Fail-closed object visibility: unfinished uploads cannot be read.
-- Telegram message retrieval that refreshes expired media references.
-- Checksum-verified download, half-open byte ranges, and atomic output files.
-- Explicit interrupted/failed upload inspection for future recovery tooling.
-- Deterministic tests for corruption, missing chunks, interrupted upload, source mutation,
-  chunk boundaries, empty files and SQLite restart; live PostgreSQL/MySQL tests.
-
-**Implemented after Phase 1:** REST raw binary upload/download and HEAD,
-scoped REST API credentials, API Management in WebUI/Desktop, Telegram Bot
-transport, bucket/current-object catalog, and the initial separate SigV4 S3
-gateway with S3 credential management in both user interfaces.
-
-**Still not implemented:** resuming Telegram ACKs without a saved SQL chunk
-journal, legacy `files` migration, full S3 delete markers and retention-approved
-physical GC. Verified journaled chunks now resume without retransmission after
-reclaiming an expired writer lease; source and Telegram hashes are checked. The legacy folder uploader is still
-separate from the durable SQL-persisted object job queue; its merger into
-the object-service pipeline remains necessary.
-
-### Phase 2: conservative failure recovery and orphan cleanup
-
-`teledrive.storage.RecoveryManager` now reconciles the recorded chunk journal
-with **Telegram messages in configured targets**. A process can crash after a
-successful Telegram upload but before recording its message ID in SQL; the
-upload caption contains a stable `teledrive:<object-id>:<part>:<sha-prefix>`
-marker so unindexed messages can be discovered.
-
-- **Dry-run is always the default**, and no background process deletes messages.
-- Only objects in `failed` status and older than a safety window (24 hours
-  by default) can be cleaned. `pending` and `ready` objects are excluded.
-- Cleanup requires a complete Telegram history scan. A scan limit, missing
-  account/target, conflicting marker or unverified ownership blocks deletion.
-- Every message is checked as an outgoing upload with the exact object marker
-  before deletion, then Telegram deletion is verified. Per-object SQL leases
-  serialize cleanup and interrupted deletion is safely retryable.
-- Cleaned objects retain their audit journal but cannot be read as live objects.
-
-**Important limits:** Full Telegram orphan discovery and physical cleanup
-remain an internal, separately verified recovery component. Root-admin
-WebUI/REST now offer expired writer-fenced PENDING previews and explicit
-per-object abandonment; they retain all Telegram messages and do not
-implicitly authorize cleanup. A hard-killed worker can be reconciled safely
-at the metadata level without claiming the physical data is garbage. Changed Telegram targets,
-inaccessible history, or large histories beyond the scan limit prevent reliable
-orphan discovery, so cleanup refuses to claim success. Metadata DB rebuild
-from Telegram is also a later phase.
-
-CI exercises unindexed crash orphans, corrupt/missing marker ownership,
-incomplete scans, partial deletion retry, safe exclusion of READY objects
-and database cleanup transactions on live PostgreSQL/MySQL.
-
-### Telegram user + bot storage E2E (private channel)
-
-TeleDrive keeps **two distinct Telegram upload paths**:
-- **User account (Telethon / MTProto):** full user session; can resolve a
-  private channel from its title and recover historical messages.
-- **Bot account (official Bot HTTP API):** token-based storage and CI without
-  a user session, but private-channel access requires a numeric chat ID and
-  channel administrator permissions. Bot API cannot retrieve arbitrary past
-  channel messages using message IDs alone, so TeleDrive persistently stores
-  the uploaded document's file ID in the SQL `storage_bot_file_ids` table.
-
-Both routes use the **same TelegramObjectStorage manifest, SHA-256 verification,
-range reads, and Telegram-only payload storage**. Bot API index-based uploads
-currently do **not** implement the MTProto recovery/orphan-discovery interface;
-that difference is intentionally explicit and will need additional design
-before full production feature parity.
-
-#### One-time setup for both modes
-
-1. Create a **dedicated Telegram test user account** and get its API ID and API
-   hash from [my.telegram.org](https://my.telegram.org) → API development tools.
-2. Use Telegram's [@BotFather](https://t.me/BotFather) to create a dedicated
-   test bot and obtain its **bot token**. API ID/hash are not sufficient to
-   authenticate a bot with the Bot HTTP API.
-3. Install [GitHub CLI](https://cli.github.com/) locally and authenticate.
-   With Python 3.11+ and Telethon installed, run from the TeleDrive repository:
+The PySide6 application provides account-scoped login/2FA, multi-account scheduling, configuration, queue/history, and database settings.
 
 ~~~bash
-gh auth login
-python -m pip install -e .
-python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot
+python -m pip install -r requirements/desktop.txt
+python -m app.main
 ~~~
 
-The script asks once for API ID, API hash, Telegram test phone, and the
-Telegram login code. A **2FA password is requested only if 2FA is enabled**.
-It creates or finds the *private broadcast channel* under that user, and
-refuses ambiguous duplicate names. The script prompts **locally** for your
-BotFather token and checks it via the Bot API.
+Desktop configuration examples live at [`examples/config.desktop.yaml`](examples/config.desktop.yaml). User data is located under `%LOCALAPPDATA%/Telegram Auto Upload` on Windows or `~/.local/share/Telegram Auto Upload` on Linux (unless `XDG_DATA_HOME` overrides the latter).
 
-The script stores the following values directly through GitHub CLI, without
-displaying or writing the Telegram StringSession to a session file:
+Build scripts:
 
-| GitHub Actions setting | Type | Value |
-| --- | --- | --- |
-| `TELEDRIVE_E2E_API_ID` | Secret | Test user's Telegram API ID |
-| `TELEDRIVE_E2E_API_HASH` | Secret | Test user's API hash |
-| `TELEDRIVE_E2E_SESSION` | Secret | Authorized user StringSession |
-| `TELEDRIVE_E2E_CHANNEL_NAME` | Secret | Private test channel title |
-| `TELEDRIVE_E2E_BOT_TOKEN` | Secret | Test bot token from BotFather |
-| `TELEDRIVE_E2E_BOT_CHAT_ID` | Variable | Numeric private channel ID resolved by test user |
+~~~powershell
+# Windows; run in PowerShell:
+./scripts/build.ps1
+./scripts/build-installer.ps1
+~~~
 
-**Manual Telegram permission step:** Add the dedicated bot as an
-**administrator of the private test channel** and grant it *Post Messages*
-and *Delete Messages*. A bot cannot list all private channels by name, and
-GitHub Actions cannot infer a Telegram user's numeric channel ID from API
-ID and API hash alone. The local bootstrap handles the channel-ID lookup.
+~~~bash
+# Linux:
+bash scripts/build-linux.sh
+~~~
 
-If you only need the user-account mode, omit `--configure-bot`. The bot E2E
-will be skipped until its bot token is configured. Do not give the bot access
-to personal or production channels.
+![Desktop dashboard](website/public/images/dashboard.png)
+![Upload queue](website/public/images/upload-queue.png)
+![Settings](website/public/images/settings.png)
 
-#### Automated CI and tests
+### Headless folder uploader
 
-- `.github/workflows/live-telegram-user.yml`: real **user account** E2E.
-- `.github/workflows/live-telegram-bot.yml`: real **bot account** E2E.
-- Both run on pushes to `main` and `feature/docker-webui-multiaccount`,
-  as well as manual dispatch. They **skip with a notice when credentials
-  are not configured**; a green skipped run is not proof of real access.
-- `tests/test_telegram_target_resolution.py` and `tests/test_bot_storage.py`
-  run offline on Security CI, without any Telegram secrets.
-- Each live test uploads a fresh 4,097-byte object in three Telegram
-  messages, downloads and verifies its SHA-256, tests a cross-chunk
-  [start,end) range, and deletes only the message IDs recorded for the run.
+The original Telethon scanner can run without a GUI:
 
-The **official cloud Bot API** currently permits uploads up to 50 MB but
-downloads only up to **20 MB per file**, so use bot chunk sizes at or below
-16 MiB for production-like workloads; larger Telegram user account chunks
-do not have that same Bot API restriction. The Bot API index records metadata,
-not payload bytes. Recovery after a remote upload succeeds but before
-SQL journaling completes needs further work in bot mode.
+~~~bash
+cp examples/config.desktop.yaml local-config.yaml
+# Edit credentials, source root, target and database settings first.
+python -m teledrive.uploader --config local-config.yaml --scan-only
+python -m teledrive.uploader --config local-config.yaml --run-once
+~~~
 
-Keep both tokens and sessions out of chat messages, screenshots, CI logs and
-source control. Revoke a compromised user session in Telegram Settings →
-Devices, or regenerate a compromised bot token through @BotFather. Real
-Telegram E2E runs **cannot succeed** until their required credentials and
-permissions exist. Workflow dispatch requires the YAML to be on the repo's
-default branch; push-triggered runs can run directly on the feature branch.
+WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. This legacy folder scanner uses a distinct upload path from the shared REST/S3 durable-job API; use the latter to make new local files immediately addressable by S3.
+
+### Telegram account setup
+
+1. Get a Telegram `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org/apps).
+2. Choose `me`, a permitted channel username, or an appropriate numeric chat ID as the user-account uploader destination.
+3. Authenticate with the Telegram code and, if enabled, 2FA password.
+4. Test a small scan/upload and confirm readback before enabling scheduling.
+
+A BotFather token is **not** required for the legacy user-account uploader; it **is** required for the REST/S3 object service. Never put account sessions, API hashes or Bot tokens in committed configuration.
+
+## 7. Database configuration
+
+Configure `state.database_url` in the YAML configuration or Web UI. SQLite needs no external server; the server image includes drivers for the tested PostgreSQL and MySQL/MariaDB integrations. Other synchronous SQLAlchemy dialects may work with separately reviewed drivers but are **not certified merely by accepting their URLs**.
+
+~~~yaml
+state:
+  database_url: "sqlite:////data/state.db"
+~~~
+
+Representative alternatives:
+
+~~~text
+postgresql+psycopg://user:password@db:5432/teledrive
+mysql+pymysql://user:password@db:3306/teledrive
+~~~
+
+For additional reviewed packages, set `TELEDRIVE_DB_EXTRA_PACKAGES` in `.env` and rebuild the Docker image. Some database drivers require OS libraries in a derived Docker image. Enable DB TLS remotely and use least-privilege credentials. Back up the DB together with Telegram access and the S3 master key; see [Backup and Restore](docs/BACKUP_RESTORE.md).
+
+## 8. Security and operational limits
+
+- Keep WebUI/REST/S3 on loopback unless protected by an HTTPS reverse proxy or VPN.
+- Treat session files, `.env`, Bot tokens, `config.yaml`, the S3 master key and SQL backups as secrets.
+- Docker defaults include non-root execution, a read-only filesystem, capability drops and a read-only source mount.
+- Never assume a successful database-only restore is proof of original Telegram media recovery.
+- Never enable automatic physical Telegram deletion or bypass unresolved ACK/reference fences.
+- Use [Security Policy](docs/SECURITY.md) to report vulnerabilities privately and [Project Status](docs/IMPLEMENTATION_STATUS.md) to distinguish development CI from production acceptance.
+
+## 9. Development and testing
+
+The standalone Astro marketing site under [`website/`](website/) is **not** the Docker administration UI:
+
+~~~bash
+cd website
+npm ci
+npm run dev
+npm run build
+~~~
+
+Repository layout:
+
+| Directory | Purpose |
+| --- | --- |
+| `teledrive/` | Telegram uploader, object engine, SQL state, recovery, API/transport adapters |
+| `web/` | Unified WebUI/REST/S3 ASGI service and admin interface |
+| `app/` | PySide6 desktop application |
+| `scripts/` | Setup, maintenance, CI and desktop packaging |
+| `examples/` | Desktop and Docker configuration examples |
+| `tests/` | Offline regression, integration and live test contracts |
+| `.github/workflows/` | Categorized GitHub Actions pipelines |
+| `.github/ci/` | Workflow-specific supporting Docker assets |
+| `website/` | Marketing website |
+
+~~~bash
+python -m pip install -r requirements/server.txt pytest
+python -m pytest -q
+python -m compileall -q teledrive web app tests
+docker compose config --quiet
+# Isolated fault-injection acceptance:
+bash scripts/run_docker_fault_injection.sh
+~~~
+
+The nine normal GitHub Actions workflows validate a given commit. Real Bot, user and multiworker tests use dedicated, private **test-only** Telegram credentials. For setup, run `python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot` from a trusted local machine; the bot must be an admin of that channel. Never upload live credentials to GitHub issues or the repository. See [CI and Test Guide](docs/CI_WORKFLOWS.md) for workflow names, command details, evidence and acceptance boundaries.
 
 ## Credits and license
 
-Originally created by [Amjad P A](https://github.com/amjadlle/TeleDrive). This is the [babico/TeleDrive fork](https://github.com/babico/TeleDrive) with Docker and multi-account enhancements. Licensed under [MIT](LICENSE); see [CONTRIBUTING.md](CONTRIBUTING.md) for contributions.
-
-
-### P1 durable local upload jobs, history and recovery controls
-
-An authenticated root administrator can use **API Management** to enqueue
-a local file under a configured source root, process one job, inspect its
-SQL-persistent state, and explicitly retry failures:
-
-- `TELEDRIVE_JOB_SOURCE_ROOT=/data/uploads` confines all permitted source
-  files; files outside it and symlinks are rejected. A valid root is mandatory
-  for these operations; otherwise the API fails closed.
-- `TELEDRIVE_JOB_AUTO_RUN=1` opts into the service's SQL-fenced job worker.
-  It is **disabled by default**. Keep the original source file available
-  until the job is marked `done`.
-- Jobs verify the source inode, size and high-resolution modification time
-  before and after Telegram upload; a changed source fails rather than
-  publishing unexpected bytes. Generation and immutable ID conditions guard
-  against competing S3/REST writers.
-- Staged READY manifests survive SQL restart and can be published by a
-  replacement worker without sending Telegram chunks again. If a process
-  crashes before its stage record is saved, a retry may re-upload bytes
-  from the beginning; historical and unindexed messages remain retained
-  for independent, ownership-verified cleanup.
-- Root-admin `/api/v1/admin/storage/pending-stale` and
-  `/api/v1/admin/storage/health` expose safe recovery and health data.
-  Explicit PENDING abandonment requires Basic authentication, CSRF and
-  an expired SQL lease. No physical deletion is performed.
-- New published versions are indexed. Admin history/restore creates a
-  new immutable alias of existing Telegram chunks. A dry-run-first
-  `/api/v1/admin/storage/versions/index-current` can register current
-  pre-upgrade HEADs, but must not invent already superseded versions.
-  S3 GET/HEAD can read a proven published `versionId`, including Range.
-- `/api/v1/admin/storage/gc-candidates` is a retention-aware **preview** of
-  aged FAILED manifests only; it never approves deletion and always requires
-  later remote Telegram history verification.
-
-Full automatic chunk-by-chunk resume, S3 lifecycle/SSE/bucket policies,
-complete ListObjectVersions, Bot API historical orphan discovery,
-version-aware physical GC, legacy metadata migration, and production
-disaster-recovery acceptance remain separate workstreams.
+Originally created by [Amjad P A](https://github.com/amjadlle/TeleDrive). Maintained here as the [babico/TeleDrive fork](https://github.com/babico/TeleDrive), with Docker, multi-account, REST/S3 and recovery enhancements. Licensed under [MIT](LICENSE).

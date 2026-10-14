@@ -1,32 +1,35 @@
-# TeleDrive · release closure TODO (tracked)
+# Engineering Checklist
 
-Date: 2026-10-14. Primary objective: close the **supported P0/P1 development scope**, publish a bounded release, then freeze feature additions until a new planning cycle. Do not conflate P2 with a prerequisite for releasing the completed P0/P1 subset.
+> **Purpose:** short, actionable development and release tasks. For decisions and evidence limits, see [Project Status](docs/IMPLEMENTATION_STATUS.md). For commands and CI contracts, see [CI and Test Guide](docs/CI_WORKFLOWS.md).
 
-## Completed
-- [x] Verify all nine original CI workflows passed at the same `a7e3adf` baseline.
-- [x] P0 supported-scope development approval, with explicit unsupported S3/production limitations.
-- [x] P1 disposable Docker development acceptance: 13 gates, real PostgreSQL, two WebUI instances, restoration and scoped cleanup.
-- [x] P1 dedicated test-channel Bot, User and PostgreSQL Multiworker checks on original green baseline.
-- [x] Regroup GitHub Actions by Quality / Integration / Resilience / Live Telegram / Delivery, preserve workflow paths and triggers.
-- [x] Remove stale 77kB implementation-status narration and replace with concise current acceptance/backlog.
+## 1. Verified milestones
 
-## Required before release signoff
-- [x] Verify eight independent CI workflows on released v1.0.7 source SHA; Release publishing also succeeded (a second duplicate attempt correctly refused overwrite).
-- [x] Prepare version 1.0.7 and verify that v1.0.7 tag/release do not already exist. Release publication is gated by all eight independent CI workflows on the **same SHA**.
-- [x] Verify Linux/Windows assets and v1.0.7 tagged GitHub Release exist.
-- [x] Record release [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7), source `747747652cd1ca36878453d49daf627d8c0a60ad`, and existing CI evidence; new P2 work is unreleased development, not a silent change to v1.0.7.
+- [x] Publish [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7) from `747747652cd1ca36878453d49daf627d8c0a60ad` with Linux and Windows release assets.
+- [x] Validate the bounded REST/S3/desktop storage feature set and 13-gate disposable Docker fault-injection acceptance.
+- [x] Exercise real Bot API, user MTProto and multiworker PostgreSQL transfer scenarios against dedicated test Telegram targets.
+- [x] Provide shared REST/S3/local-job object catalog and a single WebUI/REST/S3 Docker container.
+- [x] Implement guarded metadata recovery, owner-verified isolated Telegram rebuild (atomic bounded multi-object batches), and the offline two-person production-evidence verifier.
+- [x] Verify all nine standard GitHub Actions workflows successfully on development commit `aa44bd67e01495ad590af4460350cab1da8c28ac`. This does **not** change the contents of v1.0.7.
 
-## Deliberately not signed off as P0/P1
-- [x] Recheck SQL HEAD/version/alias/multipart/Bot ACK references before recovery cleanup; add regression tests.
-- [ ] Authorize **physical** version-aware Telegram GC only with a sealed independent payload backup, complete ownership proof, two-person approval and a tested replacement/recovery plan. It remains disabled.
-- [ ] P2 advanced S3 lifecycle/policies/SSE/full SDK parity.
-- [x] Add owner-proofed Telegram rebuild with **atomic 1–128 object batches**, exact message/SHA evidence, pre-publication 0600 permissions, and rollback-on-staging-error tests.
-- [ ] Full original-channel history discovery, safe migration and long-duration physical-host capacity benchmarks (requires owner-held data/hosts).
-- [x] Add dual-attested, fail-closed offline production-evidence verifier for soak/original-media DR/cutover reports.
-- [ ] Conduct **actual** 1h+ physical multi-host soak, original-channel DR and owner-approved legacy cutover (or signed no-legacy exemption) on a real installation.
+## 2. Engineering backlog
 
-A green check covers **its exact source SHA** only. P2/production scope: [Implementation Status](docs/IMPLEMENTATION_STATUS.md). Keep physical Telegram deletion OFF.
+- [ ] Implement full version-aware, writer-fenced physical garbage collection **only after** sealed independent payload backup, ownership/alias/retention checks, an actual restore drill and explicit two-person approval.
+- [ ] Extend trustworthy recovery of unknown original Telegram history without inventing bucket/key or missing version metadata.
+- [ ] Complete tested S3 capabilities beyond the documented subset (for example lifecycle, policies, SSE and currently unsupported checksum modes).
+- [ ] Establish longer-duration real-environment capacity benchmarks on owner-controlled infrastructure.
 
-Release candidate: `v1.0.7`. The marker commit `[publish-release]` requests artifact builds and publishing; missing/failed required workflows must block the release. No unrelated feature additions should be merged after a successful release.
+## 3. Operator-only production sign-off
 
-References: [Tek proje durumu, P0/P1, production ve P2](docs/IMPLEMENTATION_STATUS.md) · [CI ve Docker DEV acceptance](docs/CI_WORKFLOWS.md). Never mark live operator-only gates complete using synthetic fixtures.
+- [ ] Collect independently verified identities from physically distinct deployment hosts sharing the intended SQL database.
+- [ ] Rehearse original-media recovery using the owner's sealed SQL archive, Telegram credentials and real channel without overwriting production data.
+- [ ] Conduct the authorized physical soak; capture genuine telemetry without deliberately flooding Telegram.
+- [ ] Perform legacy cutover only when a real legacy source exists, otherwise obtain the explicit signed no-legacy exemption.
+- [ ] Validate independent owner/operator approvals with `scripts/verify_production_bundle.py`; never infer sign-off from a synthetic CI fixture.
+
+## 4. Release decision rules
+
+- [ ] For any **new** release candidate, require all mandatory checks to pass on **that exact SHA**; previous green commits cannot be reused as proof.
+- [ ] Review binaries, tag, release metadata and supported-feature limits before publication; do not silently publish unreleased `main` features as v1.0.7.
+- [ ] Keep automatic physical Telegram deletion disabled until its independent safety conditions are verified.
+
+**Reference:** [Project Status and Acceptance](docs/IMPLEMENTATION_STATUS.md) · [CI and Test Guide](docs/CI_WORKFLOWS.md) · [Backup and Restore](docs/BACKUP_RESTORE.md).

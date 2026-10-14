@@ -922,3 +922,58 @@ def test_general_purpose_test_file_names_not_roadmap_phases():
         assert not re.match(r"test_(?:p0|p1|p2|s3_p0)(?:_|\\.)", path.name), path.name
     for script in (ROOT / "scripts").glob("*.py"):
         assert not re.match(r"(?:p0|p1|p2)_", script.name), script.name
+
+
+def test_public_markdown_is_english_structured_and_locally_linked():
+    """Keep public guides consistent after the documentation consolidation."""
+    from urllib.parse import unquote
+
+    guides = (
+        "README.md",
+        "CONTRIBUTING.md",
+        "TODO.md",
+        "docs/CI_WORKFLOWS.md",
+        "docs/IMPLEMENTATION_STATUS.md",
+        "docs/BACKUP_RESTORE.md",
+        "docs/SECURITY.md",
+        "website/public/knowledge.md",
+    )
+    turkish_glyphs = re.compile(r"[ğĞıİşŞçÇöÖüÜ]")
+    for name in guides:
+        path = ROOT / name
+        content = path.read_text(encoding="utf-8")
+        # Markdown fence contents may contain shell comments beginning '#'.
+        # Those are source code, not document headings.
+        prose_lines = []
+        fenced = False
+        for line in content.splitlines():
+            if line.startswith(("~~~", "```")):
+                fenced = not fenced
+                continue
+            if not fenced:
+                prose_lines.append(line)
+        prose = "\n".join(prose_lines)
+        headings = re.findall(r"(?m)^#{1,6} (.+)$", prose)
+        assert content.startswith("# ") and len(
+            re.findall(r"(?m)^# ", prose)
+        ) == 1, name
+        assert sum(heading[0].isdigit() for heading in headings[1:]) >= 3, name
+        assert not turkish_glyphs.search(content), name
+
+        for target in re.findall(r"!?\[[^\]]*\]\(([^)]+)\)", content):
+            target = target.split("#", 1)[0].strip()
+            if not target or target.startswith(
+                ("http://", "https://", "mailto:", "data:")
+            ):
+                continue
+            resolved = (path.parent / unquote(target)).resolve()
+            assert resolved.is_relative_to(ROOT), (name, target)
+            assert resolved.exists(), (name, target)
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docker compose up -d --build" in readme
+    assert "one container" in readme.lower()
+    assert "a separate Docker Compose profile" not in readme
+    knowledge = (ROOT / "website/public/knowledge.md").read_text("utf-8")
+    assert "github.com/babico/TeleDrive" in knowledge
+    assert "TeleDrive-Setup-1.0.6" not in knowledge
