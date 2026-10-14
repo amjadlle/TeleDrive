@@ -255,7 +255,7 @@ def test_production_acceptance_dr_ack_cutover_gates_are_run_in_ci():
             assert path in content, (filename, path)
 
 
-def test_explicit_multi_process_live_postgres_bot_acceptance_not_auto_spammed():
+def test_mainline_multi_process_live_postgres_bot_acceptance():
     name = "telegram-multiworker-e2e.yml"
     path = WORKFLOWS / name
     assert path.is_file()
@@ -265,7 +265,7 @@ def test_explicit_multi_process_live_postgres_bot_acceptance_not_auto_spammed():
     assert "push" in wf["on"] and "pull_request" not in wf["on"]
     assert wf["permissions"]["contents"] == "read"
     job = wf["jobs"]["three-process-telegram"]
-    assert "concurrency" not in wf  # skipped opt-in may not evict Bot queue
+    assert "concurrency" not in wf  # job-level serialization with Bot E2E
     assert job["concurrency"]["cancel-in-progress"] == "false"
     assert job["concurrency"]["group"] == workflow(
         "telegram-bot-e2e.yml"
@@ -275,8 +275,7 @@ def test_explicit_multi_process_live_postgres_bot_acceptance_not_auto_spammed():
     )["concurrency"]["group"]
     assert "postgres" in job["services"]
     assert "postgres:17-alpine" in job["services"]["postgres"]["image"]
-    assert "[p1-live-multiworker]" in job["if"]
-    assert "workflow_dispatch" in job["if"]
+    assert "if" not in job  # every main push runs the P1 multiworker acceptance
     assert "TELEDRIVE_E2E_BOT_TOKEN" in job["env"]
     assert "TELEDRIVE_E2E_BOT_CHAT_ID" in job["env"]
     assert "DB_TEST_POSTGRES_URL" in job["env"]
@@ -705,8 +704,8 @@ def test_mainline_only_push_triggers_after_p1_merge(name):
     assert "feature/docker-webui-multiaccount" not in branches, name
 
 
-def test_p1_multiworker_marker_runs_the_three_process_job_without_regular_bot_collision():
-    """A mainline one-shot multiworker acceptance does not queue Bot twice."""
+def test_p1_multiworker_runs_on_main_without_regular_bot_collision():
+    """Multiworker runs on every main push and shares the Bot writer lock."""
     bot = workflow("telegram-bot-e2e.yml")
     worker = workflow("telegram-multiworker-e2e.yml")
     regular = bot["jobs"]["telegram-bot-roundtrip"]
@@ -714,8 +713,7 @@ def test_p1_multiworker_marker_runs_the_three_process_job_without_regular_bot_co
     assert "[p1-live-multiworker]" in regular["if"]
     assert "github.event_name != 'push'" in regular["if"]
     assert "!contains" in regular["if"]
-    assert "[p1-live-multiworker]" in triple["if"]
-    assert "github.event_name == 'workflow_dispatch'" in triple["if"]
+    assert "if" not in triple  # no opt-in marker required for P1 acceptance
     assert triple["concurrency"]["group"] == bot["concurrency"]["group"]
     assert bot["concurrency"]["cancel-in-progress"] == "false"
     assert triple["concurrency"]["cancel-in-progress"] == "false"
