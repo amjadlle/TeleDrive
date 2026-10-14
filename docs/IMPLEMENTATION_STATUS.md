@@ -937,3 +937,53 @@ verification and explicit retention approvals are implemented.
   credentials, real infrastructure DR, multi-host 429/revocation soak or
   the upstream S3 lifecycle extensions. Those remain explicit acceptance
   and subsequent-priority work.
+
+## P1 production blockers — code-level closure and acceptance boundary (2026-10-14)
+
+The remaining four production items now have executable, bounded operator
+paths and explicit CI contracts. Detailed non-destructive procedures live in
+`docs/P1_PRODUCTION_ACCEPTANCE.md`.
+
+- **Lost Bot ACK:** `teledrive/storage/receipt_reconcile.py` and
+  `scripts/reconcile_bot_receipt.py` require the exact immutable SQL
+  pre-send intent, known Bot file ID, independent Telethon channel message
+  ID and its original `teledrive:<object>:<ordinal>:<sha-prefix>` caption.
+  The Bot and user clients each download the full remote bytes; SHA-256 and
+  size must agree before optional `--apply` commits the receipt. Default
+  dry run does not mutate the index. Wrong message, channel, caption,
+  checksum, size, account and replay are fail-closed negative tests.
+  **A missing original Bot file ID cannot be invented or automatically
+  reconstructed from Bot API history.** Owner evidence is indispensable.
+- **Cross-worker Bot pacing / 429:** durable
+  `storage_bot_chat_send_slots` SQL table serializes each pair's send starts
+  across processes; a *definite* Telegram 429 propagates bounded cooldown
+  to other SQL-sharing workers. SQLite separate-process tests and six
+  concurrent clients on actual PostgreSQL 17 / MySQL 8.4 test the race.
+  A dedicated opt-in `telegram-multiworker-e2e.yml` suite uses three
+  separate OS processes, real PostgreSQL TCP and the configured live
+  **test** Bot channel, checking all original Telegram bytes before only
+  test-owned message cleanup. The normal Bot E2E and multiworker runs
+  share one serialized GitHub channel lock.
+- **DR:** `scripts/rehearse_telegram_dr.py` validates a checksum-pinned
+  SQLite online backup, restores to a disposable SQL copy, and performs
+  read-only verified Telegram full-byte and Range recovery via the real
+  Bot file index. Tests cover 0/1/65537/262147 B, SQL snapshots, corrupted
+  remote bytes, corrupted backups, wrong buckets and bounded object sizes.
+  Separate database CI already runs native PostgreSQL/MySQL dump+restore
+  into isolated databases. These are staging/sandbox tests unless a
+  production operator supplies original credentials and independent
+  recovery evidence.
+- **Legacy cutover:** `teledrive/storage/cutover_acceptance.py` and
+  `scripts/verify_legacy_cutover.py` verify every eligible local file
+  against its exact deduplicated finished job, current HEAD, local source
+  digest and *independently downloaded Telegram content*. A missing job,
+  changed source, wrong remote bytes, truncated scan or max-size mismatch
+  blocks acceptance; exclusions are reported. The verifier never uploads,
+  deletes or initiates production cutover; existing durable leased cutover
+  performs the separately authorized migration.
+
+The technical implementation and CI acceptance are **not** permission to
+touch production. Real original Telegram channel provenance, production
+secrets, actual physically separate host soak, live backup DR and
+business-authorized legacy read cutover remain external operator signoffs.
+Do not mark P1 fully finished until those distinct production receipts exist.
