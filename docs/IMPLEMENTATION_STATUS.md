@@ -1096,3 +1096,24 @@ Do not mark P1 fully finished until those distinct production receipts exist.
   acceptance. The repository Secret migration, real multi-host Telegram soak,
   production-representative DR and authorized legacy cutover still require
   external operator evidence. Latest-SHA CI signoff must be checked again.
+
+
+## P1 zero-throttle cross-worker Bot 429 safety (2026-10-14)
+
+- A Bot transport configured with `min_upload_interval=0` previously
+  bypassed the SQL send slot, shared 429 observation and shared cooldown
+  publication. A late definitive 429 could therefore be ignored by other
+  unpaced workers sharing the same Telegram channel.
+- Zero pacing now still initializes/updates the channel's SQL coordination
+  row, observes any newer server cooldown before sending, and commits
+  verified 429 `retry_after` into the shared SQL cooldown journal.
+  The zero setting continues to disable *proactive fixed-gap throttling*;
+  it does **not** authorize bypassing Telegram's own rejection interval.
+- New real-SQL tests cover two independent SQLite sessions, zero pacing
+  with a late shared cooldown, an  HTTP 429 longer than the retry threshold
+  with zero remote success and durable 61-second cross-worker visibility,
+  and account/channel isolation. CI executes these via
+  `tests/test_bot_rate_slots.py` in both Security and Storage API workflows.
+- Production physical multi-host rate-limit acceptance is still open:
+  SQL-sharing deterministic tests and one process on CI do not substitute
+  for an independently evidenced one-hour deployment soak.
