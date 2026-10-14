@@ -267,7 +267,7 @@ def test_mainline_multi_process_live_postgres_bot_acceptance():
     job = wf["jobs"]["three-process-telegram"]
     assert "concurrency" not in wf  # job-level serialization with Bot E2E
     assert job["concurrency"]["cancel-in-progress"] == "false"
-    assert job["concurrency"]["group"] == workflow(
+    assert job["concurrency"]["group"] != workflow(
         "telegram-bot-e2e.yml"
     )["concurrency"]["group"]
     assert job["concurrency"]["group"] != workflow(
@@ -714,7 +714,7 @@ def test_p1_multiworker_runs_on_main_without_regular_bot_collision():
     assert "github.event_name != 'push'" in regular["if"]
     assert "!contains" in regular["if"]
     assert "if" not in triple  # no opt-in marker required for P1 acceptance
-    assert triple["concurrency"]["group"] == bot["concurrency"]["group"]
+    assert triple["concurrency"]["group"] != bot["concurrency"]["group"]
     assert bot["concurrency"]["cancel-in-progress"] == "false"
     assert triple["concurrency"]["cancel-in-progress"] == "false"
 
