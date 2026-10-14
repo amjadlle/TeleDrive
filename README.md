@@ -180,9 +180,9 @@ assert client.get_object(Bucket="backup-bucket", Key="hello.txt")["Body"].read()
 | Buckets and listing | Create/Head/DeleteBucket; V1/V2 object listing, prefixes, delimiters, marker/continuation and URL encoding |
 | Objects | Put/Get/Head/Delete (logical unlink), Range, CopyObject, conditional GET/HEAD and signed conditional writes/deletes |
 | Multipart | UploadPart, Complete/Abort and guarded stale-completion recovery through an admin-only API |
-| Metadata and versions | Selected published VersionId reads/listing, always-Enabled bucket versioning and fixed private-only Public Access Block controls, object/bucket tags, metadata, CopySource, CORS and GetObjectAttributes (`ETag`/`ObjectSize` only) |
+| Metadata and versions | Selected published VersionId reads/listing, always-Enabled versioning, fixed private-only Public Access Block and incomplete-MPU lifecycle abort rules, object/bucket tags, metadata, CopySource, CORS and GetObjectAttributes (`ETag`/`ObjectSize` only) |
 | Checksums | SHA-256, SHA-1, Content-MD5, CRC32C and CRC64NVME validation where explicitly implemented |
-| Known gaps | General lifecycle, bucket policies, SSE, full AWS delete-marker semantics, every multipart POST variant and unverified clients |
+| Known gaps | Object lifecycle expiration/transitions, bucket policies, SSE, full AWS delete-marker semantics, every multipart POST variant and unverified clients |
 
 **Safety:** `UNSIGNED-PAYLOAD` writes are accepted only when an appropriately **signed, verifiable** checksum binds the actual received bytes. Public ACLs and unsupported archival tiers must not be inferred from AWS-style parameters. Failed conditional publications may retain protected, unpublished Telegram manifests rather than deleting uncertain remote media.
 

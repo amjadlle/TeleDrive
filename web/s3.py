@@ -41,6 +41,8 @@ from teledrive.s3.versioning import (VersioningError, MAX_VERSIONING_XML_BYTES,
     parse_versioning_xml, versioning_xml)
 from teledrive.s3.public_access import (PublicAccessError, MAX_PUBLIC_ACCESS_XML_BYTES,
     parse_public_access_xml, public_access_xml)
+from teledrive.s3.lifecycle import (LifecycleError, MAX_XML as MAX_LIFECYCLE_XML,
+    BucketLifecycleStore, parse_lifecycle_xml, lifecycle_xml)
 from teledrive.s3.object_metadata import (
     ObjectMetadataStore, ObjectMetadataError, parse_object_metadata, signed_header_names,
     STANDARD_HEADERS,
@@ -577,6 +579,14 @@ async def _handle(request: Request):
         is_bucket_cors = bool(bucket and not separator and "cors" in request.query_params)
         is_bucket_versioning = bool(bucket and not separator and "versioning" in request.query_params)
         is_public_access_block = bool(bucket and not separator and "publicAccessBlock" in request.query_params)
+        is_bucket_lifecycle = bool(bucket and not separator and "lifecycle" in request.query_params)
+        if is_bucket_lifecycle and (
+            len(request.query_params.getlist("lifecycle")) != 1
+            or request.query_params.get("lifecycle") != ""
+            or any(k != "lifecycle" and not k.startswith("X-Amz-")
+                   for k in request.query_params)
+        ):
+            return _error("InvalidArgument", "Ambiguous lifecycle selector", 400)
         if is_public_access_block and (
             len(request.query_params.getlist("publicAccessBlock")) != 1
             or request.query_params.get("publicAccessBlock") != ""
@@ -637,6 +647,12 @@ async def _handle(request: Request):
                 "GET": "s3:GetBucketPublicAccessBlock",
                 "PUT": "s3:PutBucketPublicAccessBlock",
             }.get(request.method)
+        elif is_bucket_lifecycle:
+            action = {
+                "GET": "s3:GetLifecycleConfiguration",
+                "PUT": "s3:PutLifecycleConfiguration",
+                "DELETE": "s3:PutLifecycleConfiguration",
+            }.get(request.method)
         elif bucket and not separator and "location" in request.query_params:
             action = "s3:GetBucketLocation" if request.method == "GET" else None
         elif mpu_start or mpu_part or mpu_complete:
@@ -653,6 +669,8 @@ async def _handle(request: Request):
             return _error("NotImplemented", "This multipart operation is unsupported", 501)
         # A selector on an object path must never silently degrade to a
         # regular object operation (particularly an unexpected DELETE).
+        if "lifecycle" in request.query_params and not is_bucket_lifecycle:
+            return _error("NotImplemented", "Lifecycle controls require bucket route", 501)
         if "publicAccessBlock" in request.query_params and not is_public_access_block:
             return _error("NotImplemented", "Public access control is bucket-only", 501)
         if "versioning" in request.query_params and not is_bucket_versioning:
@@ -662,7 +680,7 @@ async def _handle(request: Request):
         # Unknown control-plane query operations must not be misinterpreted as
         # ordinary object reads/writes (e.g. ?tagging, ?versioning, ?acl).
         unsupported = {
-            "acl", "versions", "lifecycle", "policy",
+            "acl", "versions", "policy",
             "notification", "replication",
             "retention", "legal-hold", "logging",
             "encryption", "object-lock", "versionId",
@@ -833,6 +851,31 @@ async def _handle(request: Request):
                         ET.SubElement(deleted, "DeleteMarkerVersionId").text = marker
                 return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml", status_code=200)
+            if is_bucket_lifecycle:
+                if bucket not in catalog.list_buckets():
+                    return _error("NoSuchBucket", "Bucket not found", 404)
+                rules = BucketLifecycleStore(catalog)
+                if request.method == "GET":
+                    value = rules.get(bucket)
+                    if value is None:
+                        return _error("NoSuchLifecycleConfiguration", "No lifecycle configuration", 404)
+                    return Response(lifecycle_xml(value), media_type="application/xml")
+                if request.method == "PUT":
+                    data = bytearray()
+                    async for block in request.stream():
+                        data.extend(block)
+                        if len(data) > MAX_LIFECYCLE_XML:
+                            raise LifecycleError("MalformedXML", "Lifecycle XML exceeds 32 KiB")
+                    _verify_bucket_control_payload(request, bytes(data))
+                    rules.replace(bucket, parse_lifecycle_xml(bytes(data)))
+                    return Response(status_code=200)
+                if request.method == "DELETE":
+                    async for block in request.stream():
+                        if block:
+                            raise LifecycleError("InvalidRequest", "DeleteBucketLifecycle cannot have body")
+                    rules.replace(bucket, None)
+                    return Response(status_code=204)
+                return _error("NotImplemented", "Unsupported lifecycle method", 501)
             if is_public_access_block:
                 if bucket not in catalog.list_buckets():
                     return _error("NoSuchBucket", "Bucket does not exist", 404)
@@ -1645,6 +1688,8 @@ async def _handle(request: Request):
             response.headers["Connection"] = "close"
         return response
     except BatchDeleteError as exc:
+        return _error(exc.code, str(exc), exc.status)
+    except LifecycleError as exc:
         return _error(exc.code, str(exc), exc.status)
     except PublicAccessError as exc:
         return _error(exc.code, str(exc), exc.status)

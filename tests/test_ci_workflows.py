@@ -1023,3 +1023,10 @@ def test_single_container_passes_opt_in_legacy_ingest_configuration():
     assert "tests/test_unified_service.py" in (
         WORKFLOWS / "integration-storage.yml"
     ).read_text()
+
+def test_real_s3_lifecycle_has_single_process_schedule_and_ci():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        commands = "\n".join(s.get("run","") for job in workflow(name)["jobs"].values()
+                             for s in job["steps"])
+        assert "tests/test_s3_lifecycle.py" in commands
+    assert "lifecycle_scheduler_loop()" in (ROOT / "web/app.py").read_text()

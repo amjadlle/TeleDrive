@@ -491,9 +491,28 @@ async def upload_job_scheduler_loop() -> None:
                 conn.close()
 
 
+async def lifecycle_scheduler_loop() -> None:
+    """Apply bounded SQL-only lifecycle rules hourly, in this one process."""
+    while True:
+        connection = None
+        try:
+            from teledrive.s3.lifecycle import BucketLifecycleStore
+            connection = db_connect()
+            cat = BucketCatalog(ManifestStore(connection))
+            BucketLifecycleStore(cat).apply_due(now=int(time.time()), limit=100)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOG_BUFFER.append("[web] lifecycle scheduler: " + type(exc).__name__)
+        finally:
+            if connection is not None:
+                connection.close()
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global scheduler_task, upload_job_scheduler_task
+    global scheduler_task, upload_job_scheduler_task, lifecycle_scheduler_task
     os.umask(0o077)
     if not WEB_PASSWORD and not ALLOW_INSECURE:
         raise RuntimeError(
@@ -509,12 +528,16 @@ async def lifespan(_: FastAPI):
         LOG_BUFFER.append(_scrub_text(f"[web] startup database warning: {exc}"))
     scheduler_task = asyncio.create_task(scheduler_loop())
     upload_job_scheduler_task = asyncio.create_task(upload_job_scheduler_loop())
+    lifecycle_scheduler_task = asyncio.create_task(lifecycle_scheduler_loop())
     yield
     if scheduler_task:
         scheduler_task.cancel()
     if upload_job_scheduler_task:
         upload_job_scheduler_task.cancel()
         await asyncio.gather(upload_job_scheduler_task, return_exceptions=True)
+    if lifecycle_scheduler_task:
+        lifecycle_scheduler_task.cancel()
+        await asyncio.gather(lifecycle_scheduler_task, return_exceptions=True)
     await stop_uploader()
 
 
