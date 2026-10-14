@@ -11,7 +11,6 @@ on:
   push:
     branches:
       - main
-      - feature/docker-webui-multiaccount
 
 permissions:
   contents: read

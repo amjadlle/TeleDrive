@@ -1139,3 +1139,25 @@ Do not mark P1 fully finished until those distinct production receipts exist.
 - Revalidate the seven standard checks at the newest SHA. True physical
   multi-host 429 soak, production-representative DR and authorized legacy
   cutover remain operator-controlled acceptance gates.
+
+
+## P1 follow-up integration: PR #5 (2026-10-14)
+
+- The base P1 PR #4 is already merged. This follow-up hardens all-SHA
+  Security, Database, Desktop, Storage API and release checks and
+  strengthens the CI contract test coverage; avoid an indefinitely
+  open CI-only PR after review.
+- The retired `feature/docker-webui-multiaccount` push trigger was
+  removed from all eight active workflows: `main` is the release
+  candidate and the only normal push CI source.
+- Dedicated Bot E2E and opt-in PostgreSQL multiworker share a repo-scoped
+  Telegram writer group; Telethon user E2E uses its own group to protect
+  each required lane from GitHub pending-run eviction.
+- A real Bot E2E with opt-in 19 MiB + 7 B payload caught an **invalid
+  test assumption**, not a data corruption: 19 MiB fixed chunk sizing
+  necessarily produced two physical Telegram messages. The single-chunk
+  test now configures `chunk_size=size` so the 19 MiB + 7 B case really
+  probes one Telegram document near the 20 MiB download cap.
+  The normal checksum, byte retrieval and Range assertions remain.
+- Passing merge/CI alone does not establish physical multi-host 429
+  soak, operator DR restore or authorized legacy cutover acceptance.

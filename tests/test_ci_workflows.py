@@ -692,3 +692,13 @@ def test_critical_ci_is_unfiltered_at_every_commit_sha():
             assert "paths" not in events[trigger]
             assert "paths-ignore" not in events[trigger]
     assert "paths" not in workflow("release.yml")["on"]["push"]
+
+
+@pytest.mark.parametrize("name", EXPECTED)
+def test_mainline_only_push_triggers_after_p1_merge(name):
+    """Keep retired development branches out of release-gating workflows."""
+    config = workflow(name)
+    assert "push" in config["on"]
+    branches = config["on"]["push"].get("branches", [])
+    assert "main" in branches, name
+    assert "feature/docker-webui-multiaccount" not in branches, name

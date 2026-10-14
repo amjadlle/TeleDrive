@@ -411,8 +411,10 @@ def test_live_bot_real_payload_size_matrix_and_sql_restart(size, chunk_size):
 def test_live_bot_large_single_chunk_roundtrip_below_download_cap(size):
     """Real Telegram large-chunk path: verify single 5/16/19 MiB documents.
 
-    Bot file downloads are capped at 20 MiB; these cases deliberately stay
-    below that limit while crossing S3's 5 MiB multipart part boundary.
+    Each scenario configures a chunk size equal to the payload, including the
+    19 MiB + 7 B boundary case. A fixed 19 MiB chunk would silently split that
+    boundary into two Telegram messages, defeating this single-chunk test.
+    Bot downloads are capped at 20 MiB; every test size remains below it.
     """
     token = os.getenv("TELEDRIVE_E2E_BOT_TOKEN", "")
     chat_id = os.getenv("TELEDRIVE_E2E_BOT_CHAT_ID", "")
@@ -435,7 +437,7 @@ def test_live_bot_large_single_chunk_roundtrip_below_download_cap(size):
             try:
                 await transport.verify_target()
                 engine = TelegramObjectStorage(
-                    ManifestStore(conn), transport, chunk_size=19 * 1024 * 1024,
+                    ManifestStore(conn), transport, chunk_size=size,
                     scratch_directory=root,
                 )
                 obj = await engine.put_file("ci-large", "size-boundary.bin", original)
