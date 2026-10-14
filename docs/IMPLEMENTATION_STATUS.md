@@ -1161,3 +1161,27 @@ Do not mark P1 fully finished until those distinct production receipts exist.
   The normal checksum, byte retrieval and Range assertions remain.
 - Passing merge/CI alone does not establish physical multi-host 429
   soak, operator DR restore or authorized legacy cutover acceptance.
+
+
+## 2026-10-14: P1 final acceptance campaign, mainline-only
+
+Priority order: **(1) live opt-in multiworker PostgreSQL/Bot byte-level
+roundtrip, (2) dedicated Bot 5/16/19 MiB and mixed-size soak with independent
+lost-ACK channel proof, (3) 5/16 MiB Telethon user readback, (4) immutable
+same-SHA seven-workflow checks, (5) operator-owned physical multi-host soak,
+original production backup restore and authorized legacy migration.**
+Only once the operator signoff evidence exists can P1 be called fully
+production-accepted; P2 physical GC/SSE/policy/lifecycle follows separately.
+
+A dedicated `[p1-live-multiworker]` push to `main` now **skips** the regular
+Bot E2E job for that push and runs the opt-in 3-process PostgreSQL/Telegram
+job instead. Both workflows still hold the same cross-ref Bot channel writer
+lock and refuse to interrupt in-progress uploads; regular pushes and
+workflow_dispatch still run standard Bot E2E. This prevents competing
+same-channel tests during a one-shot multiworker acceptance. The multiworker
+result must explicitly pass (not merely appear as a green skipped workflow).
+
+The previous merged head `fc582f4` passed all seven standard CI workflows.
+Its regular dedicated Bot run 38535792504 had 20 passed and 5 opt-in skipped.
+It is **not** an opt-in stress signoff. The later campaign runs must be
+checked on their own exact SHA.

@@ -32,6 +32,9 @@ concurrency:
 
 jobs:
   telegram-bot-roundtrip:
+    # A one-shot multiworker push must exercise just the multiworker writer,
+    # not also enqueue the normal Bot writer against the same channel.
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[p1-live-multiworker]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

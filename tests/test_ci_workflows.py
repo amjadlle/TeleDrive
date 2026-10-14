@@ -702,3 +702,19 @@ def test_mainline_only_push_triggers_after_p1_merge(name):
     branches = config["on"]["push"].get("branches", [])
     assert "main" in branches, name
     assert "feature/docker-webui-multiaccount" not in branches, name
+
+
+def test_p1_multiworker_marker_runs_the_three_process_job_without_regular_bot_collision():
+    """A mainline one-shot multiworker acceptance does not queue Bot twice."""
+    bot = workflow("telegram-bot-e2e.yml")
+    worker = workflow("telegram-multiworker-e2e.yml")
+    regular = bot["jobs"]["telegram-bot-roundtrip"]
+    triple = worker["jobs"]["three-process-telegram"]
+    assert "[p1-live-multiworker]" in regular["if"]
+    assert "github.event_name != 'push'" in regular["if"]
+    assert "!contains" in regular["if"]
+    assert "[p1-live-multiworker]" in triple["if"]
+    assert "github.event_name == 'workflow_dispatch'" in triple["if"]
+    assert triple["concurrency"]["group"] == bot["concurrency"]["group"]
+    assert bot["concurrency"]["cancel-in-progress"] == "false"
+    assert triple["concurrency"]["cancel-in-progress"] == "false"
