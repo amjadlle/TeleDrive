@@ -23,6 +23,10 @@ REPORT="$REPORT_DIR/p1-dev-$ID.json"
 cleanup() {
   rc=$?
   trap - EXIT
+  if [[ "$rc" -ne 0 ]]; then
+    echo "P1 DEV hata tanısı: yalnızca rastgele izole container logları:" >&2
+    "${COMPOSE[@]}" logs --no-color --tail=35 web-a web-b postgres scenarios >&2 || :
+  fi
   "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || :
   python3 - "$WORKSPACE/scenario/evidence" "$REPORT" "$rc" <<'PY'
 import json, os, pathlib, sys

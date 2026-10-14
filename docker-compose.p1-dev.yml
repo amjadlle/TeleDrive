@@ -49,13 +49,13 @@ services:
   web-a:
     <<: *web
     volumes:
-      - ${P1_DEV_WORKSPACE:?}/config:/config:ro
+      - ${P1_DEV_WORKSPACE:?}/config:/config
       - ${P1_DEV_WORKSPACE:?}/web-a:/data
       - ${P1_DEV_WORKSPACE:?}/uploads:/uploads:ro
   web-b:
     <<: *web
     volumes:
-      - ${P1_DEV_WORKSPACE:?}/config:/config:ro
+      - ${P1_DEV_WORKSPACE:?}/config:/config
       - ${P1_DEV_WORKSPACE:?}/web-b:/data
       - ${P1_DEV_WORKSPACE:?}/uploads:/uploads:ro
   scenarios:
