@@ -21,7 +21,7 @@
     },
     {
       "name": "ListBuckets",
-      "status": "partial",
+      "status": "supported",
       "workstream": "implemented"
     },
     {

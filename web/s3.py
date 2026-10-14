@@ -28,6 +28,7 @@ from sqlalchemy import select
 
 from teledrive.s3.credentials import S3CredentialStore, load_master_key
 from teledrive.s3.route_guard import validate_s3_query, S3QueryError
+from teledrive.s3.bucket_listing import list_buckets_xml, BucketListingError
 from teledrive.s3.checksums import crc32c, crc64nvme
 from teledrive.s3.sigv4 import SigV4Error, verify_header_signature
 from teledrive.s3.post_policy import parse_form, verify_post_policy, FORM_LIMIT
@@ -851,14 +852,10 @@ async def _handle(request: Request):
         catalog = BucketCatalog(ManifestStore(db))
 
         if not bucket:
-            root = ET.Element("ListAllMyBucketsResult", xmlns=NAMESPACE)
-            ET.SubElement(root, "Owner")
-            buckets_node = ET.SubElement(root, "Buckets")
-            for name in catalog.list_buckets():
-                entry = ET.SubElement(buckets_node, "Bucket")
-                ET.SubElement(entry, "Name").text = name
-            return Response(ET.tostring(root, encoding="utf-8", xml_declaration=True),
-                            media_type="application/xml")
+            return Response(
+                list_buckets_xml(catalog, request.query_params, master, owner),
+                media_type="application/xml",
+            )
 
         if not separator:
             if multi_delete:
@@ -1744,6 +1741,8 @@ async def _handle(request: Request):
     except BatchDeleteError as exc:
         return _error(exc.code, str(exc), exc.status)
     except S3QueryError as exc:
+        return _error(exc.code, str(exc), exc.status)
+    except BucketListingError as exc:
         return _error(exc.code, str(exc), exc.status)
     except LifecycleError as exc:
         return _error(exc.code, str(exc), exc.status)

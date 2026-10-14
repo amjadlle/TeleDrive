@@ -1033,7 +1033,7 @@ def test_real_s3_lifecycle_has_single_process_schedule_and_ci():
 
 def test_s3_compatibility_matrix_cannot_relabel_safe_lifecycle_as_full_aws():
     specs = (ROOT / "docs/S3_SPECS.md").read_text()
-    assert "**Inventory totals:** 7 supported, 31 partial, 78 unsupported;" in specs
+    assert "**Inventory totals:** 8 supported, 30 partial, 78 unsupported;" in specs
     for action in (
         "GetBucketLifecycleConfiguration", "PutBucketLifecycleConfiguration",
         "DeleteBucketLifecycle",
@@ -1078,3 +1078,18 @@ def test_bucket_tagging_promoted_contract_is_required_in_both_regression_ci():
         text = "\n".join(step.get("run", "")
             for job in workflow(name)["jobs"].values() for step in job["steps"])
         assert "tests/test_s3_tagging.py" in text
+
+
+def test_paginated_bucket_listing_contract_is_required_in_both_ci_suites():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        commands = "\n".join(s.get("run", "")
+            for job in workflow(name)["jobs"].values() for s in job["steps"])
+        assert "tests/test_s3_bucket_listing.py" in commands
+    specs = (ROOT / "docs/S3_SPECS.md").read_text()
+    action = "| [ListBuckets](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html)"
+    assert len([line for line in specs.splitlines() if line.startswith(action)]) == 1
+    assert any(line.startswith(action) and "✅ Supported" in line
+               for line in specs.splitlines())
+    import json
+    manifest = json.loads((ROOT / "teledrive/s3/operation_manifest.json").read_text())
+    assert next(x["status"] for x in manifest["operations"] if x["name"] == "ListBuckets") == "supported"

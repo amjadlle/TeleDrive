@@ -99,6 +99,29 @@ class BucketCatalog:
     def list_buckets(self) -> list[str]:
         return list(self.db.connection.execute(select(buckets.c.name).order_by(buckets.c.name)).scalars())
 
+    def list_bucket_records(self, *, prefix: str = "", after: str = "",
+                            limit: int = 10000) -> tuple[list[tuple[str, int]], bool]:
+        """SQL-only keyset page; return creation dates and a has-next marker.
+
+        LIKE patterns are escaped to preserve literal S3 prefixes. SQL never
+        materializes all matching buckets to serve a single bounded page.
+        """
+        if not 1 <= limit <= 10000:
+            raise ValueError("Invalid bucket page limit")
+        # Bucket names are strictly lowercase ASCII. SQLite LIKE can compare
+        # case-insensitively, so uppercase prefixes can never match.
+        if prefix != prefix.lower():
+            return [], False
+        statement = select(buckets.c.name, buckets.c.created_at)
+        if prefix:
+            statement = statement.where(buckets.c.name.startswith(prefix, autoescape=True))
+        if after:
+            statement = statement.where(buckets.c.name > after)
+        rows = self.db.connection.execute(
+            statement.order_by(buckets.c.name).limit(limit + 1),
+        ).all()
+        return [(str(r[0]), int(r[1])) for r in rows[:limit]], len(rows) > limit
+
     def get(self, bucket: str, key: str) -> ObjectHead:
         digest = self._keyhash(key)
         row = self.db.connection.execute(

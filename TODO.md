@@ -26,6 +26,7 @@
 - [x] Add 116-operation machine-readable S3 status manifest plus signature-independent, fail-closed selector validation and adversarial REST/S3 CI coverage.
 - [x] Implement scoped read-only GetBucketPolicyStatus as an honest private-only response with boto3 integration and negative policy tests.
 - [x] Complete AWS-compatible PutBucketTagging with 50 UTF-16-aware bucket tags, idempotent replacement, MD5/CRC validation and boto3 regression coverage.
+- [x] Complete ListBuckets: bounded SQL keyset pagination, Prefix/MaxBuckets/BucketRegion, tamper-proof scoped cursor, actual bucket creation times and boto3 clients.
 - [ ] Deliver [P2 Advanced S3](docs/S3_SPECS.md#5-p2-advanced-s3-implementation-plan) from the [116-operation S3 compatibility matrix](docs/S3_SPECS.md): fail-closed selectors, advanced multipart/checksums, policies, encryption, lifecycle and independent client tests. Keep partial capabilities explicitly partial until verified.
 - [x] Expose opt-in lease-fenced legacy folder ingestion in default single-container Compose and verify cross-interface REST/S3 readback from the shared catalog.
 - [ ] Establish longer-duration real-environment capacity benchmarks on owner-controlled infrastructure.

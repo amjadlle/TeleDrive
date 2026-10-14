@@ -12,6 +12,7 @@ from collections.abc import Mapping
 # Explicit allowlist of implemented selectors and their concrete parameters.
 # SDK ?x-id=OperationName is a non-authoritative hint, not a selector; the
 # signed HTTP method and URL are always authoritative for routing/auth.
+_ROOT_BUCKET_LIST = frozenset({"max-buckets", "prefix", "bucket-region", "continuation-token"})
 _BUCKET_GET_V1 = frozenset({
     "prefix", "delimiter", "marker", "max-keys", "encoding-type",
 })
@@ -60,7 +61,7 @@ def validate_s3_query(method: str, bucket: str, object_path: bool, params) -> No
             raise S3QueryError("InvalidArgument", "Invalid SDK operation hint", 400)
 
     if not bucket:
-        allowed = frozenset()
+        allowed = _ROOT_BUCKET_LIST if method == "GET" else frozenset()
     elif not object_path:
         control = real & _BUCKET_CONTROL
         if control:
