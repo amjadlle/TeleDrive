@@ -659,7 +659,7 @@ if __name__ == "__main__":
         main()
     elif len(sys.argv) == 1:
         raise SystemExit(subprocess.call([
-            "bash", str(ROOT / "scripts" / "run_p1_dev_acceptance.sh"),
+            "bash", str(ROOT / "scripts" / "run_docker_fault_injection.sh"),
         ], cwd=ROOT))
     else:
         raise SystemExit(

@@ -1309,18 +1309,18 @@ Default `python scripts/p1_acceptance_wizard.py` calls the
 noninteractive disposable Docker development acceptance campaign, and
 `--production` explicitly opts into the original operator wizard.
 
-`docker-compose.p1-dev.yml` runs two real TeleDrive Web/API processes,
+`docker-compose.fault-ci.yml` runs two real TeleDrive Web/API processes,
 PostgreSQL 17 and an isolated scenario runner on a network with no exposed
-host ports. `scripts/p1_dev_scenarios.py` creates entirely synthetic
+host ports. `scripts/docker_fault_scenarios.py` creates entirely synthetic
 file/media data using the real SQL manifest and upload engine, simulates
 an unjournaled Bot ACK, shared synthetic 429, authentic SQL backup/restore,
 checksum/Range verification and deliberate remote-byte corruption.
-`scripts/run_p1_dev_acceptance.sh` creates a unique Docker project and
+`scripts/run_docker_fault_injection.sh` creates a unique Docker project and
 deletes ONLY that project's containers/volumes and its `mktemp` workspace.
-A clean, credential-free `P1 Disposable Docker Development Acceptance`
+A clean, credential-free `TeleDrive Docker Fault Injection CI`
 workflow enforces the result on the relevant source changes. DEV pass is
 not real Telegram pass or production signoff; never equate the modes.
 
 Development criteria and expected receipts:
-`docs/P1_DEVELOPMENT_ACCEPTANCE.md`. Historic production gates remain
+`docs/DOCKER_FAULT_INJECTION.md`. Historic production gates remain
 separate and cannot block development-stage signoff.

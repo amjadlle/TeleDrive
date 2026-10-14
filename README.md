@@ -1,11 +1,11 @@
 # TeleDrive
 
-> **Development-stage P1 acceptance:** use `bash scripts/run_p1_dev_acceptance.sh`.
+> **Reusable Docker fault-injection suite:** use `bash scripts/run_docker_fault_injection.sh`.
 > It creates two isolated Docker WebUI services + PostgreSQL, injects
 > recoverable faults into synthetic media, verifies restore, and cleans up.
 > No production deployment, legacy cutover, Telegram session, Bot token
 > or real channel is required. See
-> [P1 Development Acceptance](docs/P1_DEVELOPMENT_ACCEPTANCE.md).
+> [Docker Fault Injection](docs/DOCKER_FAULT_INJECTION.md).
 > Real Telegram CI and production cutover are separate opt-in stages.
 
 

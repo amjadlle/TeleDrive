@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disposable Docker P1 DEV scenarios. Never connects to real Telegram.
+"""Disposable Docker DOCKER FAULT scenarios. Never connects to real Telegram.
 
 A disk-backed transport models Telegram media, while PostgreSQL, the
 production storage engine and two real Web API processes are not mocked.
@@ -26,12 +26,12 @@ from teledrive.storage.engine import IntegrityError, TelegramObjectStorage
 from teledrive.storage.gc import StorageGCInventory
 from teledrive.storage.manifest import ManifestStore
 
-SOURCE = Path(os.environ["P1_DEV_SOURCES"])
-REMOTE = Path(os.environ["P1_DEV_REMOTE_DIR"])
-EVIDENCE = Path(os.environ["P1_DEV_EVIDENCE_DIR"])
-DB_URL = os.environ["P1_DEV_DB_URL"]
-RESTORED_URL = os.environ["P1_DEV_RESTORED_DB_URL"]
-BUCKET = "p1-development-only"
+SOURCE = Path(os.environ["TELEDRIVE_FAULT_SOURCES"])
+REMOTE = Path(os.environ["TELEDRIVE_FAULT_REMOTE_DIR"])
+EVIDENCE = Path(os.environ["TELEDRIVE_FAULT_EVIDENCE_DIR"])
+DB_URL = os.environ["TELEDRIVE_FAULT_DB_URL"]
+RESTORED_URL = os.environ["TELEDRIVE_FAULT_RESTORED_DB_URL"]
+BUCKET = "docker-fault-only"
 CHAT = -100700800900123
 ACCOUNT = "fake-dev-telegram"  # NO Telegram network credentials, ever.
 
@@ -74,7 +74,7 @@ async def read_range(engine, identifier: str, a: int, b: int) -> bytes:
 
 def health(host: str, *, authorized=True):
     credential = base64.b64encode(
-        ("dev-operator:" + os.environ["P1_DEV_WEB_PASSWORD"]).encode()
+        ("dev-operator:" + os.environ["TELEDRIVE_FAULT_WEB_PASSWORD"]).encode()
     ).decode("ascii")
     headers = {"Authorization": "Basic " + credential} if authorized else {}
     req = urllib.request.Request(
@@ -276,7 +276,7 @@ def verify_restored():
 
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in ("seed", "restored"):
-        raise SystemExit("Usage: p1_dev_scenarios.py seed|restored")
+        raise SystemExit("Usage: docker_fault_scenarios.py seed|restored")
     if sys.argv[1] == "seed":
         seed()
     else:

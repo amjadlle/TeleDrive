@@ -5,7 +5,7 @@
 > live host, production backup, or one-hour natural Telegram 429 result.
 > Run the fully automated **Docker DEV** campaign first:
 > [P1 development acceptance](P1_DEVELOPMENT_ACCEPTANCE.md),
-> `bash scripts/run_p1_dev_acceptance.sh`. This document becomes relevant
+> `bash scripts/run_docker_fault_injection.sh`. This document becomes relevant
 > only when a real production environment and owner-controlled data exist.
 
 

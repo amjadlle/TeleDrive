@@ -24,6 +24,7 @@ EXPECTED = (
     "telegram-bot-e2e.yml",
     "telegram-multiworker-e2e.yml",
     "release.yml",
+    "docker-fault-injection-ci.yml",
 )
 
 
@@ -718,3 +719,21 @@ def test_p1_multiworker_marker_runs_the_three_process_job_without_regular_bot_co
     assert triple["concurrency"]["group"] == bot["concurrency"]["group"]
     assert bot["concurrency"]["cancel-in-progress"] == "false"
     assert triple["concurrency"]["cancel-in-progress"] == "false"
+
+
+def test_reusable_docker_fault_injection_workflow_contract():
+    """Independent Docker fault injection persists across roadmap phases."""
+    assert not (WORKFLOWS / "p1-dev-acceptance.yml").exists()
+    doc = workflow("docker-fault-injection-ci.yml")
+    assert doc["name"] == "TeleDrive Docker Fault Injection CI"
+    assert "workflow_dispatch" in doc["on"]
+    assert "push" in doc["on"] and "pull_request" in doc["on"]
+    assert "paths" not in doc["on"]["push"]
+    assert doc["permissions"]["contents"] == "read"
+    commands = "\n".join(s.get("run", "") for s in
+                         doc["jobs"]["disposable-docker-fault-injection"]["steps"])
+    assert "scripts/run_docker_fault_injection.sh" in commands
+    assert (ROOT / "docker-compose.fault-ci.yml").is_file()
+    assert (ROOT / "Dockerfile.fault-ci").is_file()
+    assert (ROOT / "scripts/docker_fault_scenarios.py").is_file()
+    assert (ROOT / "docs/DOCKER_FAULT_INJECTION.md").is_file()

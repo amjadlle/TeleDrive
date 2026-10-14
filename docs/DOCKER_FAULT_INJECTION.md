@@ -1,10 +1,10 @@
-# P1 DEV kabulü — Docker ile sıfırdan kur, boz, kurtar
+# Docker fault injection — sıfırdan kur, boz, kurtar
 
-**Bu depo geliştirme aşamasında.** P1 geliştirme kabulü için mevcut bir
+**Bu test altyapısı ilerideki bütün özellikler için yeniden kullanılır.** Geliştirme geliştirme kabulü için mevcut bir
 production sunucusu, gerçek legacy dosyası, operatör imzası, bir saatlik
 production soak veya production Telegram kanalı **gerekli değildir**.
 Bunlar dağıtım öncesi sonraki aşamanın ayrı
-[`P1_PRODUCTION_ACCEPTANCE.md`](P1_PRODUCTION_ACCEPTANCE.md) kapılarıdır.
+[`Geliştirme_PRODUCTION_ACCEPTANCE.md`](Geliştirme_PRODUCTION_ACCEPTANCE.md) kapılarıdır.
 
 ## Tek komut
 
@@ -14,7 +14,7 @@ TeleDrive kaynak ağacında:
 ```bash
 git switch main
 git pull --ff-only origin main
-bash scripts/run_p1_dev_acceptance.sh
+bash scripts/run_docker_fault_injection.sh
 ```
 
 Mevcut `python scripts/p1_acceptance_wizard.py` komutu da varsayılan
@@ -34,7 +34,7 @@ oluşturur. İçinde:
 - Telegram ağının yerini alan, kendi Docker test workspace'ine yazan
   **disk-backed sahte Telegram** (gerçek Telegram hesabına bağlanmaz)
 
-## P1 geliştirme kabul matrisi
+## Geliştirme geliştirme kabul matrisi
 
 | ID | Otomatik test | Başarı kanıtı |
 | --- | --- | --- |
@@ -56,15 +56,15 @@ Sentetik 429 ve crash senaryoları doğal Telegram flood/429 kanıtı değildir.
 
 ## Rapor ve sınırlar
 
-Rapor varsayılan `.p1-dev-evidence/p1-dev-<random>.json`
+Rapor varsayılan `.docker-fault-evidence/docker-fault-<random>.json`
 altında mode 0600 saklanır (Git tarafından izlenmez). İsteğe bağlı
-`P1_DEV_REPORT_DIR` ayrı özel bir dizini gösterebilir. Parola,
+`TELEDRIVE_FAULT_REPORT_DIR` ayrı özel bir dizini gösterebilir. Parola,
 token, API hash, session, özel kanal kimliği veya DB URL'si rapora
 yazılmaz. CLI yalnızca kendi `mktemp` workspace'ini ve benzersiz
 Compose projesini `down --volumes` ile temizler; `docker system prune`
 ve global volume temizleme kesinlikle kullanılmaz.
 
-GitHub üzerinden aynı test: **P1 Disposable Docker Development Acceptance**
+GitHub üzerinden aynı test: **TeleDrive Docker Fault Injection CI**
 workflow'u. Bu workflow secret kullanmaz. İş başarılıysa DEV-01–10
 geliştirme kabulü tamamlanabilir. GERÇEK Telegram/production kabulü
 ayrı kanıt ister.

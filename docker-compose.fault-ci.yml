@@ -4,7 +4,7 @@ x-web: &web
   build:
     context: .
     dockerfile: Dockerfile
-  user: "${P1_DEV_UID:?}:${P1_DEV_GID:?}"
+  user: "${TELEDRIVE_FAULT_UID:?}:${TELEDRIVE_FAULT_GID:?}"
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
@@ -12,7 +12,7 @@ x-web: &web
     TELEDRIVE_CONFIG: /config/config.yaml
     TELEDRIVE_AUTH_DIR: /data/auth
     TELEDRIVE_WEB_USER: dev-operator
-    TELEDRIVE_WEB_PASSWORD: ${P1_DEV_WEB_PASSWORD:?}
+    TELEDRIVE_WEB_PASSWORD: ${TELEDRIVE_FAULT_WEB_PASSWORD:?}
     TELEDRIVE_ALLOWED_HOSTS: web-a,web-b,localhost,127.0.0.1
     TELEDRIVE_JOB_AUTO_RUN: "0"
     TELEDRIVE_ALLOW_INSECURE: "0"
@@ -35,7 +35,7 @@ services:
     environment:
       POSTGRES_USER: teledrive
       POSTGRES_DB: teledrive_dev
-      POSTGRES_PASSWORD: ${P1_DEV_DB_PASSWORD:?}
+      POSTGRES_PASSWORD: ${TELEDRIVE_FAULT_DB_PASSWORD:?}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U teledrive -d teledrive_dev"]
       interval: 3s
@@ -49,20 +49,20 @@ services:
   web-a:
     <<: *web
     volumes:
-      - ${P1_DEV_WORKSPACE:?}/config:/config
-      - ${P1_DEV_WORKSPACE:?}/web-a:/data
-      - ${P1_DEV_WORKSPACE:?}/uploads:/uploads:ro
+      - ${TELEDRIVE_FAULT_WORKSPACE:?}/config:/config
+      - ${TELEDRIVE_FAULT_WORKSPACE:?}/web-a:/data
+      - ${TELEDRIVE_FAULT_WORKSPACE:?}/uploads:/uploads:ro
   web-b:
     <<: *web
     volumes:
-      - ${P1_DEV_WORKSPACE:?}/config:/config
-      - ${P1_DEV_WORKSPACE:?}/web-b:/data
-      - ${P1_DEV_WORKSPACE:?}/uploads:/uploads:ro
+      - ${TELEDRIVE_FAULT_WORKSPACE:?}/config:/config
+      - ${TELEDRIVE_FAULT_WORKSPACE:?}/web-b:/data
+      - ${TELEDRIVE_FAULT_WORKSPACE:?}/uploads:/uploads:ro
   scenarios:
     build:
       context: .
-      dockerfile: Dockerfile.p1-dev
-    user: "${P1_DEV_UID:?}:${P1_DEV_GID:?}"
+      dockerfile: Dockerfile.fault-ci
+    user: "${TELEDRIVE_FAULT_UID:?}:${TELEDRIVE_FAULT_GID:?}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,21 +71,21 @@ services:
       web-b:
         condition: service_healthy
     environment:
-      P1_DEV_DB_URL: postgresql+psycopg://teledrive:${P1_DEV_DB_PASSWORD:?}@postgres:5432/teledrive_dev
-      P1_DEV_RESTORED_DB_URL: postgresql+psycopg://teledrive:${P1_DEV_DB_PASSWORD:?}@postgres:5432/teledrive_restore
-      P1_DEV_WEB_PASSWORD: ${P1_DEV_WEB_PASSWORD:?}
-      P1_DEV_REMOTE_DIR: /work-data/remote
-      P1_DEV_EVIDENCE_DIR: /work-data/evidence
-      P1_DEV_SOURCES: /work-data/sources
+      TELEDRIVE_FAULT_DB_URL: postgresql+psycopg://teledrive:${TELEDRIVE_FAULT_DB_PASSWORD:?}@postgres:5432/teledrive_dev
+      TELEDRIVE_FAULT_RESTORED_DB_URL: postgresql+psycopg://teledrive:${TELEDRIVE_FAULT_DB_PASSWORD:?}@postgres:5432/teledrive_restore
+      TELEDRIVE_FAULT_WEB_PASSWORD: ${TELEDRIVE_FAULT_WEB_PASSWORD:?}
+      TELEDRIVE_FAULT_REMOTE_DIR: /work-data/remote
+      TELEDRIVE_FAULT_EVIDENCE_DIR: /work-data/evidence
+      TELEDRIVE_FAULT_SOURCES: /work-data/sources
     volumes:
-      - ${P1_DEV_WORKSPACE:?}/scenario:/work-data
+      - ${TELEDRIVE_FAULT_WORKSPACE:?}/scenario:/work-data
     networks: [dev-isolated]
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=128m
-    entrypoint: ["python", "scripts/p1_dev_scenarios.py"]
+    entrypoint: ["python", "scripts/docker_fault_scenarios.py"]
 networks:
   dev-isolated:
     internal: true

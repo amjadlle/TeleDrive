@@ -29,5 +29,5 @@ website/.env*
 .idea/
 .vscode/
 
-# Ephemeral P1 Docker development acceptance (redacted local reports)
-.p1-dev-evidence/
+# Reusable Docker fault-injection local reports (redacted local reports)
+.docker-fault-evidence/
