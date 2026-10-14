@@ -598,3 +598,21 @@ def test_e2e_chat_variable_cleanup_detects_racy_recreation(
     ]
     printed = capsys.readouterr()
     assert private_peer not in printed.out + printed.err
+
+
+def test_secure_bot_id_cli_help_requires_no_telethon_install():
+    """The GitHub-only secret migration must be usable without Telegram SDK."""
+    import subprocess
+    import sys
+
+    command = [
+        sys.executable, "-S",
+        str(ROOT / "scripts" / "setup_telegram_e2e.py"),
+        "--help",
+    ]
+    finished = subprocess.run(
+        command, capture_output=True, text=True, check=False, timeout=15,
+    )
+    assert finished.returncode == 0, finished.stderr
+    assert "--secure-bot-chat-id" in finished.stdout
+    assert "ModuleNotFoundError" not in finished.stderr
