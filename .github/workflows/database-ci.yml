@@ -6,33 +6,7 @@ on:
     branches:
       - main
       - feature/docker-webui-multiaccount
-    paths:
-      - "teledrive/db.py"
-      - "teledrive/storage/**"
-      - "teledrive/s3/**"
-      - "teledrive/uploader.py"
-      - "tests/test_database_live.py"
-      - "scripts/rehearse_native_database_restore.py"
-      - "tests/test_storage_engine.py"
-      - "tests/test_s3_p0_final.py"
-      - "tests/test_storage_recovery.py"
-      - "docs/IMPLEMENTATION_STATUS.md"
-      - "docs/P0_ACCEPTANCE.md"
-      - ".github/workflows/database-ci.yml"
   pull_request:
-    paths:
-      - "teledrive/db.py"
-      - "teledrive/storage/**"
-      - "teledrive/s3/**"
-      - "teledrive/uploader.py"
-      - "tests/test_database_live.py"
-      - "scripts/rehearse_native_database_restore.py"
-      - "tests/test_storage_engine.py"
-      - "tests/test_s3_p0_final.py"
-      - "tests/test_storage_recovery.py"
-      - "docs/IMPLEMENTATION_STATUS.md"
-      - "docs/P0_ACCEPTANCE.md"
-      - ".github/workflows/database-ci.yml"
 
 permissions:
   contents: read
