@@ -192,3 +192,29 @@ def test_invalid_shared_429_cannot_change_existing_cooldown(tmp_path, value):
         ) == 10
     finally:
         db.close()
+
+def test_429_sql_journal_fault_rolls_back_both_slot_and_cooldown(tmp_path):
+    """A write failure cannot publish a partial rate-limit observation."""
+    path = str(tmp_path / "429-atomic.db")
+    db = connect_database(path)
+    try:
+        index = BotFileIndex(db)
+        t = 50_000
+        assert index.reserve_send_slot("bot", -100905, 1.0, now_ms=t) == 0
+        db.connection.exec_driver_sql(
+            "CREATE TRIGGER reject_429 BEFORE INSERT ON storage_bot_chat_cooldowns "
+            "BEGIN SELECT RAISE(ABORT, 'test unavailable cooldown SQL'); END"
+        )
+        db.commit()
+        with pytest.raises(Exception, match="Shared Bot cooldown failed"):
+            index.impose_shared_cooldown("bot", -100905, 15, now_ms=t)
+        assert index.shared_cooldown_wait("bot", -100905, now_ms=t) == 0
+        # If the send-slot update incorrectly committed ahead of cooldown,
+        # the next slot would be pushed out 15 seconds instead of 1 second.
+        assert index.reserve_send_slot("bot", -100905, 1.0, now_ms=t) == 1
+        db.connection.exec_driver_sql("DROP TRIGGER reject_429")
+        db.commit()
+        index.impose_shared_cooldown("bot", -100905, 15, now_ms=t)
+        assert index.shared_cooldown_wait("bot", -100905, now_ms=t) == 15
+    finally:
+        db.close()
