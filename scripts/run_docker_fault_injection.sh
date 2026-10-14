@@ -68,6 +68,8 @@ with Path(sys.argv[1]).open("x", encoding="utf-8") as out:
               '  target: "me"\n  accounts: []\n'
               'upload:\n  source_dir: "/uploads"\n'
               '  allowed_extensions: []\n  max_file_size_mb: 0\n'
+              '  sleep_min_seconds: 60\n  sleep_max_seconds: 90\n'
+              '  max_files_per_run: 12\n  max_files_per_day: 100\n'
               'state:\n  database_url: "postgresql+psycopg://teledrive:%s@postgres:5432/teledrive_dev"\n'
               'logging:\n  log_path: "/data/uploader.log"\n  level: "WARNING"\n'
               'app:\n  auto_run: false\n  run_interval_minutes: 60\n' % p)
@@ -75,6 +77,12 @@ PY
 echo "DOCKER FAULT: PostgreSQL 17 + iki sıfır TeleDrive Web container kuruluyor."
 "${COMPOSE[@]}" config -q
 "${COMPOSE[@]}" up --build --wait -d postgres web-a web-b
+# A Uvicorn liveness response alone does not exercise config parsing.
+# Validate the actual production loader on BOTH running containers before
+# the expensive SQL + Telegram-byte fault scenario is seeded.
+for node in web-a web-b; do
+  "${COMPOSE[@]}" exec -T "$node" python -c 'from teledrive.uploader import load_config; c = load_config("/config/config.yaml"); assert c.db_path.startswith("postgresql+psycopg://")'
+done
 echo "DOCKER FAULT: 5MiB+ karışık boyut, sentetik 429/kayıp ACK, gerçek SQL/HTTP."
 "${COMPOSE[@]}" run -T --rm scenarios seed
 BACKUP="$WORKSPACE/scenario/evidence/native-postgres.dump"

@@ -737,3 +737,25 @@ def test_reusable_docker_fault_injection_workflow_contract():
     assert (ROOT / "Dockerfile.fault-ci").is_file()
     assert (ROOT / "scripts/docker_fault_scenarios.py").is_file()
     assert (ROOT / "docs/DOCKER_FAULT_INJECTION.md").is_file()
+
+
+def test_docker_fault_config_has_every_required_runtime_upload_field():
+    """A running HTTP healthcheck does not prove the WebUI config can load.
+
+    Catches the actual Docker DEV regression from 1f32159, where the
+    generated config omitted sleep_min_seconds and storage health returned
+    HTTP 500 (while both /api/health probes remained green).
+    """
+    source = (ROOT / "teledrive" / "uploader.py").read_text(encoding="utf-8")
+    harness = (ROOT / "scripts" / "run_docker_fault_injection.sh").read_text(
+        encoding="utf-8",
+    )
+    required = set(re.findall(r'up\["([^"]+)"\]', source))
+    assert required
+    missing = sorted(field for field in required if field + ":" not in harness)
+    assert not missing, f"Docker fault config missing required upload fields: {missing}"
+    # Verify the ACTUAL production config parser in each clean Web container,
+    # not only the permissive Uvicorn /api/health startup probe.
+    assert "for node in web-a web-b" in harness
+    assert 'load_config("/config/config.yaml")' in harness
+    assert 'exec -T "$node"' in harness

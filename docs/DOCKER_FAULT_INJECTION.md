@@ -94,3 +94,20 @@ gitmez; doğal üretim 429 kanıtı sayılmaz. Ayrı offline regresyon testi,
 eksik slotun reddedilmeye devam etmesini ve doğru sıra sonrası cooldown
 başarısını doğrular. Bu kontrol güvenli protokolü gevşetmeden CI hatasını
 giderir.
+
+
+### Docker Web yönetici API'si konfigürasyon yükleme koruması
+
+`1f32159` sonrası test, eksik `upload.sleep_min_seconds` alanı yüzünden
+`/api/v1/admin/storage/health` endpoint'inde HTTP 500 verdi. Docker
+`/api/health` liveness endpoint'i, konfigürasyon ayrıştırıcısını çağırmadığı
+için iki Web container sağlıklı görünüyordu. Sentetik/dev `config.yaml`
+artık üretim `load_config` ayrıştırıcısının zorunlu `sleep_min_seconds`,
+`sleep_max_seconds`, `max_files_per_run` ve `max_files_per_day`
+alanlarını içerir. Fault senaryosu başlamadan **iki Web container'ında**
+gerçek yükleyiciyle erken doğrulama yapılır. Offline CI kontrat testi,
+script şablonunu `teledrive/uploader.py` içindeki zorunlu alanlarla
+karşılaştırır; değişen şema ile senaryonun sessizce ayrışmasını önler.
+
+Bu düzeltmeler hiçbir üretim servisini başlatmaz veya gerçek Telegram
+kanalına bağlanmaz; tamamı rastgele adlandırılmış Docker DEV ortamındadır.
