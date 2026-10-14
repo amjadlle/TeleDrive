@@ -22,9 +22,12 @@ import shutil
 import subprocess
 import sys
 
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-from telethon.tl.functions.channels import CreateChannelRequest
+from typing import TYPE_CHECKING
+
+# Secret migration must remain usable on a bare operator Python install.
+# Telegram SDK imports are needed only for actual Telegram login/setup.
+if TYPE_CHECKING:
+    from telethon import TelegramClient
 
 
 def require_github_cli(repo: str) -> None:
@@ -139,6 +142,9 @@ async def find_channel(client: TelegramClient, title: str) -> list:
 async def setup(repo: str, title: str, create_if_missing: bool,
                 configure_bot: bool = False) -> None:
     require_github_cli(repo)
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+    from telethon.tl.functions.channels import CreateChannelRequest
 
     api_id = int(input("Telegram test account API ID: ").strip())
     api_hash = getpass.getpass("Telegram test account API hash: ").strip()
