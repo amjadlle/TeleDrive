@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 25
     env:
       TELEDRIVE_E2E_BOT_TOKEN: ${{ secrets.TELEDRIVE_E2E_BOT_TOKEN }}
-      TELEDRIVE_E2E_BOT_CHAT_ID: ${{ vars.TELEDRIVE_E2E_BOT_CHAT_ID }}
+      TELEDRIVE_E2E_BOT_CHAT_ID: ${{ secrets.TELEDRIVE_E2E_BOT_CHAT_ID }}
       TELEDRIVE_E2E_API_ID: ${{ secrets.TELEDRIVE_E2E_API_ID }}
       TELEDRIVE_E2E_API_HASH: ${{ secrets.TELEDRIVE_E2E_API_HASH }}
       TELEDRIVE_E2E_SESSION: ${{ secrets.TELEDRIVE_E2E_SESSION }}
@@ -47,6 +47,17 @@ jobs:
       TELEDRIVE_E2E_MULTIPART: ${{ ((github.event_name == 'workflow_dispatch' && inputs.run_multipart) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[p0-live-multipart]'))) && '1' || '0' }}
       TELEDRIVE_E2E_SOAK: ${{ ((github.event_name == 'workflow_dispatch' && inputs.run_soak) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[p1-live-soak]'))) && '1' || '0' }}
     steps:
+      # The channel ID must come from an Actions SECRET, never a repository
+      # variable: vars can be printed unredacted in a step's initial env dump.
+      # Install masks before checkout, dependency installation, or pytest.
+      - name: Mask dedicated Telegram test target
+        shell: bash
+        run: |
+          if [[ -z "$TELEDRIVE_E2E_BOT_CHAT_ID" ]]; then
+            echo "::error::Configure TELEDRIVE_E2E_BOT_CHAT_ID as a repository Actions secret."
+            exit 1
+          fi
+          echo "::add-mask::$TELEDRIVE_E2E_BOT_CHAT_ID"
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -56,7 +67,7 @@ jobs:
         id: configured
         run: |
           if [[ -z "$TELEDRIVE_E2E_BOT_TOKEN" || -z "$TELEDRIVE_E2E_BOT_CHAT_ID" ]]; then
-            echo "::error::Bot E2E not configured; add TELEDRIVE_E2E_BOT_TOKEN secret and TELEDRIVE_E2E_BOT_CHAT_ID variable."
+            echo "::error::Bot E2E not configured; add TELEDRIVE_E2E_BOT_TOKEN and TELEDRIVE_E2E_BOT_CHAT_ID repository secrets."
             exit 1
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
