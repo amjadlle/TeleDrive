@@ -15,7 +15,7 @@ jobs:
   three-process-telegram:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[p1-live-multiworker]') }}
     concurrency:
-      group: teledrive-live-bot-${{ github.ref }}
+      group: teledrive-live-telegram-${{ github.repository }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
