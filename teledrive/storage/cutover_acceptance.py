@@ -95,7 +95,12 @@ async def verify_legacy_cutover(
             async for chunk in engine.iter_bytes(live_head.id):
                 remote_hash.update(chunk)
                 received += len(chunk)
-            if received != before.st_size or remote_hash.hexdigest() != digest.hexdigest():
+            final_stat = _source_identity(source, root)[1]
+            if (received != before.st_size
+                    or remote_hash.hexdigest() != digest.hexdigest()
+                    or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                    != (final_stat.st_dev, final_stat.st_ino,
+                        final_stat.st_size, final_stat.st_mtime_ns)):
                 inconsistent += 1
                 continue
             verified += 1
