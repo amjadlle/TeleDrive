@@ -54,15 +54,10 @@ def store_secret(repo: str, name: str, value: str) -> None:
     )
 
 
-def remove_public_bot_chat_variable(repo: str) -> None:
-    """Verify removal of the legacy unmasked variable without reading values.
-
-    Only variable *names* are retrieved. Fail closed on permission errors
-    rather than claiming that the previously public value was removed.
-    """
-    name = "TELEDRIVE_E2E_BOT_CHAT_ID"
-    list_command = ["gh", "variable", "list", "--repo", repo, "--json", "name"]
-    listed = subprocess.run(list_command, capture_output=True, check=False)
+def legacy_bot_chat_variable_names(repo: str) -> set[str]:
+    """Read only Actions variable names; never expose their stored values."""
+    command = ["gh", "variable", "list", "--repo", repo, "--json", "name"]
+    listed = subprocess.run(command, capture_output=True, check=False)
     if listed.returncode:
         raise RuntimeError("Cannot inspect legacy Actions variable names")
     try:
@@ -74,13 +69,23 @@ def remove_public_bot_chat_variable(repo: str) -> None:
             raise ValueError("Malformed variable list")
     except (ValueError, TypeError) as exc:
         raise RuntimeError("Cannot verify legacy Actions variable list") from exc
-    if any(entry["name"] == name for entry in rows):
+    return {entry["name"] for entry in rows}
+
+
+def remove_public_bot_chat_variable(repo: str) -> None:
+    """Delete the unmasked legacy variable and re-list to verify absence."""
+    name = "TELEDRIVE_E2E_BOT_CHAT_ID"
+    if name in legacy_bot_chat_variable_names(repo):
         command = ["gh", "variable", "delete", name, "--repo", repo]
         removed = subprocess.run(command, capture_output=True, check=False)
         if removed.returncode:
             raise RuntimeError(
                 "Legacy unmasked Actions variable could not be deleted"
             )
+    # A successful CLI exit does not prove absence (a racing write can
+    # re-create the variable). Fail closed rather than making that claim.
+    if name in legacy_bot_chat_variable_names(repo):
+        raise RuntimeError("Legacy unmasked Actions variable is still present")
 
 
 def secure_existing_bot_chat_id(repo: str) -> None:
@@ -104,6 +109,12 @@ def secure_existing_bot_chat_id(repo: str) -> None:
         except UnicodeDecodeError as exc:
             raise ValueError("Invalid stored private channel ID") from exc
     else:
+        # A failed 'get' can mean insufficient permissions or network errors,
+        # not just an absent variable. A names-only query must confirm absence.
+        if "TELEDRIVE_E2E_BOT_CHAT_ID" in legacy_bot_chat_variable_names(repo):
+            raise RuntimeError(
+                "Legacy Actions variable exists but cannot be securely read"
+            )
         chat_id = getpass.getpass(
             "Telegram test channel ID (hidden, old variable unavailable): "
         ).strip()
