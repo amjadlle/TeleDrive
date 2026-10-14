@@ -83,13 +83,25 @@ def test_invalid_shared_bot_send_throttle_never_allocates(tmp_path, account, cha
         db.close()
 
 
-def test_zero_min_interval_does_not_allocate_or_sleep(tmp_path):
-    db = connect_database(str(tmp_path / "no-throttle.db"))
+def test_zero_min_interval_does_not_pace_but_respects_shared_429(tmp_path):
+    path = str(tmp_path / "no-throttle.db")
+    db = connect_database(path)
+    second = connect_database(path)
     try:
         index = BotFileIndex(db)
-        assert index.reserve_send_slot("bot", -10023, 0) == 0
-        assert index.reserve_send_slot("bot", -10023, 0) == 0
+        other = BotFileIndex(second)
+        now = 70_000
+        assert index.reserve_send_slot("bot", -10023, 0, now_ms=now) == 0
+        assert other.reserve_send_slot("bot", -10023, 0, now_ms=now) == 0
+        # Zero pacing still needs a durable slot row for server 429 backoff.
+        index.impose_shared_cooldown("bot", -10023, 5, now_ms=now)
+        assert other.reserve_send_slot("bot", -10023, 0, now_ms=now) == 5
+        assert other.shared_cooldown_wait("bot", -10023, now_ms=now) == 5
+        assert other.reserve_send_slot("other", -10023, 0, now_ms=now) == 0
+        assert other.reserve_send_slot("bot", -10024, 0, now_ms=now) == 0
+        assert other.reserve_send_slot("bot", -10023, 0, now_ms=now + 5_000) == 0
     finally:
+        second.close()
         db.close()
 
 def test_429_after_other_workers_reserved_slots_remains_globally_visible(tmp_path):
@@ -218,3 +230,96 @@ def test_429_sql_journal_fault_rolls_back_both_slot_and_cooldown(tmp_path):
         assert index.shared_cooldown_wait("bot", -100905, now_ms=t) == 15
     finally:
         db.close()
+
+
+def test_zero_interval_transport_rechecks_cross_worker_cooldown(
+    tmp_path, monkeypatch,
+):
+    """Disabling local pacing must never disable a newer 429 server fence."""
+    import asyncio
+    import hashlib
+    from teledrive.storage.bot_api_adapter import BotApiChunkTransport
+
+    class OneSend:
+        def __init__(self):
+            self.sends = 0
+
+        async def call(self, method, fields, source=None):
+            assert method == "sendDocument"
+            self.sends += 1
+            return {
+                "message_id": self.sends,
+                "chat": {"id": -100990},
+                "document": {"file_id": "zero-gap-file"},
+            }
+
+    database = connect_database(str(tmp_path / "zero-gap-recheck.db"))
+    try:
+        idx = BotFileIndex(database)
+        api = OneSend()
+        transport = BotApiChunkTransport(
+            api, idx, chat_id=-100990, min_upload_interval=0,
+        )
+        original = idx.shared_cooldown_wait
+        checks = []
+
+        def late_429(account, chat_id):
+            checks.append((account, chat_id))
+            return 0.002 if len(checks) == 1 else original(account, chat_id)
+
+        monkeypatch.setattr(idx, "shared_cooldown_wait", late_429)
+        source = tmp_path / "safe.bin"
+        source.write_bytes(b"safe zero-throttle Telegram payload")
+        result = asyncio.run(transport.upload(
+            source, object_id="zero-gap-recheck", ordinal=0,
+            checksum=hashlib.sha256(source.read_bytes()).hexdigest(),
+        ))
+        assert result == ("bot", -100990, 1)
+        assert checks == [("bot", -100990), ("bot", -100990)]
+        assert api.sends == 1
+        assert idx.unresolved_count() == 0
+    finally:
+        database.close()
+
+
+def test_zero_interval_actual_429_is_committed_across_sql_connections(tmp_path):
+    """A definitive 61s rejection must survive a zero-throttle worker exit."""
+    import asyncio
+    import hashlib
+    from teledrive.storage.bot_api_adapter import (
+        BotApiChunkTransport, BotApiRateLimited,
+    )
+
+    class DefinitivelyRejected:
+        sends = 0
+
+        async def call(self, method, fields, source=None):
+            assert method == "sendDocument"
+            self.sends += 1
+            raise BotApiRateLimited(61)
+
+    path = str(tmp_path / "zero-gap-429.db")
+    first = connect_database(path)
+    second = connect_database(path)
+    try:
+        rejecting = DefinitivelyRejected()
+        index = BotFileIndex(first)
+        other = BotFileIndex(second)
+        transport = BotApiChunkTransport(
+            rejecting, index, chat_id=-100991, min_upload_interval=0,
+        )
+        source = tmp_path / "rejected.bin"
+        source.write_bytes(b"realistic refused payload")
+        with pytest.raises(BotApiRateLimited):
+            asyncio.run(transport.upload(
+                source, object_id="zero-gap-rejection", ordinal=0,
+                checksum=hashlib.sha256(source.read_bytes()).hexdigest(),
+            ))
+        assert rejecting.sends == 1
+        assert index.unresolved_count() == 0
+        assert other.shared_cooldown_wait("bot", -100991) > 59
+        assert other.reserve_send_slot("bot", -100991, 0) > 59
+        assert other.shared_cooldown_wait("bot", -100992) == 0
+    finally:
+        second.close()
+        first.close()
