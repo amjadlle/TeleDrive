@@ -56,7 +56,7 @@ jobs:
             tests/test_rest_api.py \
             tests/test_rest_transfer.py \
             tests/test_storage_engine.py \
-            tests/test_storage_recovery.py \
+            tests/test_storage_recovery.py tests/test_storage_rebuild.py \
             tests/test_storage_pending_admin.py \
             tests/test_storage_jobs.py \
             tests/test_legacy_bridge.py \
