@@ -23,7 +23,7 @@
 - [x] Implement signed Get/PutBucketVersioning with strictly Enabled semantics, scoped permissions and real boto3 compatibility tests.
 - [x] Add signed Get/PutPublicAccessBlock for the enforced all-private configuration; reject any weakening attempts.
 - [x] Support signed lifecycle XML GET/PUT/DELETE and hourly bounded incomplete-MPU abort without physical Telegram deletion.
-- [ ] Complete tested S3 capabilities beyond the documented subset (for example object lifecycle expiration/transitions, policies, SSE and unsupported checksums).
+- [ ] Deliver [P2 Advanced S3](docs/S3_SPECS.md#5-p2-advanced-s3-implementation-plan) from the [116-operation S3 compatibility matrix](docs/S3_SPECS.md): fail-closed selectors, advanced multipart/checksums, policies, encryption, lifecycle and independent client tests. Keep partial capabilities explicitly partial until verified.
 - [x] Expose opt-in lease-fenced legacy folder ingestion in default single-container Compose and verify cross-interface REST/S3 readback from the shared catalog.
 - [ ] Establish longer-duration real-environment capacity benchmarks on owner-controlled infrastructure.
 
