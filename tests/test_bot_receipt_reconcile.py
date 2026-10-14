@@ -38,12 +38,14 @@ class FakeUser:
         self.chat_id = chat_id
         self.message_id = message_id
         self.has_document = has_document
+        self.caption = "teledrive:recovery-object:0:" + hashlib.sha256(body).hexdigest()[:16]
         self.reads = 0
 
     async def get_messages(self, chat_id, *, ids):
         self.reads += 1
         return SimpleNamespace(
             id=self.message_id, chat_id=self.chat_id,
+            raw_text=self.caption,
             document=SimpleNamespace(size=len(self.body)) if self.has_document else None,
         )
 
@@ -103,6 +105,7 @@ def test_lost_ack_reconciliation_defaults_to_read_only_both_remote_sources(tmp_p
 @pytest.mark.parametrize("variant", [
     "bot-wrong-bytes", "bot-wrong-length", "channel-wrong-bytes",
     "channel-wrong-chat", "channel-wrong-id", "channel-no-document",
+    "channel-wrong-caption",
 ])
 def test_lost_ack_proof_fails_closed_on_mismatch(tmp_path, variant):
     db, idx, body, args = new_index(tmp_path)
@@ -121,6 +124,8 @@ def test_lost_ack_proof_fails_closed_on_mismatch(tmp_path, variant):
             user.message_id = 12
         if variant == "channel-no-document":
             user.has_document = False
+        if variant == "channel-wrong-caption":
+            user.caption = "teledrive:other:0:deadbeef"
         with pytest.raises(BotApiError):
             asyncio.run(reconcile_bot_receipt(
                 idx, bot, user, **args, apply=True,
