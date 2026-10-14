@@ -10,11 +10,13 @@ permissions:
   contents: read
 
 # P1 acceptance includes real multiworker verification on every main push.
-# Serialize live Bot activity with the standard Telegram Bot E2E workflow.
+# Isolate the multiworker run queue from Bot E2E: GitHub cancels the older
+# pending job when three runs share a concurrency group, even with
+# cancel-in-progress: false. Both suites still use limited test traffic.
 jobs:
   three-process-telegram:
     concurrency:
-      group: teledrive-live-bot-${{ github.repository }}
+      group: teledrive-live-multiworker-${{ github.repository }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
