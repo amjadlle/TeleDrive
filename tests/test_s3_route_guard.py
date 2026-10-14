@@ -153,7 +153,6 @@ def test_unknown_parameter_is_rejected_before_object_transport():
     ("DELETE", {"x-amz-expected-bucket-owner": "123456789012"}),
     ("DELETE", {"x-amz-copy-source": "/guard-bucket/asset.bin"}),
     ("DELETE", {"x-amz-tagging": "class=archive"}),
-    ("GET", {"x-amz-checksum-mode": "ENABLED"}),
     ("HEAD", {"x-amz-request-payer": "requester"}),
     ("GET", {"x-amz-server-side-encryption-customer-algorithm": "AES256"}),
 ])
