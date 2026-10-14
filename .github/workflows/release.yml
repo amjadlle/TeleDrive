@@ -1,4 +1,4 @@
-name: Build and publish release
+name: 05 · Delivery | Release Gate & Packages
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   verify:
-    name: Verify tag source and regression suite
+    name: Release gate · regression and security
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -58,7 +58,20 @@ jobs:
           bandit -q -r teledrive web -ll
           pip-audit -r requirements-web.txt
 
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 05 · Delivery | Release Gate & Packages' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Mainline release gate; no publishing on branch push |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    name: Package · ${{ matrix.os }}
     needs: verify
     if: github.ref_type == 'tag'
     name: Build on ${{ matrix.os }}
@@ -108,8 +121,20 @@ jobs:
           path: ${{ matrix.asset_path }}
           if-no-files-found: error
 
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 05 · Delivery | Release Gate & Packages' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Linux and Windows tagged packages |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
   publish:
-    name: Publish GitHub release
+    name: Publish · GitHub Release
     needs: build
     if: github.ref_type == 'tag' && github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -136,3 +161,14 @@ jobs:
               --generate-notes \
               --title "TeleDrive $GITHUB_REF_NAME"
           fi
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 05 · Delivery | Release Gate & Packages' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Version-tagged GitHub release assets |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

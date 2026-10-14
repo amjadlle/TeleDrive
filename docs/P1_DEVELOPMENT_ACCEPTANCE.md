@@ -90,7 +90,7 @@ a particular run. Each actual report must contain `stages.seed`,
 `stages.restarted`, `stages.restored`, `stages.acceptance` and
 `stages.acceptance.checks_count == 13`. No stage may be skipped; a nonzero
 exit or failed scoped cleanup is an acceptance failure. GitHub Actions:
-[TeleDrive Docker Fault Injection CI](../.github/workflows/docker-fault-injection-ci.yml).
+[03 · Resilience | P1 Docker Acceptance](../.github/workflows/docker-fault-injection-ci.yml).
 
 ## What is deferred until an actual deployment exists?
 

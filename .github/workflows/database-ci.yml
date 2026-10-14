@@ -1,4 +1,4 @@
-name: Database Integration CI
+name: 02 · Integration | Databases
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   database:
-    name: PostgreSQL + MySQL integration
+    name: Data · PostgreSQL / MySQL / restore
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -88,3 +88,14 @@ jobs:
           docker run --rm --interactive --network host -e MYSQL_PWD=test-password mysql:8.4 \
             mysql --host=127.0.0.1 --user=teledrive --database=teledrive_dr_ci < "$RUNNER_TEMP/mysql-ci.sql"
           python scripts/rehearse_native_database_restore.py verify --url-env DB_TEST_MYSQL_URL --restore-database teledrive_dr_ci --receipt "$RUNNER_TEMP/mysql-dr.json"
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 02 · Integration | Databases' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Live PostgreSQL/MySQL and native restore rehearsals |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

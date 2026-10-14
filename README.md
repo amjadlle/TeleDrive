@@ -1,5 +1,7 @@
 # TeleDrive
 
+> **CI dashboard:** [Grouped workflows and their release/acceptance scope](docs/CI_WORKFLOWS.md).
+
 > **Reusable Docker fault-injection suite:** use `bash scripts/run_docker_fault_injection.sh`.
 > It creates two isolated Docker WebUI services + PostgreSQL, injects
 > recoverable faults into synthetic media, verifies restore, and cleans up.

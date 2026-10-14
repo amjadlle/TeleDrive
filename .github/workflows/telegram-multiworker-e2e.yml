@@ -1,4 +1,4 @@
-name: Telegram Multiworker PostgreSQL E2E
+name: 04 · Live Telegram | Multiworker PostgreSQL E2E
 
 on:
   workflow_dispatch:
@@ -15,6 +15,7 @@ permissions:
 # cancel-in-progress: false. Both suites still use limited test traffic.
 jobs:
   three-process-telegram:
+    name: LIVE · 3 workers, shared SQL and Telegram
     concurrency:
       group: teledrive-live-multiworker-${{ github.repository }}
       cancel-in-progress: false
@@ -72,3 +73,14 @@ jobs:
           python -m pip check
       - name: Three independent SQL workers and real Telegram byte restoration
         run: python -m pytest -vv tests/test_telegram_bot_multiworker_e2e.py
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 04 · Live Telegram | Multiworker PostgreSQL E2E' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Three SQL worker processes and real Telegram test channel |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

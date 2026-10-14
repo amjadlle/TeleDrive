@@ -1,4 +1,4 @@
-name: Desktop Integration CI
+name: 02 · Integration | Desktop
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   desktop:
-    name: Desktop / ${{ matrix.os }}
+    name: Desktop · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -86,3 +86,14 @@ jobs:
           } else {
             Write-Host 'Inno Setup is not installed on this runner; installer packaging requires release job.'
           }
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 02 · Integration | Desktop' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Windows and Linux UI, CLI and portable packaging |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

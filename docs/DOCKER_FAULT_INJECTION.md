@@ -67,7 +67,7 @@ yazılmaz. CLI yalnızca kendi `mktemp` workspace'ini ve benzersiz
 Compose projesini `down --volumes` ile temizler; `docker system prune`
 ve global volume temizleme kesinlikle kullanılmaz.
 
-GitHub üzerinden aynı test: **TeleDrive Docker Fault Injection CI**
+GitHub üzerinden aynı test: **03 · Resilience | P1 Docker Acceptance**
 workflow'u. Bu workflow secret kullanmaz. İş başarılıysa DEV-01–10
 geliştirme kabulü tamamlanabilir. GERÇEK Telegram/production kabulü
 ayrı kanıt ister.
@@ -138,7 +138,7 @@ Teardown başarısız olursa rapor PASS olamaz.
 Alternatif: bash scripts/run_docker_fault_injection.sh
 Rapor: .docker-fault-evidence/docker-fault-<random>.json (0600).
 
-Github Actions: TeleDrive Docker Fault Injection CI; başarı için
+Github Actions: 03 · Resilience | P1 Docker Acceptance; başarı için
 workflow result=success ve artifact'te dört DEV kanıtı bulunmalı.
 Bu simüle testlerin hiçbiri gerçek Telegram/üretim multi-host kabulü
 veya legacy cutover imzası değildir.

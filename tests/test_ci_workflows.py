@@ -28,6 +28,32 @@ EXPECTED = (
 )
 
 
+DISPLAY_NAMES = {
+    "security-ci.yml": "01 · Quality | Security & Regression",
+    "database-ci.yml": "02 · Integration | Databases",
+    "storage-api-ci.yml": "02 · Integration | REST & S3",
+    "desktop-ci.yml": "02 · Integration | Desktop",
+    "docker-fault-injection-ci.yml": "03 · Resilience | P1 Docker Acceptance",
+    "telegram-bot-e2e.yml": "04 · Live Telegram | Bot API E2E",
+    "telegram-storage-e2e.yml": "04 · Live Telegram | User MTProto E2E",
+    "telegram-multiworker-e2e.yml": "04 · Live Telegram | Multiworker PostgreSQL E2E",
+    "release.yml": "05 · Delivery | Release Gate & Packages",
+}
+
+
+@pytest.mark.parametrize("name", EXPECTED)
+def test_workflow_display_groups_and_summary_preserved(name):
+    """Presentation-only labels must remain complete and unambiguous."""
+    document = workflow(name)
+    assert document["name"] == DISPLAY_NAMES[name]
+    for job in document["jobs"].values():
+        assert job.get("name"), name
+        result_steps = [step for step in job["steps"] if step.get("name") == "Publish CI run summary"]
+        assert len(result_steps) == 1, name
+        assert result_steps[0]["if"] == "always()"
+        assert "job.status" in result_steps[0]["run"]
+
+
 def workflow(name: str):
     return yaml.load((WORKFLOWS / name).read_text(encoding="utf-8"),
                      Loader=yaml.BaseLoader)
@@ -724,7 +750,7 @@ def test_reusable_docker_fault_injection_workflow_contract():
     """Independent Docker fault injection persists across roadmap phases."""
     assert not (WORKFLOWS / "p1-dev-acceptance.yml").exists()
     doc = workflow("docker-fault-injection-ci.yml")
-    assert doc["name"] == "TeleDrive Docker Fault Injection CI"
+    assert doc["name"] == "03 · Resilience | P1 Docker Acceptance"
     assert "workflow_dispatch" in doc["on"]
     assert "push" in doc["on"] and "pull_request" in doc["on"]
     assert "paths" not in doc["on"]["push"]

@@ -1,4 +1,4 @@
-name: TeleDrive Docker Fault Injection CI
+name: 03 · Resilience | P1 Docker Acceptance
 on:
   workflow_dispatch:
   push:
@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   disposable-docker-fault-injection:
+    name: P1 DEV · Docker 13-gate fault acceptance
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -37,3 +38,14 @@ jobs:
           path: ${{ runner.temp }}/docker-fault-evidence/*.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 03 · Resilience | P1 Docker Acceptance' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Isolated 2-node API; PostgreSQL; crash, restore and teardown |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

@@ -1,4 +1,4 @@
-name: Storage API Integration CI
+name: 02 · Integration | REST & S3
 
 on:
   workflow_dispatch:
@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   storage-api:
+    name: Storage · REST / S3 / AWS CLI / rclone
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -105,3 +106,14 @@ jobs:
             tests/test_p0_security_matrix.py \
             tests/test_storage_gc_audit.py \
             tests/test_storage_gc_admin.py
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 02 · Integration | REST & S3' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | REST and S3 protocol; real AWS CLI and rclone processes |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

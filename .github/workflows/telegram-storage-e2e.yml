@@ -1,4 +1,4 @@
-name: Telegram Storage E2E (manual)
+name: 04 · Live Telegram | User MTProto E2E
 
 on:
   workflow_dispatch:
@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   telegram-roundtrip:
+    name: LIVE · Telethon upload and range read
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -69,3 +70,14 @@ jobs:
       - name: Real Telegram upload, retrieval, checksum and Range
         if: steps.configured.outputs.enabled == 'true'
         run: python -m pytest -q tests/test_telegram_storage_e2e.py
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 04 · Live Telegram | User MTProto E2E' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Dedicated Telegram user session; byte readback and Range |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
