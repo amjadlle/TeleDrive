@@ -616,6 +616,10 @@ async def _handle(request: Request):
             action = "s3:GetObject"
         elif "uploads" in request.query_params or "uploadId" in request.query_params:
             return _error("NotImplemented", "This multipart operation is unsupported", 501)
+        # A selector on an object path must never silently degrade to a
+        # regular object operation (particularly an unexpected DELETE).
+        if "versioning" in request.query_params and not is_bucket_versioning:
+            return _error("NotImplemented", "Bucket versioning is a bucket-only operation", 501)
         if action is None or (separator and "partNumber" in request.query_params and not mpu_part):
             return _error("NotImplemented", "This S3 operation is not supported yet", 501)
         # Unknown control-plane query operations must not be misinterpreted as
@@ -804,8 +808,31 @@ async def _handle(request: Request):
                         if len(payload) > MAX_VERSIONING_XML_BYTES:
                             raise VersioningError("MalformedXML",
                                                   "Versioning XML exceeds 16 KiB")
+                    # Boto3 may use Content-MD5 or a modern default SDK
+                    # CRC32 checksum for bucket control-plane requests.
+                    # Every advertised checksum must match exact XML bytes.
+                    import zlib
+                    crc_headers = {
+                        "x-amz-checksum-crc32": zlib.crc32(payload) & 0xffffffff,
+                        "x-amz-checksum-crc32c": crc32c(payload),
+                    }
+                    for name, value in crc_headers.items():
+                        declared = request.headers.get(name)
+                        if declared is not None and not hmac.compare_digest(
+                            declared, base64.b64encode(
+                                value.to_bytes(4, "big"),
+                            ).decode("ascii"),
+                        ):
+                            raise VersioningError("BadDigest",
+                                                  "Bucket versioning checksum mismatch")
                     _verify_upload_sha256(
                         request, hashlib.sha256(payload).digest(),
+                        md5_digest=hashlib.md5(
+                            payload, usedforsecurity=False,
+                        ).digest(),
+                        sha1_digest=hashlib.sha1(
+                            payload, usedforsecurity=False,
+                        ).digest(),
                         crc64nvme_value=crc64nvme(payload),
                     )
                     parse_versioning_xml(bytes(payload))

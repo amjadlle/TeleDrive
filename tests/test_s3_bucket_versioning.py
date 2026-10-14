@@ -82,6 +82,35 @@ def test_versioning_control_permissions_are_separate_from_putobject(service):
     assert remote.uploads == 0
 
 
+def test_versioning_checksums_are_validated_even_with_signed_correct_sha256(service):
+    import base64
+    import zlib
+
+    assert signed(service, "PUT", "/versioning-ci").status_code == 200
+    correct_crc32 = base64.b64encode(
+        (zlib.crc32(VALID) & 0xffffffff).to_bytes(4, "big"),
+    ).decode("ascii")
+    verified = signed(service, "PUT", "/versioning-ci?versioning", VALID,
+                     extra_headers={
+                         "x-amz-checksum-crc32": correct_crc32,
+                         "x-amz-sdk-checksum-algorithm": "CRC32",
+                     })
+    assert verified.status_code == 200, verified.text
+    bad_crc = signed(service, "PUT", "/versioning-ci?versioning", VALID,
+                     extra_headers={
+                         "x-amz-checksum-crc32": base64.b64encode(
+                             b"nope",
+                         ).decode("ascii"),
+                         "x-amz-sdk-checksum-algorithm": "CRC32",
+                     })
+    assert bad_crc.status_code == 400, bad_crc.text
+    bad_md5 = signed(service, "PUT", "/versioning-ci?versioning", VALID,
+                     extra_headers={
+                         "Content-MD5": base64.b64encode(b"\x00" * 16).decode(),
+                     })
+    assert bad_md5.status_code == 400, bad_md5.text
+
+
 def test_missing_bucket_and_ambiguous_selectors_fail_closed(service):
     assert signed(service, "GET", "/missing-versioning?versioning").status_code == 404
     assert signed(service, "PUT", "/missing-versioning?versioning", VALID).status_code == 404
@@ -90,6 +119,8 @@ def test_missing_bucket_and_ambiguous_selectors_fail_closed(service):
                  "/versioning-ci?versioning&policy"):
         assert signed(service, "GET", path).status_code in (400, 501)
     assert signed(service, "DELETE", "/versioning-ci?versioning").status_code == 501
+    assert signed(service, "GET", "/versioning-ci/data.bin?versioning").status_code == 501
+    assert signed(service, "DELETE", "/versioning-ci/data.bin?versioning").status_code == 501
 
 
 def test_real_boto3_get_put_bucket_versioning(service):
