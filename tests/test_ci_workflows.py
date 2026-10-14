@@ -1097,12 +1097,11 @@ def test_paginated_bucket_listing_contract_is_required_in_both_ci_suites():
 
 
 def test_s3_specs_markdown_tables_render_as_complete_gfm_tables():
-    """A blank row inside the API matrix must never orphan Markdown table rows."""
+    """All GitHub-flavored Markdown tables need contiguous rows and delimiter."""
     content = (ROOT / "docs/S3_SPECS.md").read_text(encoding="utf-8")
     lines = content.splitlines()
-    assert not re.search(r"\\n(?:- |\\n|\\|)", content), (
-        "Literal escaped line breaks in S3 Markdown"
-    )
+    for artifact in (r"\n\n", r"\n|", r"\n- "):
+        assert artifact not in content, ("literal escaped newline", artifact)
     groups = []
     current = []
     for lineno, line in enumerate(lines, 1):
@@ -1117,14 +1116,16 @@ def test_s3_specs_markdown_tables_render_as_complete_gfm_tables():
     for group in groups:
         start = group[0][0]
         assert len(group) >= 2, ("orphan Markdown table row", start)
-        header_count = group[0][1].count("|")
-        assert re.fullmatch(r"\\|[\\s:|-]+\\|", group[1][1]), (
-            "missing GitHub-flavored Markdown table delimiter", start
-        )
-        assert all(row.count("|") == header_count for _, row in group), (
+        columns = group[0][1].count("|")
+        separator_cells = group[1][1].strip().strip("|").split("|")
+        assert len(separator_cells) == columns - 1 and all(
+            re.fullmatch(r":?-{3,}:?", cell.strip())
+            for cell in separator_cells
+        ), ("missing GitHub-flavored Markdown table delimiter", start)
+        assert all(row.count("|") == columns for _, row in group), (
             "mismatched table columns", start
         )
-    # The supported/partial operation table must remain ONE continuous table.
+    # Supported/partial operation table must remain ONE contiguous table.
     table = next(group for group in groups if group[0][1].startswith(
         "| AWS S3 API operation | Status | Implemented scope"
     ))
@@ -1133,4 +1134,8 @@ def test_s3_specs_markdown_tables_render_as_complete_gfm_tables():
                       "PutBucketLifecycleConfiguration",
                       "DeleteBucketLifecycle"):
         assert any(f"[{operation}]" in row for row in entries), operation
-    assert len(re.findall(r"\\| \\[([A-Za-z0-9]+)\\]\\(https://docs.aws.amazon.com/AmazonS3/latest/API/", content)) == 116
+    assert sum(
+        line.startswith("| [") and
+        "](https://docs.aws.amazon.com/AmazonS3/latest/API/" in line
+        for line in lines
+    ) == 116
