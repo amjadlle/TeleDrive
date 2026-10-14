@@ -104,7 +104,7 @@ class RecoveryManager:
         during the delete loop because remote operations release SQL locks.
         """
         from teledrive.storage.catalog import heads, published_versions, removed_versions
-        from teledrive.storage.manifest import object_aliases
+        from teledrive.storage.manifest import object_aliases, writer_fences
         from teledrive.s3.multipart import parts
         from teledrive.storage.bot_api_adapter import _bot_send_intents, _bot_receipts
 
@@ -114,6 +114,7 @@ class RecoveryManager:
             ("storage_object_heads", heads.c.object_id == object_id, heads),
             ("storage_published_versions", published_versions.c.object_id == object_id, published_versions),
             ("storage_removed_versions", removed_versions.c.object_id == object_id, removed_versions),
+            ("storage_writer_fences", writer_fences.c.object_id == object_id, writer_fences),
             ("storage_object_aliases", or_(
                 object_aliases.c.object_id == object_id,
                 object_aliases.c.source_object_id == object_id,

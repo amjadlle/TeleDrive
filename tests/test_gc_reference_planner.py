@@ -51,7 +51,7 @@ def test_even_unreferenced_manifest_has_no_deletion_permission(cat):
 
 @pytest.mark.parametrize("source", [
     "head", "published_version", "removed_version", "writer_fence",
-    "copy_alias", "bot_send_intent", "bot_receipt",
+    "copy_alias", "multipart_part", "bot_send_intent", "bot_receipt",
 ])
 def test_reference_classes_always_block_gc(cat, source):
     ident = old_failure(cat, source)
@@ -73,6 +73,15 @@ def test_reference_classes_always_block_gc(cat, source):
         ))
     elif source == "writer_fence":
         cat.manifests.start_writer(ident, "unreconciled-writer", now)
+    elif source == "multipart_part":
+        from teledrive.s3.multipart import MultipartStore, parts
+        upload = MultipartStore(cat).initiate(
+            "gc-audit-test", "candidate", "ci-owner", now=now,
+        )
+        db.connection.execute(insert(parts).values(
+            upload_id=upload, number=1, object_id=ident,
+            etag="a" * 32, size=0, updated_at=now,
+        ))
     elif source == "copy_alias":
         child = cat.manifests.begin("gc-audit-test", "alias", 0, now)
         db.connection.execute(insert(object_aliases).values(

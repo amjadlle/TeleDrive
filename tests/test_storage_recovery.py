@@ -314,3 +314,19 @@ def test_physical_cleanup_rejects_copy_alias_and_unresolved_bot_receipt(db_store
     with pytest.raises(UnsafeCleanup, match="another SQL reference"):
         run(manager.cleanup(ident, dry_run=False))
     assert transport.deleted == []
+
+
+def test_physical_cleanup_refuses_expired_unreconciled_writer_fence(db_store):
+    """A lost writer lease does not prove Telegram sends have stopped."""
+    identifier, part = failed_object(db_store)
+    remote = FakeRecoveryTransport()
+    remote.messages[part.identity] = part
+    db_store.start_writer(identifier, "not-yet-reconciled",
+                          int(time.time()) - 3600, ttl=120)
+    with pytest.raises(UnsafeCleanup, match="retained"):
+        run(RecoveryManager(db_store, remote, min_age_seconds=3600).cleanup(
+            identifier, dry_run=False,
+        ))
+    assert remote.deleted == []
+    assert part.identity in remote.messages
+    assert db_store.interrupted()[0][1] == "failed"
