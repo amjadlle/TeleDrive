@@ -886,8 +886,15 @@ def test_explicit_dependencies_and_isolated_docker_build_contexts():
     assert "context: ../../.." in compose
     assert "dockerfile: .github/ci/fault-injection/Dockerfile" in compose
     prod_compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text("utf-8"))
-    assert prod_compose["services"]["s3"]["profiles"] == ["s3"]
-    assert "profiles" not in prod_compose["services"]["teledrive"]
+    assert list(prod_compose["services"]) == ["teledrive"]
+    service = prod_compose["services"]["teledrive"]
+    assert "profiles" not in service
+    assert len(service["ports"]) == 2
+    assert any(":8080" in entry for entry in service["ports"])
+    assert any(":9000" in entry for entry in service["ports"])
+    assert service["environment"]["TELEDRIVE_JOB_SOURCE_ROOT"] == "/uploads"
+    assert service["environment"]["TELEDRIVE_JOB_AUTO_RUN"] == "${TELEDRIVE_JOB_AUTO_RUN:-1}"
+    assert "web.unified" in (ROOT / "Dockerfile").read_text("utf-8")
     assert (ROOT / "docs/SECURITY.md").is_file()
     assert not (ROOT / "SECURITY.md").exists()
 

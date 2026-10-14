@@ -33,7 +33,7 @@ Open **http://127.0.0.1:8080** on the Docker host. The port binds to loopback by
 
 In **Settings**, enter the Telegram API ID/hash from [my.telegram.org](https://my.telegram.org/apps), each enabled account's phone number and upload target, then select a strategy. Choose **Run batch**; the browser prompts for login codes and 2FA passwords as needed.
 
-**Compose services:** `docker compose up -d --build` starts **one** `teledrive` Web container. The separate `s3` container is optional (`docker compose --profile s3 up -d --build`); both share the same image and state. Their ASGI entrypoints use different ports and are intentionally separate.
+**One container, all entrypoints:** `docker compose up -d --build` starts one TeleDrive Python process with WebUI/REST at `http://127.0.0.1:8080` and SigV4 S3 at `http://127.0.0.1:9000`. Both ports share the **same SQL catalog, Telegram Bot transport, version history and durable upload jobs**. S3 is no longer an opt-in service; separate Docker containers or `--profile s3` are not needed. Both listeners bind to loopback on the host by default.
 
 Docker mounts: **./config → /config** (settings), **./data → /data** (sessions, auth handoff, default SQLite DB), and **./uploads → /uploads:ro** (source files). To upload a different host directory, change only the host-side path of the **/uploads** bind mount.
 
@@ -292,19 +292,50 @@ PY
 ~~~
 
 Install `cryptography` locally if needed: `python -m pip install cryptography`.
-Ensure the S3 container's `PUID`/`PGID` can read this file. **Back up the
+Ensure the TeleDrive container's `PUID`/`PGID` can read this file. **Back up the
 master key securely**; losing it makes all issued S3 secrets unusable, and
 replacing it does not restore old credentials.
 
-3. Start both management UI and the opt-in S3 gateway:
+3. Start TeleDrive (one container, both WebUI/REST and S3):
 
 ~~~bash
-docker compose --profile s3 up -d --build
+docker compose up -d --build
 ~~~
 
 The gateway binds **127.0.0.1:9000** by default. For remote clients, put
 it behind an HTTPS reverse proxy or private VPN. Do not expose plaintext
 HTTP or the Telegram bot token to the internet.
+
+### Same object storage for REST, S3 and local files
+
+The default Docker deployment exposes **one catalog**, not three separate
+uploads directories. REST `/api/v1/buckets/{bucket}/content`, signed S3
+`PUT /{bucket}/{key}`, and local-folder **durable upload jobs** all publish
+through `BucketCatalog` + `TelegramObjectStorage` with the same object
+versions, SQL leases, checksum validation and recoverability.
+
+To upload an existing `./uploads/example.bin` through that same catalog,
+first create the destination bucket through REST or S3, then queue the file
+from WebUI's authenticated administrative API:
+
+~~~bash
+curl -fsS -u "$TELEDRIVE_WEB_USER:$TELEDRIVE_WEB_PASSWORD" \
+  -H "X-TeleDrive-CSRF: 1" -H "Content-Type: application/json" \
+  -d '{"bucket":"backups","key":"local/example.bin","source_path":"/uploads/example.bin"}' \
+  http://127.0.0.1:8080/api/v1/admin/storage/jobs
+~~~
+
+`TELEDRIVE_JOB_AUTO_RUN=1` (enabled by default in Compose) processes explicitly
+queued files with the same Telegram Bot credentials and SQL metadata as S3/REST.
+To pause background job execution set `TELEDRIVE_JOB_AUTO_RUN=0`; files remain
+queued. **Simply copying a file into the mounted directory does not automatically
+upload it.** The original legacy Telethon uploader/batch workflow remains a
+separate compatibility mode; use the durable-job path if the file must be
+visible through REST/S3.
+
+**Provisioning:** S3 data writes require a configured storage Bot, S3 master
+key and scoped S3 access credentials. Those are not generated silently.
+The container starts both API listeners even before S3 is provisioned.
 
 4. Open **WebUI → API Management → S3-compatible gateway** or the Desktop
 **S3 Management** page. Issue an S3 Access Key ID and Secret Access Key,

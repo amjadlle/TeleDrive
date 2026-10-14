@@ -146,3 +146,7 @@ Operatörlerin toplu iş listesi: [TODO.md](../TODO.md). Sürüm günlüğü iç
 ## Kaynak ağacının bakımı
 
 GitHub Actions YAML'ları [`.github/workflows/`](../.github/workflows/), bunların özel Docker yardımcıları [`.github/ci/fault-injection/`](../.github/ci/fault-injection/) altında yer alır. Script ve test dosyaları P0/P1/P2 faz adını değil davranışı adlandırır: `acceptance.py`, `monitor_host_soak.py`, `capacity_probe.py`; `test_acceptance_cli.py`, `test_host_soak.py`, `test_capacity_probe.py` vb. Güvenlik politikası GitHub'ın desteklediği [`docs/SECURITY.md`](SECURITY.md) yolundadır. Desktop ve sunucu bağımlılıkları [`requirements/`](../requirements/) klasöründe ayrıdır.
+
+## Tek container ile ortak veri sözleşmesi
+
+Varsayılan Compose servisi yalnızca `teledrive` container'ıdır; aynı proses `8080` (WebUI/REST) ve `9000` (SigV4 S3) dinler. REST ve S3 `BucketCatalog` ile `TelegramObjectStorage` üzerinden aynı SQL ve Telegram verisine yazıp okur. `/uploads` yolu, admin durable-job API'si ve otomatik işleyici üzerinden aynı kataloğa bağlanır; eski Telethon batch uploader bağımsız legacy moddur, REST/S3 nesnesiymiş gibi yanlış sunulmaz. S3 için master key, scope'lu erişim anahtarı ve Telegram Bot kimlik bilgileri ayrıca yapılandırılır. Gerçek storage taşımaları otomatik olarak farklı bir servise kopyalanmaz.

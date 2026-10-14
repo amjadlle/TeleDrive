@@ -95,7 +95,7 @@ Bu sadece **beklenen şema örneğidir**, gerçekleşmiş koşu çıktısı değ
 
 - Ortak cooldown, SQL `reserve_send_slot` çağrısı **önce** yapılmadan dayatılamaz. Senaryolar güvenlik protokolünü gevşetmez.
 - Container'ın `/api/health` yanıtı tek başına Web yapılandırmasının geçerli olduğuna kanıt değildir. Fault harness'ı gerçek `load_config` ayrıştırıcısını iki node'da da kullanır; zorunlu `sleep_min_seconds` / `sleep_max_seconds` / `max_files_per_run` / `max_files_per_day` alanları atlanmamalıdır.
-- Gerçek Bot/User/üç-worker testleri **ayrı** workflow'lardır. Geliştirme Docker'daki sentetik 429 doğal production 429 kanıtı değildir.
+- REST/S3/yerel-kuyruk ortak katalog testi `tests/test_unified_service.py` ve tek-container iki-port Docker smoke testinde doğrulanır. Gerçek Bot/User/üç-worker testleri **ayrı** workflow'lardır. Geliştirme Docker'daki sentetik 429 doğal production 429 kanıtı değildir.
 
 ## Kabul sınırı ve ilgili belgeler
 
@@ -107,5 +107,5 @@ SQL backup'ın genel uygulaması: [Backup & Restore](BACKUP_RESTORE.md). Test al
 
 - GitHub Actions tanımları yalnızca [`.github/workflows/`](../.github/workflows/) içindedir. Resilience testinin Docker build bağlamı ve yardımcı Dockerfile'ı [`.github/ci/fault-injection/`](../.github/ci/fault-injection/) altında tutulur; GitHub Actions bu dosyaları ayrıca workflow olarak çalıştırmaz.
 - Bağımlılıklar [`requirements/server.txt`](../requirements/server.txt) (başsız Web/S3) ve [`requirements/desktop.txt`](../requirements/desktop.txt) (PySide6 masaüstü) olarak ayrılmıştır. GUI paketlerini server image'ına yüklemeyiz. Ortak Python çekirdeğinin metadata'sı `pyproject.toml` içindedir.
-- [`docker-compose.yml`](../docker-compose.yml) normalde sadece `teledrive` Web servisini açar. İkinci `s3` ASGI servisi `profiles: [s3]` altında isteğe bağlıdır; `docker compose --profile s3 up -d --build` ile açılır ve aynı image/metadata'yı kullanır. Farklı giriş noktalarının ayrı proses olması güvenlik ve port sınırlarını korur.
+- [`docker-compose.yml`](../docker-compose.yml) **tek** `teledrive` container'ı çalıştırır. Tek Python/ASGI sunucu süreci, socket'in gerçek yerel portuna göre WebUI/REST (`8080`) veya S3 (`9000`) uygulamasına yönlendirir; S3 imzalanmış URL path/Host bilgisini değiştirmez. İki arayüz aynı SQL HEAD/manifest, Telegram taşıması ve kalıcı upload-job kuyruğunu kullanır. `--profile s3` ve ikinci container yoktur. `/uploads` içindeki dosyalar açık admin job isteği ile kuyruğa alınır; otomatik dosya taraması yapılmaz.
 - Docker arıza senaryosunda **gerçek** PostgreSQL ve iki ayrı Web container'ı kasıtlıdır: çoklu servis crash/restart testi bunu gerektirir. Bunlar production container'ları değildir.

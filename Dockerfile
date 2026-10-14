@@ -25,8 +25,8 @@ RUN mkdir -p /config /data/sessions /data/auth /data/tmp /uploads \
 
 USER 10001:10001
 
-EXPOSE 8080
+EXPOSE 8080 9000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3)" || exit 1
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3); urllib.request.urlopen('http://127.0.0.1:9000/__health', timeout=3)" || exit 1
 
-CMD ["uvicorn","web.app:app","--host","0.0.0.0","--port","8080","--workers","1","--no-server-header"]
+CMD ["python","-m","web.unified","--host","0.0.0.0","--web-port","8080","--s3-port","9000"]
