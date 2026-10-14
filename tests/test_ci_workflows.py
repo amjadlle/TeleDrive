@@ -988,3 +988,9 @@ def test_gc_references_and_live_inventory_are_ci_gates():
     user = workflow("live-telegram-user.yml")["jobs"]["telegram-roundtrip"]
     assert any("tests/test_telegram_history_live_e2e.py" in s.get("run", "")
                for s in user["steps"])
+
+def test_offline_inventory_reconciliation_is_required_in_ci():
+    for name in ("quality-security.yml", "integration-storage.yml"):
+        commands = "\n".join(step.get("run", "")
+            for job in workflow(name)["jobs"].values() for step in job["steps"])
+        assert "tests/test_telegram_inventory_reconcile.py" in commands
