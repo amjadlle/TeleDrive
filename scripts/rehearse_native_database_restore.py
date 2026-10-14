@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 from teledrive.db import connect_database
 from teledrive.s3.credentials import S3CredentialStore
 from teledrive.s3.tagging import ObjectTagStore
-from teledrive.storage.bot_api_adapter import BotFileIndex, _bot_receipts
+from teledrive.storage.bot_api_adapter import BotFileIndex, _bot_receipts, _bot_429_observations
 from teledrive.storage.catalog import BucketCatalog, removed_versions
 from teledrive.storage.jobs import StorageUploadJobs
 from teledrive.storage.manifest import ChunkReference, ManifestStore
@@ -73,6 +73,14 @@ def fingerprint(url: str, receipt: dict) -> dict:
                 checksum=hashlib.sha256(b"Q").hexdigest(), size=1,
             ).message_id,
             "unjournaled": index.unjournaled_count(),
+            "bot_429_evidence": list(db.connection.execute(select(
+                _bot_429_observations.c.observations,
+                _bot_429_observations.c.last_observed_ms,
+                _bot_429_observations.c.last_retry_after_seconds,
+            ).where(
+                _bot_429_observations.c.account == receipt["rate_account"],
+                _bot_429_observations.c.chat_id == receipt["rate_chat"],
+            )).one()),
             "job": next(
                 {"id": j["id"], "state": j["state"], "attempts": j["attempts"]}
                 for j in StorageUploadJobs(catalog).list_jobs(limit=1000)
@@ -125,6 +133,16 @@ def seed(url: str, receipt_path: Path, source: Path):
             object_id=pending, ordinal=0,
             checksum=hashlib.sha256(b"Q").hexdigest(), size=1,
         )
+        # Validate native PostgreSQL/MySQL restore preserves a definitive
+        # rejected-send observation, not merely upload manifests/ACKs.
+        # This is a *synthetic* 429: never label it production evidence.
+        rate_account = "ci-dr-rate-" + uuid4().hex[:12]
+        rate_chat = -100900902
+        rate_index = BotFileIndex(db)
+        rate_index.reserve_send_slot(rate_account, rate_chat, 0, now_ms=1000)
+        rate_index.impose_shared_cooldown(
+            rate_account, rate_chat, 9, now_ms=1000,
+        )
         source.write_bytes(b"durable-queued-source" * 13)
         job = StorageUploadJobs(catalog).enqueue(
             bucket, "queue/pending.bin", source,
@@ -136,6 +154,7 @@ def seed(url: str, receipt_path: Path, source: Path):
         receipt.update({
             "first": first, "second": second, "marker": marker,
             "pending": pending, "job": job, "access_key": credential.access_key,
+            "rate_account": rate_account, "rate_chat": rate_chat,
         })
     finally:
         db.close()
@@ -145,6 +164,7 @@ def seed(url: str, receipt_path: Path, source: Path):
     assert receipt["fingerprint"]["removed_count"] == 2
     assert len(receipt["fingerprint"]["parts"]) == 2
     assert receipt["fingerprint"]["unjournaled"] == 1
+    assert receipt["fingerprint"]["bot_429_evidence"] == [1, 1000, 9]
     assert receipt["fingerprint"]["s3_credential_decrypts"]
     # Durable test receipt contains only synthetic CI IDs and no secret keys.
     receipt_path.write_text(json.dumps(receipt, ensure_ascii=False), encoding="utf-8")
@@ -164,6 +184,7 @@ def verify(url: str, receipt_path: Path):
         "chunk_refs": len(restored["parts"]),
         "removed_versions": restored["removed_count"],
         "unjournaled_receipts": restored["unjournaled"],
+        "synthetic_bot_429_observations": restored["bot_429_evidence"][0],
         "queue_state": restored["job"]["state"],
         "s3_credential_decrypts": restored["s3_credential_decrypts"],
         "physical_telegram_delete": False,

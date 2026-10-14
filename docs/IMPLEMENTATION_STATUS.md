@@ -1264,3 +1264,23 @@ checked on their own exact SHA.
   Telegram intentionally. The actual multi-host production acceptance
   still requires an authorized operator to observe genuine 429 behavior
   on the original deployment.
+
+
+## P1 production telemetry collection and native DR metric coverage
+
+- `scripts/monitor_p1_soak.py` is an operator-only HTTPS Basic-auth,
+  no-redirect, read-only 2-8 host collector. It enforces >=1h,
+  30-600s sampling and fail-closed gaps, records a mode-0600,
+  non-overwriting sanitized evidence file and **never** marks production
+  acceptance signed off.
+- The normal Security, Storage API and Release workflows regression-test
+  its safe host parsing, real-duration restriction, counter divergence,
+  zero real 429, undrained jobs and stale-ACK conditions. CI uses only a
+  compressed deterministic fake clock; no real Telegram load is created.
+- The native PostgreSQL/MySQL dump/restore fixture now stores and
+  independently fingerprints a **synthetic** transactional Bot 429 record
+  across original and isolated restored SQL databases. This checks that
+  rate-limit safety metadata is not silently lost in backups.
+- Actual original-production-media restore, operator-verified physical
+  host independence, naturally occurring 429 and legacy read cutover
+  remain external acceptance receipts. Never invent or auto-approve them.

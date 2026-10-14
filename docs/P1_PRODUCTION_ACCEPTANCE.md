@@ -272,3 +272,47 @@ transaction; if journal persistence fails all three roll back and the
 operator must not claim observed 429 evidence. A live worker still refuses
 unsafe unknown-outcome retransmission; this metric is never a retry
 authorization. Physical production soak remains operator-owned.
+
+
+## 6. Non-mutating, two-host >=1h telemetry receipt
+
+Use the implementation's `scripts/monitor_p1_soak.py` from an
+**authorized operator shell** with two truly independent app hosts sharing
+one SQL database. Both HTTP services must serve the identical
+authenticated `/api/v1/admin/storage/health` endpoint over HTTPS.
+This collector is strictly **read-only**: it performs no load-generation,
+no Telegram uploads, no remote deletion and no SQL writes.
+
+Configure endpoint URLs in a protected environment variable, not shell
+arguments or a public Actions variable. Example host labels are arbitrary;
+actual production host independence needs operator/network evidence.
+
+```bash
+export TELEDRIVE_P1_HEALTH_HOSTS='[{"label":"node-a","url":"https://HOST_A"},{"label":"node-b","url":"https://HOST_B"}]'
+export TELEDRIVE_P1_BASIC_USERNAME='operator'
+# Supply the password from your secret manager; do not put it in Git history.
+export TELEDRIVE_P1_BASIC_PASSWORD='...'
+python scripts/monitor_p1_soak.py \
+  --duration-seconds 3600 --interval-seconds 60 \
+  --output /secure/operator-evidence/p1-soak-UNIQUE.json
+```
+
+The script refuses HTTP, query-parameter credentials, redirects, duplicate
+hostnames, fewer than two probes, missing fields, truncated health samples
+and a monitoring interval gap. Its non-overwriting receipt uses file mode
+0600 and contains host **labels**, aggregate 429 counter deltas, sample
+count, drain/safety status and explicit
+`production_acceptance_signed_off: false`; neither the API Basic
+credentials nor host URLs are written to the receipt. Exit 0 means the
+**telemetry gate** passed: >=1h observed, both endpoints agree on the
+final shared SQL counter, the definitive 429 count increased during
+observation, and no pending/reconciliation/backlog alert remains on
+either endpoint. Exit 2 means observations were inconclusive; exit 1
+means probe/configuration error. Do not artificially flood Telegram
+to manufacture an HTTP 429.
+
+This is deliberately **not** a complete production signoff. Separately
+attach operator-verified physical host/SQL connection evidence,
+permitted load and checksum/range results, original-media DR report,
+and signed legacy cutover approval to the change record. A passing
+CI or sandbox collector cannot certify the original production channel.
