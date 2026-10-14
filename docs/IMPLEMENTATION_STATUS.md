@@ -26,7 +26,7 @@ Release/signoff SHA must have all required GitHub Actions checks complete and su
 
 - **P2-SAFE-GC** — Audited retention/alias/version-aware GC with independent proof of Telegram message ownership, multi-step operator approval and recoverability. No physical deletion without safety proof.
 - **P2-S3** — AWS S3 lifecycle, bucket policy, SSE, additional checksum/storage behavior and extended client parity where support is safe and truthful.
-- **P2-DR** — Rebuild from Telegram, migration of unknown legacy metadata, comprehensive disaster recovery and scalable long-running performance testing.
+- **P2-DR** — Single-object original Telegram reconstruction into a new SQL catalog is implemented behind trusted chunk/marker/SHA proof; automatic unknown-history discovery, broad legacy migration and production-scale DR remain open.
 - **PRODUCTION** — Original media/credential restore, independent hosts/long soak with natural rate limits, ownership-approved cutover and external release deployment.
 - **CLIENTS** — Cyberduck and additional third-party clients require actual interoperability evidence before being advertised as supported.
 
