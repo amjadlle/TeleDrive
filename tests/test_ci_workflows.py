@@ -212,7 +212,7 @@ def test_real_bot_soak_is_explicitly_opted_in_and_never_silently_skipped():
     assert "[p1-live-soak]" in expression
     assert "github.event_name == 'push'" in expression
     assert bot["concurrency"]["cancel-in-progress"] == "false"
-    assert bot["jobs"]["telegram-bot-roundtrip"]["timeout-minutes"] == "15"
+    assert bot["jobs"]["telegram-bot-roundtrip"]["timeout-minutes"] == "25"
 
 
 def test_bot_send_intent_contract_and_operator_health_trigger_correct_ci():
