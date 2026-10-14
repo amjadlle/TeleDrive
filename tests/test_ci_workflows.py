@@ -232,3 +232,54 @@ def test_bot_send_intent_contract_and_operator_health_trigger_correct_ci():
         step.get("run", "") for step in workflow("security-ci.yml")["jobs"]["security"]["steps"]
     )
     assert "tests/test_bot_storage.py" in security_steps
+
+def test_production_acceptance_dr_ack_cutover_gates_are_run_in_ci():
+    """Safety-critical operator artifacts must stay in non-skipped CI gates."""
+    for filename in ("storage-api-ci.yml", "security-ci.yml", "release.yml"):
+        content = (WORKFLOWS / filename).read_text(encoding="utf-8")
+        for path in (
+            "tests/test_bot_receipt_reconcile.py",
+            "tests/test_bot_rate_slots.py",
+            "tests/test_telegram_dr_rehearsal.py",
+            "tests/test_legacy_cutover_acceptance.py",
+        ):
+            assert path in content, (filename, path)
+
+
+def test_explicit_multi_process_live_postgres_bot_acceptance_not_auto_spammed():
+    name = "telegram-multiworker-e2e.yml"
+    path = WORKFLOWS / name
+    assert path.is_file()
+    content = path.read_text(encoding="utf-8")
+    wf = workflow(name)
+    assert "workflow_dispatch" in wf["on"]
+    assert "push" in wf["on"] and "pull_request" not in wf["on"]
+    assert wf["permissions"]["contents"] == "read"
+    assert wf["concurrency"]["cancel-in-progress"] == "false"
+    assert wf["concurrency"]["group"] == workflow(
+        "telegram-bot-e2e.yml"
+    )["concurrency"]["group"]
+    job = wf["jobs"]["three-process-telegram"]
+    assert "postgres" in job["services"]
+    assert "postgres:17-alpine" in job["services"]["postgres"]["image"]
+    assert "[p1-live-multiworker]" in job["if"]
+    assert "workflow_dispatch" in job["if"]
+    assert "TELEDRIVE_E2E_BOT_TOKEN" in job["env"]
+    assert "TELEDRIVE_E2E_BOT_CHAT_ID" in job["env"]
+    assert "DB_TEST_POSTGRES_URL" in job["env"]
+    assert job["env"]["TELEDRIVE_E2E_MULTIWORKER"] == "1"
+    assert any("tests/test_telegram_bot_multiworker_e2e.py" in step.get(
+        "run", "") for step in job["steps"])
+    assert "continue-on-error" not in content
+    for action in re.findall(r"(?m)^\s*uses:\s*(\S+)", content):
+        assert re.fullmatch(r".+@[0-9a-f]{40}", action)
+
+
+def test_cross_client_bot_ack_requires_opt_in():
+    wf = workflow("telegram-bot-e2e.yml")
+    expressions = wf["jobs"]["telegram-bot-roundtrip"]["env"]
+    assert "inputs.run_ack_proof" in expressions["TELEDRIVE_E2E_CROSS_CLIENT"]
+    assert "[p1-live-ack-proof]" in expressions["TELEDRIVE_E2E_CROSS_CLIENT"]
+    assert "TELEDRIVE_E2E_API_ID" in expressions
+    assert "TELEDRIVE_E2E_API_HASH" in expressions
+    assert "TELEDRIVE_E2E_SESSION" in expressions
