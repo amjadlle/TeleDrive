@@ -142,6 +142,15 @@ class BotFileIndex:
         ))
         self.db.commit()
 
+    def get_send_intent(self, *, account: str, chat_id: int,
+                        object_id: str, ordinal: int) -> dict | None:
+        """Exact keyed read of an unresolved send for external proof."""
+        row = self.db.connection.execute(
+            select(_bot_send_intents.c.sha256, _bot_send_intents.c.size)
+            .where(*self._intent_predicate(account, chat_id, object_id, ordinal))
+        ).mappings().one_or_none()
+        return dict(row) if row is not None else None
+
     def unresolved_count(self) -> int:
         return int(self.db.connection.execute(
             select(func.count()).select_from(_bot_send_intents)
