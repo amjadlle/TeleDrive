@@ -930,3 +930,56 @@ def test_version_revocation_bypasses_stale_repeatable_read_snapshots(env_name):
         seed.close()
         first_reader.close()
         second_reader.close()
+
+@pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
+def test_live_sql_serializes_six_independent_bot_send_workers_and_429(env_name):
+    """Actual PostgreSQL/MySQL transactions serialize competing channel sends.
+
+    Six independent SQL connections start simultaneously with an identical
+    clock tick. A definite 429 then adds a common cooldown; a different
+    Bot account/channel is unaffected. This is not physical Telegram load.
+    """
+    url = os.getenv(env_name)
+    if not url:
+        pytest.skip(f"{env_name} not configured")
+    from concurrent.futures import ThreadPoolExecutor
+    from uuid import uuid4
+    from teledrive.storage.bot_api_adapter import BotFileIndex
+
+    chat = -100_000_000_000 - int(uuid4().hex[:8], 16)
+    account = "rate-ci-" + uuid4().hex[:16]
+    t = 9_000_000_000
+    prepared = connect_database(url)
+    try:
+        idx = BotFileIndex(prepared)
+        assert idx.reserve_send_slot(account, chat, 0.9, now_ms=t) == 0
+    finally:
+        prepared.close()
+
+    def one_worker(_):
+        conn = connect_database(url)
+        try:
+            return BotFileIndex(conn).reserve_send_slot(
+                account, chat, 0.9, now_ms=t,
+            )
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=6) as group:
+        waits = sorted(group.map(one_worker, range(6)))
+    assert waits == [0.9, 1.8, 2.7, 3.6, 4.5, 5.4]
+
+    first, second = connect_database(url), connect_database(url)
+    try:
+        BotFileIndex(first).impose_shared_cooldown(
+            account, chat, 30, now_ms=t,
+        )
+        assert BotFileIndex(second).reserve_send_slot(
+            account, chat, 0.9, now_ms=t,
+        ) == 30
+        assert BotFileIndex(first).reserve_send_slot(
+            account + "-other", chat, 0.9, now_ms=t,
+        ) == 0
+    finally:
+        first.close()
+        second.close()
