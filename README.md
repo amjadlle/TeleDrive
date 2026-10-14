@@ -125,6 +125,8 @@ The default REST upload ceiling is 2 GiB, configurable with `TELEDRIVE_REST_MAX_
 
 ## 4. S3-compatible API
 
+For the **116-operation AWS S3 API compatibility matrix**, parameter-level limitations, unsupported-operation groups, and the P2 Advanced S3 work plan, see [S3 Specifications](docs/S3_SPECS.md).
+
 The S3 endpoint is **part of the default container**, not a separate Compose profile. It implements a tested **subset** of S3 over the shared Telegram-backed catalog. It is **not AWS S3 feature parity**.
 
 ### Provision the S3 master key and credentials
