@@ -34,7 +34,8 @@ cleanup() {
     rc=1
     echo "İzole Compose projesi tam temizlenemedi; manuel kontrol gerekli." >&2
   fi
-  python3 - "$WORKSPACE/scenario/evidence" "$REPORT" "$rc" "$docker_removed" <<'PY'
+  local report_rc=0
+  python3 - "$WORKSPACE/scenario/evidence" "$REPORT" "$rc" "$docker_removed" <<'PY' || report_rc=$?
 import json, os, pathlib, sys
 evidence, target, rc = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), int(sys.argv[3])
 docker_removed = sys.argv[4] == "true"
@@ -62,11 +63,15 @@ with os.fdopen(fd, "w") as output:
     json.dump(payload, output, indent=2, sort_keys=True)
     output.write("\n")
 print("DOCKER FAULT:", payload["result"], "| rapor:", target)
+sys.exit(0 if complete else 1)
 PY
   if [[ "$docker_removed" == "true" && "$WORKSPACE" == "${TMPDIR:-/tmp}"/teledrive-p1-disposable.* ]]; then
     rm -rf -- "$WORKSPACE"
   else
     echo "İzole test workspace saklandı: Docker teardown doğrulanmadı." >&2
+  fi
+  if [[ "$report_rc" -ne 0 ]]; then
+    rc=1
   fi
   exit "$rc"
 }
