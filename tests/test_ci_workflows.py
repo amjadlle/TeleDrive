@@ -298,7 +298,6 @@ def test_bot_target_is_masked_secret_before_any_live_step(name):
     target = job["env"]["TELEDRIVE_E2E_BOT_CHAT_ID"]
     assert target == "${{ secrets.TELEDRIVE_E2E_BOT_CHAT_ID }}"
     assert "vars.TELEDRIVE_E2E_BOT_CHAT_ID" not in raw
-    assert "variable."" not in raw
     assert not re.search(r"(?m)^\s*TELEDRIVE_E2E_BOT_CHAT_ID:\s*['\"]?-100[0-9]+", raw)
     mask = job["steps"][0]
     assert mask["name"] == "Mask dedicated Telegram test target"
@@ -314,5 +313,5 @@ def test_telegram_setup_writes_bot_target_as_secret_and_avoids_value_output():
     assert 'store_secret(repo, "TELEDRIVE_E2E_BOT_CHAT_ID"' in content
     assert 'store_variable(repo, "TELEDRIVE_E2E_BOT_CHAT_ID"' not in content
     assert "def secure_existing_bot_chat_id(" in content
-    assert "gh\", \"variable\", \"delete\"".replace("\\", "") in content
+    assert '["gh", "variable", "delete"' in content
     assert "--secure-bot-chat-id" in content
