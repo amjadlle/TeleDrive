@@ -192,7 +192,7 @@ jobs:
           else
             gh release create "$tag" release-assets/* \
               --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --notes-file docs/RELEASE_NOTES_v1.0.7.md \
+              --generate-notes \
               --title "TeleDrive $tag"
           fi
       - name: Publish CI run summary

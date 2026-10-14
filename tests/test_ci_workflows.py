@@ -764,7 +764,8 @@ def test_reusable_docker_fault_injection_workflow_contract():
     assert (ROOT / "docker-compose.fault-ci.yml").is_file()
     assert (ROOT / "Dockerfile.fault-ci").is_file()
     assert (ROOT / "scripts/docker_fault_scenarios.py").is_file()
-    assert (ROOT / "docs/DOCKER_FAULT_INJECTION.md").is_file()
+    assert (ROOT / "docs/CI_WORKFLOWS.md").is_file()
+    assert "DEV-13" in (ROOT / "docs/CI_WORKFLOWS.md").read_text(encoding="utf-8")
 
 
 def test_docker_fault_config_has_every_required_runtime_upload_field():
@@ -841,3 +842,25 @@ def test_release_publish_marker_requires_main_and_same_sha_guard():
     script = "\\n".join(step.get("run", "") for step in publish["steps"])
     assert "scripts/check_release_matrix.py" in script
     assert "gh release create" in script
+
+
+def test_canonical_docs_and_generated_release_notes():
+    """Split legacy status files must not be recreated or break the release."""
+    for name in (
+        "DOCKER_FAULT_INJECTION.md",
+        "P0_ACCEPTANCE.md",
+        "P1_DEVELOPMENT_ACCEPTANCE.md",
+        "P1_PRODUCTION_ACCEPTANCE.md",
+        "P2_RECOVERY_AND_GC.md",
+        "RELEASE_NOTES_v1.0.7.md",
+    ):
+        assert not (ROOT / "docs" / name).exists(), name
+    for name, required_sections in (
+        ("CI_WORKFLOWS.md", ("DEV-01", "DEV-13", "docker-fault-injection-ci.yml")),
+        ("IMPLEMENTATION_STATUS.md", ("P0", "P1", "P2", "verify_production_bundle.py")),
+    ):
+        content = (ROOT / "docs" / name).read_text(encoding="utf-8")
+        assert all(section in content for section in required_sections), name
+    text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    assert "--generate-notes" in text
+    assert "--notes-file" not in text

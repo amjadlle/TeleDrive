@@ -1,14 +1,8 @@
 # TeleDrive
 
-> **CI dashboard:** [Grouped workflows and their release/acceptance scope](docs/CI_WORKFLOWS.md).
-
-> **Reusable Docker fault-injection suite:** use `bash scripts/run_docker_fault_injection.sh`.
-> It creates two isolated Docker WebUI services + PostgreSQL, injects
-> recoverable faults into synthetic media, verifies restore, and cleans up.
-> No production deployment, legacy cutover, Telegram session, Bot token
-> or real channel is required. See
-> [Docker Fault Injection](docs/DOCKER_FAULT_INJECTION.md).
-> Real Telegram CI and production cutover are separate opt-in stages.
+> **Dokümantasyon:** [CI, otomatik testler ve Docker P1 kabulü](docs/CI_WORKFLOWS.md) · [P0/P1 durumu, production kabulü ve P2 planı](docs/IMPLEMENTATION_STATUS.md).
+>
+> Docker geliştirme testi: `bash scripts/run_docker_fault_injection.sh`. Gerçek Telegram/production verisi gerekmez. Production operatör kabulü **ayrıdır**.
 
 
 **Telegram personal backup uploader** — Docker Web UI, Windows/Linux desktop app and an automation CLI. This fork adds multi-account scheduling and SQLAlchemy-backed persistent state.

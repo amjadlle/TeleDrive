@@ -25,8 +25,8 @@ Date: 2026-10-14. Primary objective: close the **supported P0/P1 development sco
 - [x] Add dual-attested, fail-closed offline production-evidence verifier for soak/original-media DR/cutover reports.
 - [ ] Conduct **actual** 1h+ physical multi-host soak, original-channel DR and owner-approved legacy cutover (or signed no-legacy exemption) on a real installation.
 
-The [CI catalog](docs/CI_WORKFLOWS.md) defines what a green check proves. The [canonical implementation status](docs/IMPLEMENTATION_STATUS.md) describes bounded release support. Keep the physical deletion interlock OFF.
+A green check covers **its exact source SHA** only. P2/production scope: [Implementation Status](docs/IMPLEMENTATION_STATUS.md). Keep physical Telegram deletion OFF.
 
 Release candidate: `v1.0.7`. The marker commit `[publish-release]` requests artifact builds and publishing; missing/failed required workflows must block the release. No unrelated feature additions should be merged after a successful release.
 
-Reference: [Single P2 backlog and safety boundary](docs/P2_RECOVERY_AND_GC.md), [Production evidence runbook](docs/P1_PRODUCTION_ACCEPTANCE.md). Never mark live operator-only gates complete using synthetic fixtures.
+References: [Tek proje durumu, P0/P1, production ve P2](docs/IMPLEMENTATION_STATUS.md) · [CI ve Docker DEV acceptance](docs/CI_WORKFLOWS.md). Never mark live operator-only gates complete using synthetic fixtures.
