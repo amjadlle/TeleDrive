@@ -83,7 +83,9 @@ async def verify_legacy_cutover(
     total = excluded = verified = queued = inconsistent = 0
     truncated = False
     initial_paths = []
-    verified_revisions: dict[str, tuple[os.stat_result, str]] = {}
+    verified_revisions: dict[
+        str, tuple[os.stat_result, str, str, str, int, str]
+    ] = {}
     # Materialize at most max_files + 1 eligible entries. The original
     # sorted(os.walk(...)) scanned an unbounded number of paths into RAM
     # before noticing its max_files cap.
@@ -122,7 +124,8 @@ async def verify_legacy_cutover(
                 if task["bucket"] != bucket or task["object_key"] != key:
                     inconsistent += 1
                     continue
-                live_head = queue.catalog.get(bucket, key).item
+                live_record = queue.catalog.get(bucket, key)
+                live_head = live_record.item
                 if live_head.id != task["object_id"] or live_head.size != before.st_size:
                     inconsistent += 1
                     continue
@@ -142,7 +145,10 @@ async def verify_legacy_cutover(
                     inconsistent += 1
                     continue
                 verified += 1
-                verified_revisions[raw_path] = (before, source_sha)
+                verified_revisions[raw_path] = (
+                    before, source_sha, key, live_head.id,
+                    live_record.generation, job_id,
+                )
             except (OSError, ValueError, FileNotFoundError):
                 inconsistent += 1
     if not truncated:
@@ -162,10 +168,27 @@ async def verify_legacy_cutover(
             # source may be modified while a later file is downloaded, then
             # have its original mtime restored. Independently re-hash EVERY
             # verified source at the end, when all Telegram reads are done.
-            for raw_path, (original_stat, source_sha) in verified_revisions.items():
+            for raw_path, (
+                original_stat, source_sha, key, head_id,
+                generation, job_id,
+            ) in verified_revisions.items():
                 try:
                     source = Path(raw_path)
                     if _hash_same_source_revision(source, root, original_stat) != source_sha:
+                        inconsistent += 1
+                        continue
+                    # Publication may change during another object's
+                    # Telegram read. A previously valid source SHA is not
+                    # enough if the serving HEAD/generation has moved.
+                    final_head = queue.catalog.get(bucket, key)
+                    final_job = queue.db.connection.execute(
+                        select(jobs.c.state, jobs.c.object_id)
+                        .where(jobs.c.id == job_id)
+                    ).one_or_none()
+                    if (final_head.item.id != head_id
+                            or final_head.generation != generation
+                            or final_job is None
+                            or tuple(final_job) != ("done", head_id)):
                         inconsistent += 1
                 except (OSError, ValueError, FileNotFoundError):
                     inconsistent += 1

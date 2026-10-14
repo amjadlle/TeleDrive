@@ -260,3 +260,38 @@ def test_cutover_never_follows_last_second_symlink_outside_root(
         assert remote.deletions == 0
     finally:
         db.close()
+
+
+def test_cutover_rechecks_published_head_after_telegram_readback(tmp_path):
+    """A concurrent S3 DELETE cannot leave the cutover report green."""
+    db, queue, cfg, src, _, remote = scenario(tmp_path, sizes=(65537,))
+    try:
+        assert asyncio.run(queue.run_next(
+            remote, allowed_root=src, scratch_directory=src,
+            chunk_size=32768,
+        ))["state"] == "done"
+        assert asyncio.run(inspect(cfg, queue, remote, src))["verified"]
+        original_download = remote.download
+        modified = False
+        before_uploads = remote.uploads
+
+        async def replace_published_head(ref, destination):
+            nonlocal modified
+            await original_download(ref, destination)
+            if not modified:
+                modified = True
+                # Test-only adversarial concurrent S3 writer. It changes only
+                # the SQL HEAD, not the source or previously uploaded chunks.
+                queue.catalog.remove_current(
+                    "cutover-ci", "archived/document-0.bin",
+                )
+
+        remote.download = replace_published_head
+        report = asyncio.run(inspect(cfg, queue, remote, src))
+        assert modified
+        assert not report["verified"]
+        assert report["verified_files"] == 1
+        assert report["inconsistent"] >= 1
+        assert remote.uploads == before_uploads and remote.deletions == 0
+    finally:
+        db.close()
