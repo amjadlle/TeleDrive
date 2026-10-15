@@ -104,7 +104,10 @@ def validate_s3_query(method: str, bucket: str, object_path: bool, params) -> No
             allowed = (frozenset({"tagging", "versionId"})
                        if method in {"GET", "PUT", "DELETE"} else frozenset())
         elif "attributes" in real:
-            allowed = frozenset({"attributes"}) if method == "GET" else frozenset()
+            # GetObjectAttributes may address a published historical VersionId.
+            # Other object controls still fail closed, even if correctly signed.
+            allowed = (frozenset({"attributes", "versionId"})
+                       if method == "GET" else frozenset())
         elif "versionId" in real:
             allowed = (frozenset({"versionId"})
                        if method in {"GET", "HEAD", "DELETE"} else frozenset())

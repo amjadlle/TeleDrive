@@ -132,6 +132,9 @@ def _reject_unimplemented_write_options(request: Request) -> None:
         "x-amz-bypass-governance-retention", "x-amz-mfa",
         "x-amz-expected-bucket-owner",
         "x-amz-decoded-content-length",
+        # GetObjectAttributes ObjectParts pagination is not implemented.
+        # Refusing these headers prevents a successful but misleading page.
+        "x-amz-max-parts", "x-amz-part-number-marker",
     }
     # The S3 gateway is permanently private and has exactly one storage
     # tier, so these explicit default values do not change actual behavior.
@@ -554,8 +557,13 @@ async def _handle(request: Request):
         is_version_read = bool(
             separator and request.method in ("GET", "HEAD")
             and "versionId" in request.query_params
-            and all(key_name == "versionId" or key_name.startswith("X-Amz-")
-                    for key_name in request.query_params)
+            and all(
+                key_name == "versionId"
+                or (key_name == "attributes" and "attributes" in request.query_params
+                    and request.method == "GET")
+                or key_name.startswith("X-Amz-")
+                for key_name in request.query_params
+            )
         )
         if is_version_read and len(request.query_params.getlist("versionId")) != 1:
             return _error("InvalidArgument", "Ambiguous version ID", 400)
@@ -632,7 +640,7 @@ async def _handle(request: Request):
             return _error("NotImplemented", "Bucket tags cannot select object versions", 501)
         if is_object_attributes:
             if request.method != "GET" or any(
-                p in request.query_params for p in ("uploadId", "uploads", "tagging", "versionId")
+                p in request.query_params for p in ("uploadId", "uploads", "tagging")
             ):
                 return _error("NotImplemented", "Unsupported GetObjectAttributes variant", 501)
             action = "s3:GetObjectAttributes"
@@ -1680,18 +1688,36 @@ async def _handle(request: Request):
             if (not requested or any(not name for name in requested)
                     or len(set(requested)) != len(requested)):
                 return _error("InvalidArgument", "Invalid object attributes list", 400)
-            permitted = {"ETag", "ObjectSize"}
+            permitted = {"ETag", "ObjectSize", "Checksum", "StorageClass"}
             if any(name not in permitted for name in requested):
+                # ObjectParts needs accurate completed-multipart part metadata
+                # and pagination. Never turn Telegram chunk boundaries into
+                # fabricated S3 multipart part records.
                 return _error("NotImplemented", "Requested object attributes are unsupported", 501)
             result = ET.Element("GetObjectAttributesOutput", xmlns=NAMESPACE)
             if "ETag" in requested:
                 ET.SubElement(result, "ETag").text = '"' + item_etag + '"'
             if "ObjectSize" in requested:
                 ET.SubElement(result, "ObjectSize").text = str(item.size)
+            if "Checksum" in requested:
+                checksum = ET.SubElement(result, "Checksum")
+                # Immutable object SHA-256 covers the full plaintext bytes,
+                # independent of multipart ETag and physical Telegram chunks.
+                ET.SubElement(checksum, "ChecksumSHA256").text = base64.b64encode(
+                    bytes.fromhex(item.sha256)
+                ).decode("ascii")
+                ET.SubElement(checksum, "ChecksumType").text = "FULL_OBJECT"
+            if "StorageClass" in requested:
+                # TeleDrive exposes one immutable STANDARD-like tier; archived
+                # or replica-backed AWS storage classes do not exist here.
+                ET.SubElement(result, "StorageClass").text = "STANDARD"
             return Response(
                 ET.tostring(result, encoding="utf-8", xml_declaration=True),
                 media_type="application/xml", status_code=200,
-                headers={"x-amz-version-id": item.id},
+                headers={
+                    "x-amz-version-id": item.id,
+                    "Last-Modified": http_last_modified(item.created_at),
+                },
             )
         http_properties = ObjectMetadataStore(catalog).get(item.id)
         precondition = read_precondition(request, item_etag, item.created_at)
