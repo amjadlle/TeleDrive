@@ -366,6 +366,7 @@ def test_live_user_session_unified_transport_and_history_marker(monkeypatch):
     )
     from teledrive.storage.history_inventory import inventory_channel
     from teledrive.storage.gc_safety import GCReferenceGuard
+    from teledrive.storage.catalog import BucketCatalog
 
     async def scenario():
         with tempfile.TemporaryDirectory(prefix="teledrive-user-transport-") as folder:
@@ -392,13 +393,16 @@ def test_live_user_session_unified_transport_and_history_marker(monkeypatch):
             runtime = UserSessionRuntime()
             await runtime.start()
             db = connect_database(str(root / "isolated.db"))
+            # Run the exact catalog schema that a real REST/S3 installation
+            # creates, rather than weakening the fail-closed GC graph checker.
+            catalog = BucketCatalog(ManifestStore(db))
             published = []
             try:
                 content = os.urandom(4221)
                 source = root / "source.bin"
                 source.write_bytes(content)
                 backend = TelegramObjectStorage(
-                    ManifestStore(db),
+                    catalog.manifests,
                     UnifiedUserTransport(runtime, UserSendJournal(db)),
                     chunk_size=8192,
                 )
