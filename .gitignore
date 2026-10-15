@@ -22,6 +22,7 @@ website/.astro/
 .env
 config/
 uploads/
+.opencode/
 
 # Local website settings (formerly website/.gitignore)
 website/.env*

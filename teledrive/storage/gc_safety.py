@@ -61,13 +61,10 @@ class GCReferenceGuard:
         names = set(inspect(self.db.engine).get_table_names())
         if not self.REQUIRED.issubset(names):
             raise RuntimeError("Incomplete GC reference graph schema")
-        if ("storage_bot_send_intents" in names) != ("storage_bot_upload_receipts" in names):
-            raise RuntimeError("Bot reconciliation metadata incomplete")
         return names
 
     def evidence(self, identifier):
         from teledrive.s3.multipart import parts
-        from teledrive.storage.bot_api_adapter import _bot_receipts, _bot_send_intents
         from teledrive.storage.user_mode import mtproto_send_intents
 
         names = self.validate_schema()
@@ -111,10 +108,6 @@ class GCReferenceGuard:
             "writer_fence": refs(writer_fences.c.object_id),
             "multipart_part": refs(parts.c.object_id)
                 if "storage_multipart_parts" in names else [],
-            "bot_send_intent": refs(_bot_send_intents.c.object_id)
-                if "storage_bot_send_intents" in names else [],
-            "bot_receipt": refs(_bot_receipts.c.object_id)
-                if "storage_bot_upload_receipts" in names else [],
             "mtproto_send_intent_or_receipt": refs(mtproto_send_intents.c.object_id)
                 if "storage_mtproto_send_intents" in names else [],
             "durable_job": durable_job_blockers(db, names, linked),
@@ -141,8 +134,7 @@ class GCReferenceGuard:
             "historical_version_retained": bool(
                 graph["published_version"] or graph["removed_version"]
             ),
-            "unresolved_bot_intents": len(graph["bot_send_intent"]),
-            "durable_bot_receipts": len(graph["bot_receipt"]),
+            "unresolved_mtproto_intents": len(graph["mtproto_send_intent_or_receipt"]),
             "writer_barrier_verified": False,
             "independent_payload_backup_verified": False,
             "restore_drill_verified": False,

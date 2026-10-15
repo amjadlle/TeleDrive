@@ -5,8 +5,7 @@ No live database is modified and no Telegram uploads or deletes are issued.
 The verified backup is copied into a disposable scratch directory before
 initializing ORM metadata, preserving the exact SHA-256 receipt of the
 operator's archive. The CLI authenticates a read-only USER MTProto session
-against the ORIGINAL channel; no Bot token is required. Isolated historical
-Bot transport fixtures remain available to prove backward compatibility.
+against the ORIGINAL channel; there is no Bot API transport.
 """
 from __future__ import annotations
 
@@ -25,8 +24,8 @@ from teledrive.db import connect_database
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.manifest import ManifestStore
-from teledrive.storage.bot_api_adapter import BotApiChunkTransport, BotFileIndex
 from teledrive.storage.telethon_adapter import TelethonChunkTransport
+
 
 class ReadOnlyUserChannelTransport:
     """Permit only an exact authorized channel and original SQL account label.
@@ -51,16 +50,14 @@ class ReadOnlyUserChannelTransport:
 
 
 async def verify_restored_telegram_object(
-    snapshot: Path, receipt_sha256: str, bot=None, *,
+    snapshot: Path, receipt_sha256: str, *,
     bucket: str, key: str, account: str, chat_id: int,
     max_bytes: int = 64 * 1024 * 1024,
-    transport=None,
+    transport,
 ) -> dict:
     if type(max_bytes) is not int or not 1 <= max_bytes <= 1024**3:
         raise ValueError("Invalid staging DR maximum object size")
-    if transport is not None and bot is not None:
-        raise ValueError("Specify a single Telegram read transport")
-    if transport is None and bot is None:
+    if transport is None:
         raise ValueError("No authorized Telegram read transport configured")
     original_report = verify_snapshot(Path(snapshot), receipt_sha256)
     with tempfile.TemporaryDirectory(prefix="teledrive-staging-dr-") as dirname:
@@ -78,16 +75,8 @@ async def verify_restored_telegram_object(
             obj = record.item
             if obj.size > max_bytes:
                 raise ValueError("Staging DR sample exceeds explicit size budget")
-            reader = transport
-            if reader is None:
-                # Historical integration tests for already-stored Bot media.
-                # The operator-facing CLI NEVER selects this old write adapter.
-                reader = BotApiChunkTransport(
-                    bot, BotFileIndex(db), account=account, chat_id=chat_id,
-                    min_upload_interval=0,
-                )
             engine = TelegramObjectStorage(
-                manifests, reader, scratch_directory=root,
+                manifests, transport, scratch_directory=root,
             )
             target = root / "verified-telegram-payload"
             await engine.download_to_path(obj.id, target)
@@ -124,18 +113,14 @@ async def verify_restored_telegram_object(
             db.close()
 
 
-async def verify_original_user_channel(
-    snapshot: Path, receipt_sha256: str, *, bucket: str, key: str,
-    account: str, chat_id: int, target: str,
-    session_file: Path, api_id: int, api_hash: str,
-    max_bytes: int = 64 * 1024 * 1024,
-) -> dict:
-    """Read owner-authorized original Telegram messages without mutations."""
+async def open_read_only_user(session_file: Path, api_id: int,
+                              api_hash: str, target: str, chat_id: int):
+    """Connect an authorized USER session and resolve the exact channel."""
     from telethon import TelegramClient
     from telethon.sessions import StringSession
     from telethon.tl.types import Channel
 
-    if api_id <= 0 or not api_hash or not target or not account:
+    if api_id <= 0 or not api_hash or not target:
         raise ValueError("Missing authorized user MTProto configuration")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(session_file, flags)
@@ -169,6 +154,23 @@ async def verify_original_user_channel(
         actual_chat_id = int(await client.get_peer_id(resolved))
         if actual_chat_id != chat_id:
             raise ValueError("Original Telegram channel identity mismatch")
+        return client, resolved
+    except Exception:
+        await client.disconnect()
+        raise
+
+
+async def verify_original_user_channel(
+    snapshot: Path, receipt_sha256: str, *, bucket: str, key: str,
+    account: str, chat_id: int, target: str,
+    session_file: Path, api_id: int, api_hash: str,
+    max_bytes: int = 64 * 1024 * 1024,
+) -> dict:
+    """Read owner-authorized original Telegram messages without mutations."""
+    client, resolved = await open_read_only_user(
+        session_file, api_id, api_hash, target, chat_id,
+    )
+    try:
         reader = ReadOnlyUserChannelTransport(
             client, resolved, account=account, chat_id=chat_id,
         )

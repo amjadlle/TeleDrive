@@ -2,6 +2,19 @@
 
 > **Purpose:** short, actionable development and release tasks. For decisions and evidence limits, see [Project Status](docs/IMPLEMENTATION_STATUS.md). For commands and CI contracts, see [CI and Test Guide](docs/CI_WORKFLOWS.md).
 
+## 0. In progress — Telethon-only purge (owner directive)
+
+> Owner: Bot work is discarded completely; everything becomes Telethon USER MTProto only. Tracked until merged.
+
+- [x] Delete Bot adapter/receipt modules, Bot tests and the Bot E2E workflow.
+- [x] GC inventory/reference graph and physical-cleanup fences: MTProto send intents/receipts + active durable jobs only (Bot ACK/file-ID accounting removed).
+- [x] Web/S3 services: `storage_transport` factory, Telethon `RECOMMENDED_CHUNK_SIZE`, MTProto health alerts, `mtproto-unresolved` admin endpoint (replaces `bot-unresolved`).
+- [x] `scripts/rehearse_telegram_dr.py`: USER-only read path, reusable `open_read_only_user`, no Bot fallback; tests rewritten (29 pass locally).
+- [ ] Convert `scripts/acceptance.py`, `docker_fault_scenarios.py`, `rehearse_native_database_restore.py`, `setup_telegram_e2e.py`, `verify_legacy_cutover.py` to USER-only.
+- [ ] Convert multiworker E2E test and its workflow to USER MTProto; drop Bot secrets.
+- [ ] Purge Bot references from remaining tests, `test_ci_workflows.py` (9 → 8 workflows) and all docs.
+- [ ] Full local suite green; CI green on the exact PR head SHA; merge; clean up only proven-merged branches.
+
 ## 1. Verified milestones
 
 - [x] Publish [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7) from `747747652cd1ca36878453d49daf627d8c0a60ad` with Linux and Windows release assets.

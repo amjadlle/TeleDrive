@@ -13,6 +13,10 @@ from typing import Any, Mapping
 from .manifest import ChunkReference
 from .recovery import Discovery, RemoteChunk
 
+# The unified USER-MTProto runtime splits large objects into bounded Telegram
+# chunks; this is the app-level chunk size shared by REST, S3 and local jobs.
+RECOMMENDED_CHUNK_SIZE = 16 * 1024 * 1024
+
 
 class TelethonChunkTransport:
     """Use configured account clients for writes and original account for reads.

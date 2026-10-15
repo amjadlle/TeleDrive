@@ -36,7 +36,7 @@ from teledrive.storage.jobs import StorageUploadJobs, UploadJobError, jobs as st
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
-from teledrive.storage.bot_api_adapter import BOT_RECOMMENDED_CHUNK_SIZE
+from teledrive.storage.telethon_adapter import RECOMMENDED_CHUNK_SIZE
 from teledrive.storage.user_mode import (
     UserSessionRuntime, UserSendJournal, UnifiedUserTransport, transport_mode,
 )
@@ -466,19 +466,19 @@ async def upload_job_scheduler_loop() -> None:
                     # The cycle manages an independently renewable lease while
                     # Telegram chunks are being sent by the durable queue.
                     _, result = await run_legacy_cutover_cycle(
-                        cfg, queue, storage_bot_transport(conn), lease_db=lease,
+                        cfg, queue, storage_transport(conn), lease_db=lease,
                         bucket=cutover[0], prefix=cutover[1], max_files=cutover[2],
                         allowed_root=root, scratch_directory=scratch,
                         lease_name=uploader.LEASE_NAME,
                         lease_ttl=uploader.LEASE_TTL_SECONDS,
-                        chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                        chunk_size=RECOMMENDED_CHUNK_SIZE,
                     )
                 finally:
                     lease.close()
             else:
                 result = await queue.run_next(
-                    storage_bot_transport(conn), allowed_root=root,
-                    scratch_directory=scratch, chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                    storage_transport(conn), allowed_root=root,
+                    scratch_directory=scratch, chunk_size=RECOMMENDED_CHUNK_SIZE,
                 )
             await asyncio.sleep(2 if result else 10)
         except asyncio.CancelledError:
@@ -524,14 +524,14 @@ async def lifespan(_: FastAPI):
     if WEB_PASSWORD and len(WEB_PASSWORD) < 16:
         raise RuntimeError("TELEDRIVE_WEB_PASSWORD must be at least 16 characters")
     ensure_config()
-    transport_mode()  # Reject retired Bot mode at startup.
+    transport_mode()  # Enforce Telethon USER mode at startup; Bot mode no longer exists.
     mtproto_settings = (
         "TELEDRIVE_STORAGE_MTPROTO_API_ID",
         "TELEDRIVE_STORAGE_MTPROTO_API_HASH",
         "TELEDRIVE_STORAGE_MTPROTO_CHANNEL",
     )
-    # Permit a new unconfigured installation to serve health/configuration
-    # without silently allowing Bot uploads. Writes fail closed until login.
+    # Permit a new unconfigured installation to serve health/configuration;
+    # writes fail closed until the USER session logs in.
     if any(os.environ.get(field, "").strip() for field in mtproto_settings):
         await mtproto_storage_runtime.start()
     try:
@@ -691,11 +691,11 @@ class VersionIndexRequest(BaseModel):
 class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
-def storage_bot_transport(conn):
-    """Legacy internal factory name; live transport is USER MTProto ONLY.
+def storage_transport(conn):
+    """Build the live USER-MTProto transport for REST/S3/local-job payload I/O.
 
-    Stale Bot token/chat environment variables are deliberately ignored.
-    Historical same-channel Bot objects are fetched by MTProto message ID.
+    A preauthorized Telethon user session must be connected. There is no Bot
+    API transport; the unified runtime is Telethon USER MTProto only.
     """
     try:
         transport_mode()
@@ -996,9 +996,8 @@ def get_storage_gc_audit(
         return {
             "total_manifests": inventory.total_manifests,
             "total_telegram_messages": inventory.total_telegram_messages,
-            "unjournaled_bot_receipts": inventory.unjournaled_bot_receipts,
-            "unattributed_bot_file_ids": inventory.unattributed_bot_file_ids,
-            "unresolved_bot_intents": inventory.unresolved_bot_intents,
+            "unjournaled_mtproto_receipts": inventory.unjournaled_mtproto_receipts,
+            "unresolved_mtproto_intents": inventory.unresolved_mtproto_intents,
             "active_upload_jobs": inventory.active_upload_jobs,
             "live_object_heads": inventory.live_object_heads,
             "copy_aliases": inventory.copy_aliases,
@@ -1138,24 +1137,19 @@ def storage_operations_health(_: None = Depends(require_auth)):
             gc = StorageGCInventory(catalog.manifests).inspect()
         except RuntimeError as exc:
             raise HTTPException(409, "Reference graph is inconsistent; GC blocked") from exc
-        from teledrive.storage.bot_api_adapter import BotFileIndex
-        bot_index = BotFileIndex(conn)
-        unjournaled_bot_acks = bot_index.unjournaled_count()
-        unresolved_bot_sends = bot_index.unresolved_count()
-        explicit_bot_429_count = bot_index.total_explicit_429_observations()
         states = {state: int(count) for state, count in counts}
         alerts = []
-        if unresolved_bot_sends:
+        if gc.unresolved_mtproto_intents:
             alerts.append({
-                "code": "unresolved_bot_sends", "severity": "critical",
-                "count": unresolved_bot_sends,
-                "message": "Bot sends have unknown acceptance; do not retry until owner-verified reconciliation",
+                "code": "unresolved_mtproto_sends", "severity": "critical",
+                "count": gc.unresolved_mtproto_intents,
+                "message": "MTProto sends have unknown acceptance; do not retry until owner-verified reconciliation",
             })
-        if unjournaled_bot_acks:
+        if gc.unjournaled_mtproto_receipts:
             alerts.append({
-                "code": "unjournaled_bot_acks", "severity": "warning",
-                "count": unjournaled_bot_acks,
-                "message": "Bot API ACK receipts not yet linked to a chunk journal; review persistent samples",
+                "code": "unjournaled_mtproto_receipts", "severity": "warning",
+                "count": gc.unjournaled_mtproto_receipts,
+                "message": "MTProto send receipts not yet linked to a chunk journal; review persistent samples",
             })
         if states.get("failed", 0):
             alerts.append({
@@ -1188,9 +1182,8 @@ def storage_operations_health(_: None = Depends(require_auth)):
             "unresolved_alert_count": len(alerts),
             "stale_pending_sample_count": len(pending),
             "stale_multipart_sample_count": len(completing),
-            "unjournaled_bot_ack_count": unjournaled_bot_acks,
-            "unresolved_bot_send_count": unresolved_bot_sends,
-            "bot_explicit_429_total": explicit_bot_429_count,
+            "unjournaled_mtproto_receipt_count": gc.unjournaled_mtproto_receipts,
+            "unresolved_mtproto_send_count": gc.unresolved_mtproto_intents,
             "samples_truncated": truncated,
             "telegram_messages_retained": gc.total_telegram_messages,
             "live_object_heads": gc.live_object_heads,
@@ -1201,26 +1194,47 @@ def storage_operations_health(_: None = Depends(require_auth)):
         conn.close()
 
 
-@app.get("/api/v1/admin/storage/bot-unresolved", tags=["Storage jobs"],
-         summary="Inspect unresolved Bot send intents without modifying Telegram")
-def list_unresolved_bot_sends(
+@app.get("/api/v1/admin/storage/mtproto-unresolved", tags=["Storage jobs"],
+         summary="Inspect unresolved USER-MTProto send intents without modifying Telegram")
+def list_unresolved_mtproto_sends(
     limit: int = Query(default=100, ge=1, le=1000),
     _: None = Depends(require_auth),
 ):
     # Operator-only diagnostic: return immutable source identity for
     # independent channel proof. Never accept unverified receipt IDs or
     # perform a retry/deletion as a side effect of inspecting this list.
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+    from teledrive.storage.user_mode import mtproto_send_intents
 
     conn = db_connect()
     try:
-        index = BotFileIndex(conn)
+        rows = conn.connection.execute(
+            select(
+                mtproto_send_intents.c.account, mtproto_send_intents.c.chat_id,
+                mtproto_send_intents.c.object_id, mtproto_send_intents.c.ordinal,
+                mtproto_send_intents.c.sha256, mtproto_send_intents.c.size,
+            ).where(mtproto_send_intents.c.message_id.is_(None))
+            .order_by(mtproto_send_intents.c.object_id,
+                      mtproto_send_intents.c.ordinal)
+            .limit(limit)
+        ).all()
+        total = conn.connection.execute(
+            select(func.count()).select_from(mtproto_send_intents).where(
+                mtproto_send_intents.c.message_id.is_(None)
+            )
+        ).scalar_one()
         return {
-            "total": index.unresolved_count(),
-            "intents": index.unresolved_details(limit=limit),
+            "total": int(total),
+            "intents": [
+                {
+                    "account": account, "chat_id": int(chat_id),
+                    "object_id": object_id, "ordinal": int(ordinal),
+                    "sha256": sha256, "size": int(size),
+                }
+                for account, chat_id, object_id, ordinal, sha256, size in rows
+            ],
             "message": (
-                "Possible remotely accepted Bot sends. Independently verify "
-                "original channel message ID, Bot file ID and full Telegram "
+                "Possible remotely accepted USER-MTProto sends. Independently "
+                "verify the original channel message ID and full Telegram "
                 "bytes before recording any recovery receipt. No automatic retry."
             ),
         }
@@ -1343,13 +1357,13 @@ async def run_next_storage_upload_job(
     conn = db_connect()
     try:
         manager = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
-        transport = storage_bot_transport(conn)
+        transport = storage_transport(conn)
         scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
         _secure_mkdir(scratch)
         try:
             result = await manager.run_next(
                 transport, allowed_root=root, scratch_directory=scratch,
-                chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                chunk_size=RECOMMENDED_CHUNK_SIZE,
             )
         except (UploadJobError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
@@ -1454,7 +1468,7 @@ async def inspect_user_channel_history(
 
     Other senders' markers are NOT trusted ownership/manifest evidence.
     The endpoint deliberately only runs with the already-connected USER
-    transport; a Bot token cannot enumerate arbitrary history.
+    transport; only an authorized user session can enumerate channel history.
     """
     if os.environ.get("TELEDRIVE_STORAGE_TRANSPORT", "telethon").strip().lower() != "telethon":
         raise HTTPException(503, "User MTProto history requires telethon storage mode")
@@ -1683,7 +1697,7 @@ async def put_object_content(
                 # Reject stale conditional writes BEFORE staging/uploading any
                 # bytes to Telegram. Recheck atomically at final publication.
                 raise HTTPException(409, "Object generation precondition failed")
-        transport = storage_bot_transport(conn)
+        transport = storage_transport(conn)
         # Verify Telegram access BEFORE consuming a potentially large body.
         await transport.verify_target()
         fd, pathname = tempfile.mkstemp(dir=stage_root, prefix="api-upload-")
@@ -1698,7 +1712,7 @@ async def put_object_content(
             sink.flush()
             os.fsync(sink.fileno())
         engine = TelegramObjectStorage(manifests, transport,
-                                       chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                                       chunk_size=RECOMMENDED_CHUNK_SIZE,
                                        scratch_directory=stage_root)
         result = await engine.put_file(bucket, key, staged)
         try:
@@ -1753,11 +1767,11 @@ async def get_object_content(
         except FileNotFoundError as exc:
             raise HTTPException(404, "Object not found") from exc
         start, end, partial = _byte_range(request.headers.get("range"), item.size)
-        transport = storage_bot_transport(conn)
+        transport = storage_transport(conn)
         root = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
         _secure_mkdir(root)
         engine = TelegramObjectStorage(manifests, transport,
-                                       chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                                       chunk_size=RECOMMENDED_CHUNK_SIZE,
                                        scratch_directory=root)
     except BaseException:
         conn.close()

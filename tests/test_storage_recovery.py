@@ -289,10 +289,10 @@ def test_physical_cleanup_rejects_published_version_even_if_object_failed(db_sto
     assert not transport.deleted and chunk.identity in transport.messages
 
 
-def test_physical_cleanup_rejects_copy_alias_and_unresolved_bot_receipt(db_store):
+def test_physical_cleanup_rejects_copy_alias_and_unresolved_mtproto_intent(db_store):
     from sqlalchemy import insert
     from teledrive.storage.manifest import object_aliases
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+    from teledrive.storage.user_mode import UserSendJournal, mtproto_send_intents
 
     ident, chunk = failed_object(db_store)
     copy = db_store.begin("ci", "copy-alias", 0, int(time.time()) - 9000)
@@ -309,8 +309,9 @@ def test_physical_cleanup_rejects_copy_alias_and_unresolved_bot_receipt(db_store
         object_aliases.c.object_id == copy
     ))
     db_store.db.commit()
-    index = BotFileIndex(db_store.db)
-    index.start_send("primary", 12345, ident, 0, hashlib.sha256(b"abcdef").hexdigest(), 6)
+    journal = UserSendJournal(db_store.db)
+    journal.start("primary", 12345, ident, 0,
+                  hashlib.sha256(b"abcdef").hexdigest(), 6)
     with pytest.raises(UnsafeCleanup, match="another SQL reference"):
         run(manager.cleanup(ident, dry_run=False))
     assert transport.deleted == []
