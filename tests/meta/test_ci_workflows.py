@@ -286,14 +286,21 @@ def test_user_target_is_masked_secret_before_any_live_step(name):
     job = doc["jobs"]["three-process-telegram"]
     target = job["env"]["TELEDRIVE_E2E_TARGET"]
     assert target == "${{ secrets.TELEDRIVE_E2E_TARGET }}"
+    assert job["env"]["TELEDRIVE_E2E_CHANNEL_NAME"] == (
+        "${{ secrets.TELEDRIVE_E2E_CHANNEL_NAME }}"
+    )
     assert "vars.TELEDRIVE_E2E_TARGET" not in raw
     assert not re.search(r"(?m)^\s*TELEDRIVE_E2E_TARGET:\s*['\"]?-100[0-9]+", raw)
     mask = job["steps"][0]
     assert mask["name"] == "Mask dedicated Telegram test target"
     assert mask["shell"] == "bash"
     assert "::add-mask::$TELEDRIVE_E2E_TARGET" in mask["run"]
-    assert "exit 1" in mask["run"]
-    assert mask["run"].index("exit 1") < mask["run"].index("::add-mask::")
+    # The credentials step must fail closed when neither target nor channel
+    # name is configured; the numeric mask applies only when TARGET is set.
+    configured = next(s for s in job["steps"] if s.get("name") ==
+                      "Configure dedicated live USER credentials")
+    assert "exit 1" in configured["run"]
+    assert "TELEDRIVE_E2E_CHANNEL_NAME" in configured["run"]
     assert job["steps"][1]["name"] == "Checkout"
 
 

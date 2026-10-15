@@ -41,6 +41,7 @@ jobs:
       TELEDRIVE_E2E_API_ID: ${{ secrets.TELEDRIVE_E2E_API_ID }}
       TELEDRIVE_E2E_API_HASH: ${{ secrets.TELEDRIVE_E2E_API_HASH }}
       TELEDRIVE_E2E_TARGET: ${{ secrets.TELEDRIVE_E2E_TARGET }}
+      TELEDRIVE_E2E_CHANNEL_NAME: ${{ secrets.TELEDRIVE_E2E_CHANNEL_NAME }}
       TELEDRIVE_E2E_MULTIWORKER: "1"
     steps:
       # The channel ID must come from an Actions SECRET, never a repository
@@ -49,11 +50,9 @@ jobs:
       - name: Mask dedicated Telegram test target
         shell: bash
         run: |
-          if [[ -z "$TELEDRIVE_E2E_TARGET" ]]; then
-            echo "::error::Configure TELEDRIVE_E2E_TARGET as a repository Actions secret."
-            exit 1
+          if [[ -n "$TELEDRIVE_E2E_TARGET" ]]; then
+            echo "::add-mask::$TELEDRIVE_E2E_TARGET"
           fi
-          echo "::add-mask::$TELEDRIVE_E2E_TARGET"
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -64,8 +63,12 @@ jobs:
           python-version: "3.12"
       - name: Configure dedicated live USER credentials
         run: |
-          if [[ -z "$TELEDRIVE_E2E_SESSION" || -z "$TELEDRIVE_E2E_API_ID" || -z "$TELEDRIVE_E2E_API_HASH" || -z "$TELEDRIVE_E2E_TARGET" ]]; then
+          if [[ -z "$TELEDRIVE_E2E_SESSION" || -z "$TELEDRIVE_E2E_API_ID" || -z "$TELEDRIVE_E2E_API_HASH" ]]; then
             echo "::error::Dedicated test USER MTProto credentials are required."
+            exit 1
+          fi
+          if [[ -z "$TELEDRIVE_E2E_TARGET" && -z "$TELEDRIVE_E2E_CHANNEL_NAME" ]]; then
+            echo "::error::Configure TELEDRIVE_E2E_TARGET or TELEDRIVE_E2E_CHANNEL_NAME as a repository Actions secret."
             exit 1
           fi
       - name: Install application, DB driver and test runtime

@@ -26,6 +26,7 @@ from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.jobs import StorageUploadJobs
 from teledrive.storage.manifest import ManifestStore, chunks
+from teledrive.storage.target_resolver import resolve_telegram_target
 from teledrive.storage.telethon_adapter import TelethonChunkTransport
 from teledrive.storage.user_mode import UserSendJournal
 
@@ -39,6 +40,7 @@ from teledrive.db import connect_database
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.jobs import StorageUploadJobs
 from teledrive.storage.manifest import ManifestStore
+from teledrive.storage.target_resolver import resolve_telegram_target
 from teledrive.storage.telethon_adapter import TelethonChunkTransport
 from teledrive.storage.user_mode import UnifiedUserTransport, UserSendJournal
 
@@ -55,7 +57,10 @@ async def run():
     )
     await client.connect()
     try:
-        resolved = await client.get_entity(target)
+        resolved = await resolve_telegram_target(
+            client, target or None,
+            os.getenv("TELEDRIVE_E2E_CHANNEL_NAME") or None,
+        )
 
         class Runtime:
             account = account
@@ -103,7 +108,8 @@ def test_live_three_worker_user_mtproto_soak_with_remote_checksum_cleanup():
     api_id = os.getenv("TELEDRIVE_E2E_API_ID", "")
     api_hash = os.getenv("TELEDRIVE_E2E_API_HASH", "")
     target = os.getenv("TELEDRIVE_E2E_TARGET", "")
-    if not (url and session and api_id and api_hash and target):
+    channel_name = os.getenv("TELEDRIVE_E2E_CHANNEL_NAME", "")
+    if not (url and session and api_id and api_hash and (target or channel_name)):
         pytest.fail("Opt-in multiworker Telegram E2E needs PG and USER credentials")
     from telethon import TelegramClient
     from telethon.sessions import StringSession
@@ -170,7 +176,9 @@ def test_live_three_worker_user_mtproto_soak_with_remote_checksum_cleanup():
             )
             asyncio.run(client.connect())
             try:
-                resolved = asyncio.run(client.get_entity(target))
+                resolved = asyncio.run(resolve_telegram_target(
+                    client, target or None, channel_name or None,
+                ))
                 chat = int(asyncio.run(client.get_peer_id(resolved)))
                 transport = TelethonChunkTransport({account: (client, resolved)})
                 engine = TelegramObjectStorage(
