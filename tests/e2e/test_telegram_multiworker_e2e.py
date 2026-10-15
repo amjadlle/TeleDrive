@@ -80,16 +80,16 @@ async def run():
                         client, target or None, channel_name,
                     )
                     peer_chat_id = int(await client.get_peer_id(resolved))
-
-                    class Runtime:
-                        account = account
-                        chat_id = peer_chat_id
-
-                        def require(self):
-                            return TelethonChunkTransport({account: (client, resolved)})
+                    from types import SimpleNamespace
+                    runtime = SimpleNamespace(
+                        account=account, chat_id=peer_chat_id,
+                    )
+                    runtime.require = lambda: TelethonChunkTransport({
+                        account: (client, resolved),
+                    })
 
                     transport = UnifiedUserTransport(
-                        Runtime(), UserSendJournal(db), min_upload_interval=1.25,
+                        runtime, UserSendJournal(db), min_upload_interval=1.25,
                     )
                     work = await manager.run_next(
                         transport, allowed_root=Path(source),
@@ -253,3 +253,131 @@ async def _collect_range(engine, ident, size, start):
 def test_embedded_worker_script_is_valid_python():
     """The subprocess worker must compile before any live CI run."""
     compile(WORKER, "<multiworker-e2e-worker>", "exec")
+
+
+def test_worker_script_processes_jobs_with_fake_telethon(tmp_path):
+    """End-to-end worker flow (SQL jobs + fake MTProto) without live Telegram.
+
+    Spawns the embedded worker subprocess with a stubbed telethon package so
+    the claim/connect/upload/journal loop is verified before any live CI run.
+    """
+    import textwrap
+    from types import SimpleNamespace
+
+    fake_telethon = tmp_path / "fake_telethon"
+    package = fake_telethon / "telethon"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "from .client import TelegramClient\n", encoding="utf-8"
+    )
+    (package / "sessions.py").write_text(
+        "StringSession = lambda value: value\n", encoding="utf-8"
+    )
+    (package / "errors.py").write_text(
+        "class FloodWaitError(Exception):\n"
+        "    def __init__(self, request=None, capture=0):\n"
+        "        self.seconds = int(capture)\n"
+        "        super().__init__('flood wait %d' % self.seconds)\n",
+        encoding="utf-8",
+    )
+    (package / "client.py").write_text(textwrap.dedent("""
+        from types import SimpleNamespace
+
+        class TelegramClient:
+            def __init__(self, session, api_id, api_hash, **kwargs):
+                self.session = session
+                self.posts = {}
+                self.next_id = 1000
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+            def is_connected(self):
+                return True
+
+            async def get_peer_id(self, target):
+                return -100123456
+
+            async def iter_dialogs(self, limit=None):
+                entity = SimpleNamespace(username=None)
+                dialog = SimpleNamespace(
+                    id=-100123, is_channel=True, is_group=False,
+                    entity=entity, name="Test Channel",
+                )
+                if limit:
+                    assert limit > 0
+                    yield dialog
+                else:
+                    yield dialog
+
+            async def get_entity(self, target):
+                return SimpleNamespace(username=None)
+
+            async def send_file(self, target, path, caption=None,
+                                force_document=False):
+                from pathlib import Path
+                assert caption.startswith("teledrive:")
+                self.next_id += 1
+                self.posts[self.next_id] = Path(path).read_bytes()
+                return SimpleNamespace(id=self.next_id, chat_id=-100123456)
+        """), encoding="utf-8")
+
+    db_url = "sqlite:///" + str(tmp_path / "state.db")
+    from teledrive.db import connect_database
+    from teledrive.storage.catalog import BucketCatalog
+    from teledrive.storage.jobs import StorageUploadJobs
+    from teledrive.storage.manifest import ManifestStore
+
+    source = tmp_path / "sources"
+    source.mkdir()
+    body = b"worker-job-bytes" * 100
+    payload = source / "job.bin"
+    payload.write_bytes(body)
+    db = connect_database(db_url)
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        catalog.create_bucket("worker-ci", 1)
+        StorageUploadJobs(catalog).enqueue(
+            "worker-ci", "a.bin", payload, allowed_root=source,
+        )
+    finally:
+        db.close()
+
+    ready = tmp_path / "ready"
+    go = tmp_path / "go"
+    env = {
+        "PYTHONPATH": str(fake_telethon),
+        "TELEDRIVE_E2E_SESSION": "fake-session",
+        "TELEDRIVE_E2E_API_ID": "12345",
+        "TELEDRIVE_E2E_API_HASH": "a" * 32,
+    }
+    import os
+    proc_env = dict(os.environ)
+    proc_env.update(env)
+    process = subprocess.Popen(
+        [sys.executable, "-c", WORKER, db_url, str(source),
+         str(ready), str(go), "-100123", "worker-account"],
+        env=proc_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, cwd=Path(__file__).resolve().parents[2],
+    )
+    deadline = time.monotonic() + 30
+    while not ready.exists():
+        if time.monotonic() >= deadline or process.poll() is not None:
+            process.kill()
+            raise AssertionError("worker did not reach the ready gate")
+        time.sleep(0.05)
+    go.write_text("go", encoding="ascii")
+    stdout, stderr = process.communicate(timeout=120)
+    assert process.returncode == 0, stderr[-2000:]
+    db = connect_database(db_url)
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        rows = StorageUploadJobs(catalog).list_jobs(limit=10)
+        assert len(rows) == 1 and rows[0]["state"] == "done"
+        item = catalog.get("worker-ci", "a.bin").item
+        assert item.sha256 == hashlib.sha256(body).hexdigest()
+    finally:
+        db.close()
