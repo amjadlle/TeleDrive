@@ -197,7 +197,7 @@ def test_live_three_worker_user_mtproto_soak_with_remote_checksum_cleanup():
                 StringSession(session), int(api_id), api_hash,
                 device_model="TeleDrive Storage Client",
                 app_version="TeleDrive 2.1",
-                receive_updates=False, flood_sleep_threshold=0,
+                receive_updates=False, flood_sleep_threshold=60,
             )
             asyncio.run(client.connect())
             try:
@@ -357,6 +357,10 @@ def test_worker_script_processes_jobs_with_fake_telethon(tmp_path):
     import os
     proc_env = dict(os.environ)
     proc_env.update(env)
+    # The live workflow exports these; the fake-telethon run must resolve
+    # by the numeric target argv instead of a real channel title.
+    proc_env.pop("TELEDRIVE_E2E_CHANNEL_NAME", None)
+    proc_env.pop("TELEDRIVE_E2E_TARGET", None)
     process = subprocess.Popen(
         [sys.executable, "-c", WORKER, db_url, str(source),
          str(ready), str(go), "-100123", "worker-account"],
