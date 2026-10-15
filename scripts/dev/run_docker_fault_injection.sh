@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$REPO"
 command -v docker >/dev/null
 docker compose version >/dev/null
