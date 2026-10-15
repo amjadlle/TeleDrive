@@ -72,7 +72,7 @@ async def run():
                     os.environ["TELEDRIVE_E2E_API_HASH"],
                     device_model="TeleDrive Storage Client",
                     app_version="TeleDrive 2.1",
-                    receive_updates=False, flood_sleep_threshold=0,
+                    receive_updates=False, flood_sleep_threshold=60,
                 )
                 await client.connect()
                 try:
