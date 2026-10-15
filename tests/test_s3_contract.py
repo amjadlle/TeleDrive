@@ -104,18 +104,18 @@ def test_telegram_read_failure_during_complete_leaves_staging_retryable(
     uid = begin(service)
     payload = b"recoverable-multipart-part" * 100
     etag = part(service, uid, 1, payload)
-    original_download = service[2].download_file
+    original_download = service[2].download
     count = []
 
-    async def broken_download(file_path, destination):
-        count.append(file_path)
+    async def broken_download(reference, destination):
+        count.append(reference.message_id)
         raise RuntimeError("injected Telegram retrieval outage")
 
-    monkeypatch.setattr(service[2], "download_file", broken_download)
+    monkeypatch.setattr(service[2], "download", broken_download)
     interrupted = complete(service, uid, [(1, etag)])
     assert count
     assert interrupted.status_code == 503, interrupted.text
-    monkeypatch.setattr(service[2], "download_file", original_download)
+    monkeypatch.setattr(service[2], "download", original_download)
     assert signed(service, "GET", "/backup-bucket/asset.bin").status_code == 404
     db, manager = _mpu(service)
     try:
@@ -187,7 +187,7 @@ def test_large_multi_chunk_range_and_head_over_fresh_sql_connections(
     service, monkeypatch
 ):
     """Exercise genuine multi-chunk reads, not just slicing a single blob."""
-    monkeypatch.setattr(gateway, "BOT_RECOMMENDED_CHUNK_SIZE", 2 * 1024 * 1024)
+    monkeypatch.setattr(gateway, "RECOMMENDED_CHUNK_SIZE", 2 * 1024 * 1024)
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
     payload = os.urandom(5 * 1024 * 1024 + 137)
     wrote = signed(service, "PUT", "/backup-bucket/chunks.bin", payload)

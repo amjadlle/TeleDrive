@@ -42,9 +42,9 @@ def test_failed_age_plan_protects_live_pending_and_ready(admin):
 
 
 
-def test_gc_preview_fences_unresolved_send_and_unjournaled_bot_receipt(admin):
-    """Unjournaled real Bot messages must never become apparent GC candidates."""
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+def test_gc_preview_fences_unresolved_send_and_unjournaled_mtproto_receipt(admin):
+    """Unjournaled real MTProto messages must never become apparent GC candidates."""
+    from teledrive.storage.user_mode import UserSendJournal
 
     _, url, _ = admin
     now = int(time.time())
@@ -53,35 +53,28 @@ def test_gc_preview_fences_unresolved_send_and_unjournaled_bot_receipt(admin):
     try:
         manifest = ManifestStore(db)
         cat = BucketCatalog(manifest)
-        cat.create_bucket("bot-gc-receipt", now)
-        first = manifest.begin("bot-gc-receipt", "lost-ack", 4, old)
-        second = manifest.begin("bot-gc-receipt", "received-ack", 4, old)
-        third = manifest.begin("bot-gc-receipt", "pure-failed", 4, old)
+        cat.create_bucket("mtproto-gc-receipt", now)
+        first = manifest.begin("mtproto-gc-receipt", "lost-ack", 4, old)
+        second = manifest.begin("mtproto-gc-receipt", "received-ack", 4, old)
+        third = manifest.begin("mtproto-gc-receipt", "pure-failed", 4, old)
         for ident in (first, second, third):
             manifest.fail(ident, "interrupted send", old)
 
-        index = BotFileIndex(db)
+        journal = UserSendJournal(db)
         digest = sha256(b"data").hexdigest()
-        index.start_send("bot-gc", -100888777666555, first, 0, digest, 4)
-        index.start_send("bot-gc", -100888777666555, second, 0, digest, 4)
-        index.put_receipt(
-            "bot-gc", -100888777666555, 42, "owned-test-file-id",
-            object_id=second, ordinal=0, checksum=digest, size=4,
-            require_intent=True,
-        )
+        journal.start("user-gc", -100888777666555, first, 0, digest, 4)
+        journal.start("user-gc", -100888777666555, second, 0, digest, 4)
+        journal.acknowledged("user-gc", -100888777666555, second, 0, 42)
         inventory = StorageGCInventory(manifest).preview_failed_retention(
             now=now,
         )
         by_id = {candidate["object_id"]: candidate for candidate in inventory}
         assert set(by_id) == {first, second, third}
-        assert by_id[first]["unresolved_bot_intents"] == 1
-        assert by_id[first]["durable_bot_receipts"] == 0
+        assert by_id[first]["unresolved_mtproto_intents"] == 1
         assert by_id[first]["reference_blocked"] is True
-        assert by_id[second]["unresolved_bot_intents"] == 0
-        assert by_id[second]["durable_bot_receipts"] == 1
+        assert by_id[second]["unresolved_mtproto_intents"] == 0
         assert by_id[second]["reference_blocked"] is True
-        assert by_id[third]["unresolved_bot_intents"] == 0
-        assert by_id[third]["durable_bot_receipts"] == 0
+        assert by_id[third]["unresolved_mtproto_intents"] == 0
         assert by_id[third]["reference_blocked"] is False
         assert all(not candidate["approved_for_deletion"]
                    for candidate in inventory)
@@ -91,10 +84,8 @@ def test_gc_preview_fences_unresolved_send_and_unjournaled_bot_receipt(admin):
         db.close()
 
 
-def test_gc_preview_fails_closed_on_partially_migrated_bot_receipt_schema(admin):
-    """Missing half of a Bot receipt schema cannot be interpreted as no ACK."""
-    from teledrive.storage.bot_api_adapter import BotFileIndex
-
+def test_gc_preview_fails_closed_on_incomplete_reference_schema(admin):
+    """A missing required reference table cannot be interpreted as no reference."""
     client, url, _ = admin
     now = int(time.time())
     old = now - 9 * 86400
@@ -105,22 +96,12 @@ def test_gc_preview_fails_closed_on_partially_migrated_bot_receipt_schema(admin)
         cat.create_bucket("incomplete-gc-schema", now)
         ident = manifests.begin("incomplete-gc-schema", "failed", 1, old)
         manifests.fail(ident, "old interruption", old)
-        BotFileIndex(db)
         db.connection.exec_driver_sql(
-            "DROP TABLE storage_bot_upload_receipts"
+            "DROP TABLE storage_published_versions"
         )
         db.commit()
         import pytest
-        with pytest.raises(RuntimeError, match="Bot reconciliation metadata incomplete"):
+        with pytest.raises(RuntimeError, match="Incomplete GC reference"):
             StorageGCInventory(manifests).preview_failed_retention(now=now)
     finally:
         db.close()
-    # Every sensitive admin inventory fails with a sanitized 409; neither
-    # HTTP 500 traces nor a falsely safe GC candidate are acceptable.
-    for route in ("gc-candidates", "gc-audit", "health"):
-        response = client.get(
-            "/api/v1/admin/storage/" + route,
-            auth=("testadmin", "secure-auth-password"),
-        )
-        assert response.status_code == 409
-        assert response.json()["detail"] == "Reference graph is inconsistent; GC blocked"

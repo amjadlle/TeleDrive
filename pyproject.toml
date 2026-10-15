@@ -22,3 +22,6 @@ telegram-auto-upload-cli = "teledrive.uploader:main"
 
 [tool.setuptools.packages.find]
 include = ["app*", "teledrive*"]
+
+[tool.pytest.ini_options]
+addopts = "-p no:cacheprovider"

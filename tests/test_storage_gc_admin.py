@@ -9,7 +9,7 @@ from teledrive.db import connect_database
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object
 from teledrive.storage.manifest import ManifestStore, ChunkReference, chunks
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 
 
 def test_admin_gc_audit_requires_auth_and_never_deletes_referenced_media(admin):
@@ -71,9 +71,9 @@ def test_gc_audit_invalid_limits_blocked_by_validation(admin):
         assert response.status_code == 422
 
 
-def test_admin_gc_audit_counts_unjournaled_ack_and_ambiguous_bot_send(admin):
-    """Bot ACKs are owned remote media even before a chunk journal exists."""
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+def test_admin_gc_audit_counts_unjournaled_receipt_and_ambiguous_mtproto_send(admin):
+    """MTProto receipts are owned remote media even before a chunk journal exists."""
+    from teledrive.storage.user_mode import UserSendJournal
 
     client, url, _ = admin
     now = int(time.time())
@@ -86,18 +86,13 @@ def test_admin_gc_audit_counts_unjournaled_ack_and_ambiguous_bot_send(admin):
         unknown = manifests.begin("gc-ack-proof", "unknown", 4, now - 86400)
         manifests.fail(received, "post-ACK SQL crash", now)
         manifests.fail(unknown, "lost network response", now)
-        index = BotFileIndex(db)
+        journal = UserSendJournal(db)
         sha = hashlib.sha256(b"data").hexdigest()
         peer = -100888777666555
-        index.start_send("test-ack", peer, received, 0, sha, 4)
-        index.put_receipt(
-            "test-ack", peer, 2001, "owned-file-id",
-            object_id=received, ordinal=0, checksum=sha, size=4,
-            require_intent=True,
-        )
-        index.start_send("test-ack", peer, unknown, 0, sha, 4)
-        assert index.unjournaled_count() == 1
-        assert index.unresolved_count() == 1
+        journal.start("test-ack", peer, received, 0, sha, 4)
+        journal.acknowledged("test-ack", peer, received, 0, 2001)
+        journal.start("test-ack", peer, unknown, 0, sha, 4)
+        assert journal.unresolved_count() == 1
     finally:
         db.close()
 
@@ -106,29 +101,38 @@ def test_admin_gc_audit_counts_unjournaled_ack_and_ambiguous_bot_send(admin):
     assert reply.status_code == 200, reply.text
     inventory = reply.json()
     assert inventory["total_telegram_messages"] == 1
-    assert inventory["unjournaled_bot_receipts"] == 1
-    assert inventory["unresolved_bot_intents"] == 1
+    assert inventory["unjournaled_mtproto_receipts"] == 1
+    assert inventory["unresolved_mtproto_intents"] == 1
     assert inventory["eligible_for_deletion"] == 0
     assert inventory["dry_run"] is True
     assert inventory["physical_deletion_enabled"] is False
 
 
-def test_gc_audit_counts_stray_file_ids_without_implicitly_authorizing_deletion(admin):
-    """An older Bot file_id without a receipt/journal is still remote media."""
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+def test_gc_audit_reports_active_upload_jobs_and_never_deletes(admin):
+    """Queued durable jobs are live references and appear in the admin audit."""
+    from teledrive.storage.jobs import StorageUploadJobs, jobs
     client, url, _ = admin
+    now = int(time.time())
     db = connect_database(url)
     try:
-        index = BotFileIndex(db)
-        index.put("ci-bot", -100123456, 883, "ci-only-opaque-file-id")
+        catalog = BucketCatalog(ManifestStore(db))
+        catalog.create_bucket("gc-jobs-proof", now)
+        StorageUploadJobs(catalog)
+        db.connection.execute(insert(jobs).values(
+            id="queued-job-proof", bucket="gc-jobs-proof", object_key="a.bin",
+            source_path="/uploads/a.bin", source_size=4, source_device=1,
+            source_inode=2, source_mtime_ns=3, expected_generation=0,
+            expected_head_id=None, state="queued", object_id=None, attempts=0,
+            lease_token=None, lease_until=None, created_at=now,
+            updated_at=now, last_error=None,
+        ))
+        db.commit()
     finally:
         db.close()
     response = client.get("/api/v1/admin/storage/gc-audit",
                           auth=("testadmin", "secure-auth-password"))
     assert response.status_code == 200, response.text
     report = response.json()
-    assert report["unattributed_bot_file_ids"] == 1
-    assert report["total_telegram_messages"] == 1
+    assert report["active_upload_jobs"] == 1
     assert report["eligible_for_deletion"] == 0
     assert report["physical_deletion_enabled"] is False
-    assert "ci-only-opaque-file-id" not in response.text

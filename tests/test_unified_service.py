@@ -18,10 +18,9 @@ from fastapi.testclient import TestClient
 import web.app as web
 import web.s3 as s3
 from web.unified import UnifiedApplication, app
-from test_rest_transfer import FakeTelegramBot
+from test_rest_transfer import FakeUserTransport
 from teledrive.db import connect_database
 from teledrive.s3.credentials import S3CredentialStore, DEFAULT_PERMISSIONS
-from teledrive.storage.bot_api_adapter import BotApiChunkTransport, BotFileIndex
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.manifest import ManifestStore
 
@@ -29,16 +28,13 @@ from teledrive.storage.manifest import ManifestStore
 @pytest.fixture
 def unified(tmp_path, monkeypatch):
     path=tmp_path/"unified.sqlite"
-    telegram=FakeTelegramBot()
+    telegram=FakeUserTransport()
     secret=Fernet.generate_key()
     connect=lambda: connect_database(str(path))
-    transport=lambda db: BotApiChunkTransport(
-        telegram, BotFileIndex(db), chat_id=-1001234567890,
-        account="api-bot", min_upload_interval=0,
-    )
+    transport=lambda db: telegram
     for module in (web,s3):
         monkeypatch.setattr(module,"db_connect",connect)
-        monkeypatch.setattr(module,"storage_bot_transport",transport)
+        monkeypatch.setattr(module,"storage_transport",transport)
     monkeypatch.setattr(s3,"load_master_key",lambda: secret)
     monkeypatch.setattr(web,"WEB_USER","testadmin")
     monkeypatch.setattr(web,"WEB_PASSWORD","long-secure-test-password")
@@ -174,7 +170,7 @@ def test_single_service_legacy_folder_cutover_is_visible_from_rest_and_s3(unifie
             allowed_extensions=[".bin"], max_file_size_mb=1,
         )
         queue = StorageUploadJobs(BucketCatalog(ManifestStore(manager_db)))
-        transport = web.storage_bot_transport(manager_db)
+        transport = web.storage_transport(manager_db)
         async def cycle():
             return await run_legacy_cutover_cycle(
                 cfg, queue, transport, lease_db=lease_db,

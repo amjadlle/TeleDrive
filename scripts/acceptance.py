@@ -5,7 +5,7 @@ Run as a file with "python scripts/acceptance.py". Do not pipe the
 source to "python -": that consumes stdin and makes input() raise EOFError.
 
 Produces a private, sanitized report. Never approves production, deletes
-Telegram messages, changes routing, or applies unresolved Bot ACK receipts.
+Telegram messages, changes routing, or applies unresolved MTProto receipts.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ if str(ROOT) not in sys.path:
 REPO = "babico/TeleDrive"
 WORKFLOWS = {
     "user": "04 · Live Telegram | User MTProto E2E",
-    "bot": "04 · Live Telegram | Bot API E2E",
+    "user": "04 · Live Telegram | User MTProto E2E",
     "multiworker": "04 · Live Telegram | Multiworker PostgreSQL E2E",
 }
 
@@ -99,7 +99,7 @@ async def session_login(session_path: Path) -> bool:
             password=lambda: secret("Telegram 2FA şifresi"),
         )
         identity = await client.get_me()
-        if not identity or identity.bot:
+        if not identity or getattr(identity, "bot", False):
             raise ValueError("Bot değil Telegram kullanıcı hesabı gerekli")
         saved = client.session.save()
         if not saved:
@@ -231,56 +231,69 @@ def soak_stage(result: dict, evidence: Path):
         print("  Host adresleri ve parolalar rapora yazılmadı.")
 
 
-def ask_bot_identity():
-    print("  DR: ÖZGÜN Telegram Bot ve özgün mesajların kanalı gerekir.")
-    token = secret("Üretim Telegram Bot token")
-    account = ask("TeleDrive Bot account alias (kullanıcı adı değil)")
+def ask_user_identity():
+    print("  DR: ÖZGÜN Telethon USER session ve özgün mesajların kanalı gerekir.")
+    session_file = Path(secret("Üretim USER StringSession dosya yolu")).expanduser()
+    api_id = secret("Telegram API ID")
+    api_hash = secret("Telegram API hash")
+    account = ask("TeleDrive USER account alias (kullanıcı adı değil)")
     chat_text = secret("Orijinal Telegram kanal ID")
     if not re.fullmatch(r"-100[0-9]{5,16}", chat_text):
         raise ValueError("Telegram kanalı -100... biçiminde olmalı")
     chat_id = int(chat_text)
+    target = secret("Kanal ID veya username (target)")
     bucket = ask("Mevcut S3 bucket")
     key = ask("Mevcut S3 object key")
-    if not all((token, account, chat_id, bucket, key)):
+    if not all((session_file, api_id, api_hash, account, chat_id, target,
+                bucket, key)):
         raise ValueError("DR kimliği eksik")
-    return token, account, chat_id, bucket, key
+    return session_file, int(api_id), api_hash, account, chat_id, target, bucket, key
 
 
-async def native_telegram_readback(db_url, *, token, account, chat_id,
-                                   bucket, key, scratch: Path):
+async def native_telegram_readback(db_url, *, session_file, api_id, api_hash,
+                                   target, account, chat_id, bucket, key,
+                                   scratch: Path):
     """Read-only Telegram payload validation against restored native SQL."""
     from teledrive.db import connect_database
-    from teledrive.storage.bot_api_adapter import BotApiClient, BotApiChunkTransport, BotFileIndex
     from teledrive.storage.catalog import BucketCatalog
     from teledrive.storage.engine import TelegramObjectStorage
     from teledrive.storage.manifest import ManifestStore
+    from scripts.rehearse_telegram_dr import (
+        ReadOnlyUserChannelTransport, open_read_only_user,
+    )
     db = connect_database(db_url)
     try:
         manifests = ManifestStore(db)
         obj = BucketCatalog(manifests).get(bucket, key).item
         if obj.size < 1 or obj.size > 64 * 1024 * 1024:
             raise ValueError("DR örneği 1B-64MiB aralığında olmalı")
-        transport = BotApiChunkTransport(
-            BotApiClient(token), BotFileIndex(db),
-            account=account, chat_id=chat_id, min_upload_interval=0,
+        client, resolved = await open_read_only_user(
+            session_file, api_id, api_hash, target, chat_id,
         )
-        storage = TelegramObjectStorage(manifests, transport, scratch_directory=scratch)
-        destination = scratch / "restored-telegram-object"
-        await storage.download_to_path(obj.id, destination)
-        if destination.stat().st_size != obj.size or file_digest(destination) != obj.sha256:
-            raise ValueError("Telegram restore SHA/size uyuşmuyor")
-        start = max(0, obj.size // 2 - 17)
-        end = min(obj.size, start + 37)
-        seen = b"".join([part async for part in storage.iter_bytes(
-            obj.id, start=start, end=end, block_size=7,
-        )])
-        with destination.open("rb") as handle:
-            handle.seek(start)
-            if handle.read(end - start) != seen:
-                raise ValueError("Telegram restore Range uyuşmuyor")
-        return {"verified": True, "size": obj.size, "sha256_match": True,
-                "range_match": True, "telegram_uploads": 0,
-                "telegram_deletions": 0}
+        try:
+            transport = ReadOnlyUserChannelTransport(
+                client, resolved, account=account, chat_id=chat_id,
+            )
+            storage = TelegramObjectStorage(manifests, transport,
+                                            scratch_directory=scratch)
+            destination = scratch / "restored-telegram-object"
+            await storage.download_to_path(obj.id, destination)
+            if destination.stat().st_size != obj.size or file_digest(destination) != obj.sha256:
+                raise ValueError("Telegram restore SHA/size uyuşmuyor")
+            start = max(0, obj.size // 2 - 17)
+            end = min(obj.size, start + 37)
+            seen = b"".join([part async for part in storage.iter_bytes(
+                obj.id, start=start, end=end, block_size=7,
+            )])
+            with destination.open("rb") as handle:
+                handle.seek(start)
+                if handle.read(end - start) != seen:
+                    raise ValueError("Telegram restore Range uyuşmuyor")
+            return {"verified": True, "size": obj.size, "sha256_match": True,
+                    "range_match": True, "telegram_uploads": 0,
+                    "telegram_deletions": 0}
+        finally:
+            await client.disconnect()
     finally:
         db.close()
 
@@ -428,12 +441,13 @@ def dr_stage(result: dict, evidence: Path):
                 report_status(result, "disaster_recovery", "BLOCKED",
                               "SQL backup doğrulandı fakat gerçek Telegram readback atlandı")
                 return
-            token, account, chat_id, bucket, key = ask_bot_identity()
-            from scripts.rehearse_telegram_dr import verify_restored_telegram_object
-            from teledrive.storage.bot_api_adapter import BotApiClient
-            result_obj = asyncio.run(verify_restored_telegram_object(
-                backup, checksum, BotApiClient(token),
-                bucket=bucket, key=key, account=account, chat_id=chat_id,
+            (session_file, api_id, api_hash, account, chat_id, target,
+             bucket, key) = ask_user_identity()
+            from scripts.rehearse_telegram_dr import verify_original_user_channel
+            result_obj = asyncio.run(verify_original_user_channel(
+                backup, checksum, bucket=bucket, key=key, account=account,
+                chat_id=chat_id, target=target, session_file=session_file,
+                api_id=api_id, api_hash=api_hash,
             ))
             if (result_obj.get("verified") is not True
                     or result_obj.get("telegram_uploads") != 0
@@ -453,12 +467,14 @@ def dr_stage(result: dict, evidence: Path):
                     report_status(result, "disaster_recovery", "BLOCKED",
                                   "Native SQL restore tamamlandı; Telegram okunmadı")
                     return
-                token, account, chat_id, bucket, key = ask_bot_identity()
+                (session_file, api_id, api_hash, account, chat_id, target,
+                 bucket, key) = ask_user_identity()
                 with tempfile.TemporaryDirectory(prefix="p1-telegram-readback-") as temp:
                     result_obj = asyncio.run(native_telegram_readback(
-                        staging_db_url, token=token, account=account,
-                        chat_id=chat_id, bucket=bucket, key=key,
-                        scratch=Path(temp),
+                        staging_db_url, session_file=session_file,
+                        api_id=api_id, api_hash=api_hash, target=target,
+                        account=account, chat_id=chat_id, bucket=bucket,
+                        key=key, scratch=Path(temp),
                     ))
         result["dr"] = {"db_type": kind, "backup_checksum_matches": True,
                         "original_telegram_bytes_verified": True,
@@ -488,7 +504,8 @@ def legacy_stage(result: dict):
         source = Path(ask("Legacy source-root (mutlak)")).expanduser()
         allowed = Path(ask("İzin verilen üst kök (mutlak)")).expanduser()
         scratch = Path(ask("Scratch dizini (mutlak)")).expanduser()
-        token, account, chat_id, bucket, _ = ask_bot_identity()
+        (session_file, api_id, api_hash, account, chat_id, target,
+         bucket, _) = ask_user_identity()
         prefix = ask("Hedef key prefix", "archived")
         max_files = int(ask("Maksimum dosya sayısı (1-1000)", "1000"))
         max_bytes = int(ask("Tek dosya maksimum byte", "67108864"))
@@ -497,22 +514,29 @@ def legacy_stage(result: dict):
                 and scratch.is_absolute() and scratch.is_dir()):
             raise ValueError("Güvenli mutlak kaynak/scratch yolları gerekli")
         from scripts.verify_legacy_cutover import run
-        env_token = os.environ.get("TELEDRIVE_BOT_TOKEN")
-        os.environ["TELEDRIVE_BOT_TOKEN"] = token
+        original_env = {}
+        for key, value in (
+            ("TELEDRIVE_STORAGE_MTPROTO_API_ID", str(api_id)),
+            ("TELEDRIVE_STORAGE_MTPROTO_API_HASH", api_hash),
+            ("TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE", str(session_file)),
+        ):
+            original_env[key] = os.environ.get(key)
+            os.environ[key] = value
         try:
             args = SimpleNamespace(
                 database=db_value, source_root=source,
                 allowed_root=allowed, scratch_dir=scratch, bucket=bucket,
                 prefix=prefix, account=account, chat_id=chat_id,
-                max_files=max_files, max_bytes=max_bytes,
+                target=target, max_files=max_files, max_bytes=max_bytes,
                 extensions=extensions, max_file_size_mb=0,
             )
             report = asyncio.run(run(args))
         finally:
-            if env_token is None:
-                os.environ.pop("TELEDRIVE_BOT_TOKEN", None)
-            else:
-                os.environ["TELEDRIVE_BOT_TOKEN"] = env_token
+            for key, value in original_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
         result["legacy"] = {
             field: report.get(field) for field in (
                 "verified", "eligible_files", "verified_files",
@@ -532,36 +556,37 @@ def legacy_stage(result: dict):
 
 
 def ack_stage(result: dict, session_path: Path):
-    print("\n[6/6 Bot lost-ACK / bağımsız kanal kanıtı]")
-    if not yes("Sağlık API'sinde çözümlenmemiş Bot gönderim intent'i var mı?"):
-        report_status(result, "bot_ack", "NOT_APPLICABLE",
-                      "Operatör belirsiz Bot gönderimi bulunmadığını beyan etti")
+    print("\n[6/6 MTProto lost-send / bağımsız kanal kanıtı]")
+    if not yes("Sağlık API'sinde çözümlenmemiş MTProto gönderim intent'i var mı?"):
+        report_status(result, "mtproto_ack", "NOT_APPLICABLE",
+                      "Operatör belirsiz MTProto gönderimi bulunmadığını beyan etti")
         return
     if (not session_path.is_file() or session_path.is_symlink()
             or session_path.stat().st_mode & 0o077):
-        report_status(result, "bot_ack", "BLOCKED",
+        report_status(result, "mtproto_ack", "BLOCKED",
                       "Güvenli, mode 0600 Telegram kullanıcı session dosyası yok")
         return
-    if not yes("Orijinal message_id VE orijinal güvenilir Bot file_id mevcut mu?"):
-        report_status(result, "bot_ack", "BLOCKED",
+    if not yes("Orijinal message_id VE tam SHA-256 kanıtı mevcut mu?"):
+        report_status(result, "mtproto_ack", "BLOCKED",
                       "Kanıt olmadan kör tekrar gönderim/ACK uygulanamaz")
         return
     try:
-        from scripts.reconcile_bot_receipt import run
+        from scripts.reconcile_mtproto_receipt import run
         args = SimpleNamespace(
             database=secret("Salt-okunur DR staging veritabanı yolu/URL"),
-            account=ask("Orijinal Bot account alias"),
+            account=ask("Orijinal USER account alias"),
             chat_id=int(secret("Orijinal özel kanal ID")),
+            target=secret("Kanal ID veya username (target)"),
             object_id=ask("SQL pre-send intent object UUID"),
             ordinal=int(ask("Parça ordinal", "0")),
             message_id=int(secret("Orijinal Telegram message ID")),
-            file_id=secret("Orijinal Bot file_id (retained ACK kaydı)"),
+            sha256=secret("Orijinal parça SHA-256"),
+            size=int(secret("Orijinal parça byte boyutu")),
             apply=False,
         )
         print("  Sadece dry-run çalışır; --apply yok.")
         original = {}
         for key, value in (
-            ("TELEDRIVE_BOT_TOKEN", secret("Bot token")),
             ("TELEDRIVE_RECONCILE_API_ID", ask("Telegram API ID")),
             ("TELEDRIVE_RECONCILE_API_HASH", secret("Telegram API Hash")),
             ("TELEDRIVE_RECONCILE_SESSION",
@@ -578,17 +603,17 @@ def ack_stage(result: dict, session_path: Path):
                 else:
                     os.environ[key] = value
         if not verified.get("verified") or verified.get("applied"):
-            raise ValueError("Bağımsız ACK doğrulaması geçmedi")
+            raise ValueError("Bağımsız MTProto kanıt doğrulaması geçmedi")
         result["ack"] = {"independent_channel_proof": True,
                          "applied": False, "telegram_uploads": 0,
                          "telegram_deletions": 0}
-        report_status(result, "bot_ack", "PASS",
-                      "Bot + bağımsız kullanıcı SHA kanıtı doğrulandı; apply yapılmadı")
+        report_status(result, "mtproto_ack", "PASS",
+                      "USER kanal + tam SHA kanıtı doğrulandı; apply yapılmadı")
     except (EOFError, KeyboardInterrupt):
         raise
     except Exception as exc:
-        report_status(result, "bot_ack", "FAIL",
-                      "Özgün ACK kanıtı doğrulanamadı: " + type(exc).__name__)
+        report_status(result, "mtproto_ack", "FAIL",
+                      "Özgün MTProto kanıtı doğrulanamadı: " + type(exc).__name__)
 
 
 def save_report(folder: Path, result: dict) -> Path:
@@ -644,7 +669,7 @@ def main():
     finally:
         target = save_report(evidence, result)
         print("\nRAPOR YAZILDI:", target)
-        print("Raporda token, session, Bot file_id, parola, URL veya kanal ID yok.")
+        print("Raporda token, session, parola, URL veya kanal ID yok.")
         print("Bu rapor tek başına üretim geçiş onayı DEĞİLDİR.")
         print("Çıktıyı (gizli bilgi bulunmadığını kontrol ederek) paylaşabilirsin.")
 

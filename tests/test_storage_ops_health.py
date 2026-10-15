@@ -79,36 +79,35 @@ def test_operator_health_alerts_failed_jobs_and_stale_pending_without_secrets(ad
     assert payload["physical_deletion_enabled"] is False
 
 
-def test_operator_health_counts_unjournaled_bot_acks_without_exposing_ids(admin):
-    """Only persisted ACKs absent from chunk journals produce a warning."""
+def test_operator_health_counts_unjournaled_mtproto_receipts_without_exposing_ids(admin):
+    """Only acknowledged sends absent from chunk journals produce a warning."""
     import hashlib
-    from teledrive.storage.bot_api_adapter import BotFileIndex
     from teledrive.storage.manifest import ChunkReference
+    from teledrive.storage.user_mode import UserSendJournal
 
     client, path, _ = admin
     db = connect_database(path)
     try:
         catalog = BucketCatalog(ManifestStore(db))
-        catalog.create_bucket("bot-ack-alert", int(time.time()))
+        catalog.create_bucket("mtproto-ack-alert", int(time.time()))
         identifier = catalog.manifests.begin(
-            "bot-ack-alert", "only-in-receipts.bin", 5, int(time.time()),
+            "mtproto-ack-alert", "only-in-receipts.bin", 5, int(time.time()),
         )
         digest = hashlib.sha256(b"hello").hexdigest()
-        idx = BotFileIndex(db)
-        idx.put_receipt(
-            "bot-ops-ci", -100987654321, 101, "private-bot-file-id",
-            object_id=identifier, ordinal=0, checksum=digest, size=5,
-        )
+        journal = UserSendJournal(db)
+        journal.start("mtproto-ops-ci", -100987654321, identifier, 0,
+                      digest, 5)
+        journal.acknowledged("mtproto-ops-ci", -100987654321, identifier, 0,
+                             101)
     finally:
         db.close()
 
     url = "/api/v1/admin/storage/health"
     response = client.get(url, auth=("testadmin", "secure-auth-password"))
     assert response.status_code == 200, response.text
-    assert response.json()["unjournaled_bot_ack_count"] == 1
+    assert response.json()["unjournaled_mtproto_receipt_count"] == 1
     alerts = {row["code"]: row for row in response.json()["alerts"]}
-    assert alerts["unjournaled_bot_acks"]["count"] == 1
-    assert "private-bot-file-id" not in response.text
+    assert alerts["unjournaled_mtproto_receipts"]["count"] == 1
     assert identifier not in response.text
     assert response.json()["physical_deletion_enabled"] is False
 
@@ -118,30 +117,30 @@ def test_operator_health_counts_unjournaled_bot_acks_without_exposing_ids(admin)
         catalog.manifests.append(
             identifier, ChunkReference(
                 ordinal=0, offset=0, size=5, sha256=digest,
-                account="bot-ops-ci", chat_id=-100987654321, message_id=101,
+                account="mtproto-ops-ci", chat_id=-100987654321, message_id=101,
             ), int(time.time()),
         )
     finally:
         db.close()
     resolved = client.get(url, auth=("testadmin", "secure-auth-password"))
     assert resolved.status_code == 200, resolved.text
-    assert resolved.json()["unjournaled_bot_ack_count"] == 0
-    assert "unjournaled_bot_acks" not in {
+    assert resolved.json()["unjournaled_mtproto_receipt_count"] == 0
+    assert "unjournaled_mtproto_receipts" not in {
         row["code"] for row in resolved.json()["alerts"]
     }
 
-def test_operator_health_warns_on_unresolved_bot_send_without_identifiers(admin):
-    """Ambiguous sends must be visible but token/file ID/object ID stay private."""
+def test_operator_health_warns_on_unresolved_mtproto_send_without_identifiers(admin):
+    """Ambiguous sends must be visible but session/object ID stay private."""
     import hashlib
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+    from teledrive.storage.user_mode import UserSendJournal
 
     client, path, _ = admin
     db = connect_database(path)
     try:
-        idx = BotFileIndex(db)
+        idx = UserSendJournal(db)
         payload = b"unknown-channel-acceptance"
-        idx.start_send(
-            "private-operator-bot", -10098765432, "private-object-identifier",
+        idx.start(
+            "private-operator-user", -10098765432, "private-object-identifier",
             3, hashlib.sha256(payload).hexdigest(), len(payload),
         )
     finally:
@@ -151,50 +150,50 @@ def test_operator_health_warns_on_unresolved_bot_send_without_identifiers(admin)
     response = client.get(url, auth=("testadmin", "secure-auth-password"))
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["unresolved_bot_send_count"] == 1
+    assert body["unresolved_mtproto_send_count"] == 1
     alerts = {entry["code"]: entry for entry in body["alerts"]}
-    assert alerts["unresolved_bot_sends"]["severity"] == "critical"
-    assert alerts["unresolved_bot_sends"]["count"] == 1
-    for secret in ("private-operator-bot", "private-object-identifier",
+    assert alerts["unresolved_mtproto_sends"]["severity"] == "critical"
+    assert alerts["unresolved_mtproto_sends"]["count"] == 1
+    for secret in ("private-operator-user", "private-object-identifier",
                    "-10098765432", hashlib.sha256(payload).hexdigest()):
         assert secret not in response.text
 
     # Definitive non-acceptance clears only the corresponding intent.
     db = connect_database(path)
     try:
-        BotFileIndex(db).clear_rejected_send(
-            "private-operator-bot", -10098765432, "private-object-identifier",
+        UserSendJournal(db).clear_rejected_send(
+            "private-operator-user", -10098765432, "private-object-identifier",
             3, hashlib.sha256(payload).hexdigest(), len(payload),
         )
     finally:
         db.close()
     again = client.get(url, auth=("testadmin", "secure-auth-password"))
     assert again.status_code == 200
-    assert again.json()["unresolved_bot_send_count"] == 0
-    assert "unresolved_bot_sends" not in {
+    assert again.json()["unresolved_mtproto_send_count"] == 0
+    assert "unresolved_mtproto_sends" not in {
         entry["code"] for entry in again.json()["alerts"]
     }
 
-def test_operator_unresolved_bot_inventory_requires_auth_and_has_no_side_effects(admin):
+def test_operator_unresolved_mtproto_inventory_requires_auth_and_has_no_side_effects(admin):
     """Read-only triage explicitly exposes checksum/size to authorized admin only."""
     import hashlib
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+    from teledrive.storage.user_mode import UserSendJournal
 
     client, path, _ = admin
     db = connect_database(path)
     try:
-        index = BotFileIndex(db)
-        index.start_send(
-            "bot-a", -100123456, "object-inflight-a", 0,
+        index = UserSendJournal(db)
+        index.start(
+            "user-a", -100123456, "object-inflight-a", 0,
             hashlib.sha256(b"first").hexdigest(), 5,
         )
-        index.start_send(
-            "bot-b", -100123457, "object-inflight-b", 1,
+        index.start(
+            "user-b", -100123457, "object-inflight-b", 1,
             hashlib.sha256(b"second").hexdigest(), 6,
         )
     finally:
         db.close()
-    endpoint = "/api/v1/admin/storage/bot-unresolved"
+    endpoint = "/api/v1/admin/storage/mtproto-unresolved"
     assert client.get(endpoint).status_code in (401, 403)
     unauthorized = client.get(endpoint, auth=("testadmin", "not-correct"))
     assert unauthorized.status_code in (401, 403)
@@ -207,12 +206,12 @@ def test_operator_unresolved_bot_inventory_requires_auth_and_has_no_side_effects
     content = response.json()
     assert content["total"] == 2
     assert len(content["intents"]) == 1
-    assert content["intents"][0]["account"] == "bot-a"
+    assert content["intents"][0]["account"] == "user-a"
     assert content["intents"][0]["ordinal"] == 0
     assert content["intents"][0]["size"] == 5
     assert len(content["intents"][0]["sha256"]) == 64
     assert "independently verify" in content["message"].lower()
-    for forbidden in ("bot_token", "file_id", "secret_key",
+    for forbidden in ("session", "file_id", "secret_key",
                       "lease_token", "123456:"):
         assert forbidden not in response.text
     full = client.get(endpoint, auth=("testadmin", "secure-auth-password"))
@@ -222,37 +221,32 @@ def test_operator_unresolved_bot_inventory_requires_auth_and_has_no_side_effects
     # Read-only inventory must not remove/fabricate receipts or send media.
     db = connect_database(path)
     try:
-        idx = BotFileIndex(db)
+        idx = UserSendJournal(db)
         assert idx.unresolved_count() == 2
-        # This minimal fixture deliberately has no storage_chunks table;
-        # assert directly that the read-only API fabricated no Bot ACK.
-        assert db.connection.exec_driver_sql(
-            "SELECT COUNT(*) FROM storage_bot_upload_receipts"
-        ).scalar_one() == 0
     finally:
         db.close()
 
 
-def test_operator_health_exposes_only_aggregate_explicit_429_total(admin):
-    """Cross-host 429 evidence has no chat IDs, account aliases, or tokens."""
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+def test_operator_health_exposes_only_aggregate_explicit_flood_total(admin):
+    """Cross-host flood evidence has no chat IDs, account aliases, or tokens."""
+    from teledrive.storage.mtproto_rate_guard import MtprotoRateGuard
 
     client, url, _ = admin
     conn = connect_database(url)
     try:
-        index = BotFileIndex(conn)
-        index.reserve_send_slot("private-429-account", -100987654321, 0,
+        guard = MtprotoRateGuard(conn)
+        guard.reserve_send_slot("private-flood-account", -100987654321, 0,
                                 now_ms=1000)
-        index.impose_shared_cooldown(
-            "private-429-account", -100987654321, 9, now_ms=1000,
+        guard.impose_shared_cooldown(
+            "private-flood-account", -100987654321, 9, now_ms=1000,
         )
-        assert index.total_explicit_429_observations() == 1
+        assert guard.total_explicit_flood_observations() == 1
     finally:
         conn.close()
     endpoint = "/api/v1/admin/storage/health"
     assert client.get(endpoint).status_code in (401, 403)
     response = client.get(endpoint, auth=("testadmin", "secure-auth-password"))
     assert response.status_code == 200, response.text
-    assert response.json()["bot_explicit_429_total"] == 1
-    for sensitive in ("private-429-account", "-100987654321", "bot_token"):
+    assert response.json()["mtproto_explicit_flood_total"] == 1
+    for sensitive in ("private-flood-account", "-100987654321", "session"):
         assert sensitive not in response.text

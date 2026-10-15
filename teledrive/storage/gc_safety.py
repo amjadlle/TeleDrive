@@ -8,9 +8,43 @@ from __future__ import annotations
 import hashlib
 import json
 
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, or_, select
 from teledrive.storage.catalog import heads, published_versions, removed_versions
 from teledrive.storage.manifest import chunks, object_aliases, objects, writer_fences
+
+ACTIVE_JOB_STATES = ("queued", "running", "staged", "publishing")
+
+
+def durable_job_blockers(db, names, linked):
+    """Active durable upload-job IDs that hold or will publish linked objects.
+
+    A queued/running job can still publish the candidate head (by object_id,
+    expected_head_id, or the same bucket/key), so it is a live reference.
+    Terminal jobs are excluded: their published head is covered by the head
+    graph entry, and failed/cancelled jobs hold no pending publication.
+    """
+    if "storage_upload_jobs" not in names:
+        return []
+    from teledrive.storage.jobs import jobs as upload_jobs
+
+    by_identity = db.execute(select(upload_jobs.c.id).where(
+        upload_jobs.c.state.in_(ACTIVE_JOB_STATES),
+        or_(
+            upload_jobs.c.object_id.in_(linked),
+            upload_jobs.c.expected_head_id.in_(linked),
+        ),
+    )).scalars()
+    blocked = set(by_identity)
+    keyed = db.execute(select(
+        objects.c.bucket, objects.c.object_key
+    ).where(objects.c.id.in_(linked))).all()
+    for bucket, key in {(row[0], row[1]) for row in keyed}:
+        blocked.update(db.execute(select(upload_jobs.c.id).where(
+            upload_jobs.c.state.in_(ACTIVE_JOB_STATES),
+            upload_jobs.c.bucket == bucket,
+            upload_jobs.c.object_key == key,
+        )).scalars())
+    return sorted(blocked)
 
 
 class GCReferenceGuard:
@@ -27,13 +61,10 @@ class GCReferenceGuard:
         names = set(inspect(self.db.engine).get_table_names())
         if not self.REQUIRED.issubset(names):
             raise RuntimeError("Incomplete GC reference graph schema")
-        if ("storage_bot_send_intents" in names) != ("storage_bot_upload_receipts" in names):
-            raise RuntimeError("Bot reconciliation metadata incomplete")
         return names
 
     def evidence(self, identifier):
         from teledrive.s3.multipart import parts
-        from teledrive.storage.bot_api_adapter import _bot_receipts, _bot_send_intents
         from teledrive.storage.user_mode import mtproto_send_intents
 
         names = self.validate_schema()
@@ -77,12 +108,9 @@ class GCReferenceGuard:
             "writer_fence": refs(writer_fences.c.object_id),
             "multipart_part": refs(parts.c.object_id)
                 if "storage_multipart_parts" in names else [],
-            "bot_send_intent": refs(_bot_send_intents.c.object_id)
-                if "storage_bot_send_intents" in names else [],
-            "bot_receipt": refs(_bot_receipts.c.object_id)
-                if "storage_bot_upload_receipts" in names else [],
             "mtproto_send_intent_or_receipt": refs(mtproto_send_intents.c.object_id)
                 if "storage_mtproto_send_intents" in names else [],
+            "durable_job": durable_job_blockers(db, names, linked),
         }
         chunk_journal = [
             (int(n), account, int(chat), int(mid), digest)
@@ -97,6 +125,16 @@ class GCReferenceGuard:
             "id": identifier, "graph": graph, "journal": chunk_journal,
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         blockers = sorted(k for k, refs_found in graph.items() if refs_found)
+        # Unresolved = pre-send intents without any remote message ID yet.
+        # Acknowledged receipts still block via the graph entry above.
+        unresolved_intents = 0
+        if "storage_mtproto_send_intents" in names:
+            unresolved_intents = int(db.execute(
+                select(func.count()).select_from(mtproto_send_intents).where(
+                    mtproto_send_intents.c.object_id.in_(linked),
+                    mtproto_send_intents.c.message_id.is_(None),
+                )
+            ).scalar_one())
         return {
             "reference_blocked": bool(blockers),
             "reference_blockers": blockers,
@@ -106,8 +144,7 @@ class GCReferenceGuard:
             "historical_version_retained": bool(
                 graph["published_version"] or graph["removed_version"]
             ),
-            "unresolved_bot_intents": len(graph["bot_send_intent"]),
-            "durable_bot_receipts": len(graph["bot_receipt"]),
+            "unresolved_mtproto_intents": unresolved_intents,
             "writer_barrier_verified": False,
             "independent_payload_backup_verified": False,
             "restore_drill_verified": False,

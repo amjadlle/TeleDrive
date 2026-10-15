@@ -289,10 +289,10 @@ def test_physical_cleanup_rejects_published_version_even_if_object_failed(db_sto
     assert not transport.deleted and chunk.identity in transport.messages
 
 
-def test_physical_cleanup_rejects_copy_alias_and_unresolved_bot_receipt(db_store):
+def test_physical_cleanup_rejects_copy_alias_and_unresolved_mtproto_intent(db_store):
     from sqlalchemy import insert
     from teledrive.storage.manifest import object_aliases
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+    from teledrive.storage.user_mode import UserSendJournal, mtproto_send_intents
 
     ident, chunk = failed_object(db_store)
     copy = db_store.begin("ci", "copy-alias", 0, int(time.time()) - 9000)
@@ -309,8 +309,9 @@ def test_physical_cleanup_rejects_copy_alias_and_unresolved_bot_receipt(db_store
         object_aliases.c.object_id == copy
     ))
     db_store.db.commit()
-    index = BotFileIndex(db_store.db)
-    index.start_send("primary", 12345, ident, 0, hashlib.sha256(b"abcdef").hexdigest(), 6)
+    journal = UserSendJournal(db_store.db)
+    journal.start("primary", 12345, ident, 0,
+                  hashlib.sha256(b"abcdef").hexdigest(), 6)
     with pytest.raises(UnsafeCleanup, match="another SQL reference"):
         run(manager.cleanup(ident, dry_run=False))
     assert transport.deleted == []
@@ -330,3 +331,61 @@ def test_physical_cleanup_refuses_expired_unreconciled_writer_fence(db_store):
     assert remote.deleted == []
     assert part.identity in remote.messages
     assert db_store.interrupted()[0][1] == "failed"
+
+
+def _queued_job(db_store, *, object_id=None, expected_head_id=None,
+                bucket="ci", key="backups/archive.bin", index=0):
+    from sqlalchemy import insert
+    from teledrive.storage.jobs import StorageUploadJobs, jobs
+    from teledrive.storage.catalog import BucketCatalog
+    StorageUploadJobs(BucketCatalog(db_store))
+    now = int(time.time())
+    db_store.db.connection.execute(insert(jobs).values(
+        id=f"job-{index}-{object_id or expected_head_id or key}",
+        bucket=bucket, object_key=key, source_path="/uploads/source.bin",
+        source_size=6, source_device=1, source_inode=2, source_mtime_ns=3,
+        expected_generation=0, expected_head_id=expected_head_id,
+        state="queued", object_id=object_id, attempts=0,
+        lease_token=None, lease_until=None, created_at=now,
+        updated_at=now, last_error=None,
+    ))
+    db_store.db.commit()
+
+
+def test_physical_cleanup_rejects_active_durable_job_reference(db_store):
+    """A queued job that can still publish this key must fence physical GC."""
+    identifier, part = failed_object(db_store)
+    remote = FakeRecoveryTransport()
+    remote.messages[part.identity] = part
+    manager = RecoveryManager(db_store, remote, min_age_seconds=3600)
+    for index, kwargs in enumerate(({"object_id": identifier},
+                                    {"expected_head_id": identifier},
+                                    {})):
+        _queued_job(db_store, index=index, **kwargs)
+        with pytest.raises(UnsafeCleanup, match="another SQL reference"):
+            run(manager.cleanup(identifier, dry_run=False))
+    assert remote.deleted == []
+    assert part.identity in remote.messages
+
+
+def test_physical_cleanup_rejects_mtproto_send_intent_reference(db_store):
+    """An unresolved USER-MTProto send intent keeps the failed object protected."""
+    from teledrive.storage.user_mode import UserSendJournal, mtproto_send_intents
+    from sqlalchemy import insert
+
+    identifier, part = failed_object(db_store)
+    remote = FakeRecoveryTransport()
+    remote.messages[part.identity] = part
+    UserSendJournal(db_store.db)  # create_all for the send-intent table
+    db_store.db.connection.execute(insert(mtproto_send_intents).values(
+        account="mtproto-user", chat_id=-100987654321, object_id=identifier,
+        ordinal=0, sha256=part.checksum_prefix + "0" * 48, size=6,
+        message_id=None,
+    ))
+    db_store.db.commit()
+    with pytest.raises(UnsafeCleanup, match="another SQL reference"):
+        run(RecoveryManager(db_store, remote, min_age_seconds=3600).cleanup(
+            identifier, dry_run=False,
+        ))
+    assert remote.deleted == []
+    assert part.identity in remote.messages

@@ -53,8 +53,8 @@ from teledrive.storage.catalog import BucketCatalog, published_versions
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.manifest import ManifestStore, objects
-from teledrive.storage.bot_api_adapter import BOT_RECOMMENDED_CHUNK_SIZE
-from web.app import db_connect, storage_bot_transport, _secure_mkdir
+from teledrive.storage.telethon_adapter import RECOMMENDED_CHUNK_SIZE
+from web.app import db_connect, storage_transport, _secure_mkdir
 
 NAMESPACE = "http://s3.amazonaws.com/doc/2006-03-01/"
 app = FastAPI(title="TeleDrive S3 (initial compatibility subset)", docs_url=None,
@@ -776,11 +776,11 @@ async def _handle(request: Request):
                     dest.write(payload)
                     dest.flush()
                     os.fsync(dest.fileno())
-                transport = storage_bot_transport(db)
+                transport = storage_transport(db)
                 await transport.verify_target()
                 obj = await TelegramObjectStorage(
                     post_catalog.manifests, transport,
-                    chunk_size=BOT_RECOMMENDED_CHUNK_SIZE,
+                    chunk_size=RECOMMENDED_CHUNK_SIZE,
                     scratch_directory=directory,
                 ).put_file(bucket, post_key, staged)
                 ObjectMetadataStore(post_catalog).attach_uncommitted(
@@ -1352,12 +1352,12 @@ async def _handle(request: Request):
                         selected.append((int(number), etag.strip('"').lower()))
                 except (ValueError, ET.ParseError) as exc:
                     raise MultipartError("MalformedXML", "Invalid CompleteMultipartUpload XML") from exc
-                transport = storage_bot_transport(db)
+                transport = storage_transport(db)
                 scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
                 _secure_mkdir(scratch)
                 engine = TelegramObjectStorage(
                     catalog.manifests, transport,
-                    chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
+                    chunk_size=RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
                 )
                 finished = await mpu.complete(
                     upload_id, bucket, key, owner, selected, engine,
@@ -1423,11 +1423,11 @@ async def _handle(request: Request):
                     base64.b64encode(crc32c_value.to_bytes(4, "big")).decode("ascii"),
                 ):
                     raise MultipartError("BadDigest", "CRC32C checksum mismatch")
-                transport = storage_bot_transport(db)
+                transport = storage_transport(db)
                 await transport.verify_target()
                 engine = TelegramObjectStorage(
                     catalog.manifests, transport,
-                    chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
+                    chunk_size=RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
                 )
                 staged = await engine.put_file(bucket, key, stage)
                 tag = md5.hexdigest()
@@ -1617,7 +1617,7 @@ async def _handle(request: Request):
             root = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
             _secure_mkdir(root)
             max_bytes = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
-            transport = storage_bot_transport(db)
+            transport = storage_transport(db)
             await transport.verify_target()
             fd, name = tempfile.mkstemp(prefix="s3-upload-", dir=root)
             stage = Path(name)
@@ -1658,7 +1658,7 @@ async def _handle(request: Request):
                     return _error("BadDigest", "CRC32C checksum mismatch", 400)
                 engine = TelegramObjectStorage(
                     catalog.manifests, transport,
-                    chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=root,
+                    chunk_size=RECOMMENDED_CHUNK_SIZE, scratch_directory=root,
                 )
                 # Metadata, tags and the head pointer share one SQL
                 # transaction. A failed metadata write cannot publish a
@@ -1826,12 +1826,12 @@ async def _handle(request: Request):
                 checksum_mode=(checksum_mode == "ENABLED"),
             ))
         start, end, partial = _range(request.headers.get("range"), item.size)
-        transport = storage_bot_transport(db)
+        transport = storage_transport(db)
         scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
         _secure_mkdir(scratch)
         engine = TelegramObjectStorage(
             catalog.manifests, transport,
-            chunk_size=BOT_RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
+            chunk_size=RECOMMENDED_CHUNK_SIZE, scratch_directory=scratch,
         )
 
         async def stream():

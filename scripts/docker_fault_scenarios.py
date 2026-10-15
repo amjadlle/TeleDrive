@@ -20,8 +20,9 @@ import urllib.request
 from uuid import uuid4
 
 from teledrive.db import connect_database
-from teledrive.storage.bot_api_adapter import BotFileIndex, BotApiError
 from teledrive.storage.catalog import BucketCatalog
+from teledrive.storage.mtproto_rate_guard import MtprotoRateGuard
+from teledrive.storage.user_mode import UserSendJournal
 from teledrive.storage.engine import IntegrityError, TelegramObjectStorage
 from teledrive.storage.gc import StorageGCInventory
 from teledrive.storage.manifest import ManifestStore
@@ -97,8 +98,8 @@ def check_two_web_nodes():
     one, two = health("web-a"), health("web-b")
     for name in ("physical_deletion_enabled",):
         assert one[name] is False and two[name] is False
-    # Both independent Uvicorn processes must use same SQL and Bot 429 state.
-    assert one["bot_explicit_429_total"] == two["bot_explicit_429_total"]
+    # Both independent Uvicorn processes must share SQL flood-wait state.
+    assert one["mtproto_explicit_flood_total"] == two["mtproto_explicit_flood_total"]
     return one
 
 
@@ -159,18 +160,18 @@ def seed():
         # simulated process loss immediately after Telegram accepted bytes.
         missing = manifest.begin(BUCKET, "crash/unknown-ack.bin", 9, now - 10 * 86400)
         manifest.fail(missing, "simulated worker crash before ACK journal", now - 10 * 86400)
-        index = BotFileIndex(db)
+        journal = UserSendJournal(db)
         payload = b"orphaned"
-        index.start_send(ACCOUNT, CHAT, missing, 0, sha(payload), len(payload))
+        journal.start(ACCOUNT, CHAT, missing, 0, sha(payload), len(payload))
         orphan_source = SOURCE / "unindexed.bin"
         orphan_source.write_bytes(payload)
         asyncio.run(remote.upload(orphan_source, object_id=missing, ordinal=0,
                                   checksum=sha(payload)))
         orphan_source.unlink()
-        assert index.unresolved_count() == 1
+        assert journal.unresolved_count() == 1
         try:
-            index.start_send(ACCOUNT, CHAT, missing, 0, sha(payload), len(payload))
-        except BotApiError:
+            journal.start(ACCOUNT, CHAT, missing, 0, sha(payload), len(payload))
+        except RuntimeError:
             pass
         else:
             raise AssertionError("Unsafe duplicate send accepted")
@@ -179,26 +180,28 @@ def seed():
         ) if x["object_id"] == missing)
         assert candidate["reference_blocked"] is True
         assert candidate["approved_for_deletion"] is False
-        # Synthetic Telegram 429: a real sender ALWAYS reserves its shared
-        # account/channel SQL slot before it can receive a definitive 429.
-        # The fault fixture must preserve this ordering, rather than
-        # weakening the production fail-closed rate-limit contract.
-        assert index.reserve_send_slot(ACCOUNT, CHAT, 0, now_ms=1000) == 0
-        index.impose_shared_cooldown(ACCOUNT, CHAT, 7, now_ms=1000)
-        assert index.shared_cooldown_wait(ACCOUNT, CHAT, now_ms=1000) == 7
+        # Synthetic flood-wait: a real sender ALWAYS reserves its shared
+        # account/channel SQL slot before it can receive a definitive
+        # flood-wait. The fault fixture must preserve this ordering, rather
+        # than weakening the production fail-closed rate-limit contract.
+        guard = MtprotoRateGuard(db)
+        assert guard.reserve_send_slot(ACCOUNT, CHAT, 0, now_ms=1000) == 0
+        guard.impose_shared_cooldown(ACCOUNT, CHAT, 7, now_ms=1000)
+        assert guard.shared_cooldown_wait(ACCOUNT, CHAT, now_ms=1000) == 7
         db.close()
         reopened = connect_database(DB_URL)
         try:
-            idx = BotFileIndex(reopened)
-            assert idx.unresolved_count() == 1
-            assert idx.total_explicit_429_observations() == 1
-            assert idx.shared_cooldown_wait(ACCOUNT, CHAT, now_ms=1000) == 7
-            assert idx.reserve_send_slot(ACCOUNT, CHAT, 0, now_ms=1000) == 7
+            again = UserSendJournal(reopened)
+            rate = MtprotoRateGuard(reopened)
+            assert again.unresolved_count() == 1
+            assert rate.total_explicit_flood_observations() == 1
+            assert rate.shared_cooldown_wait(ACCOUNT, CHAT, now_ms=1000) == 7
+            assert rate.reserve_send_slot(ACCOUNT, CHAT, 0, now_ms=1000) == 7
         finally:
             reopened.close()
         nodes = check_two_web_nodes()
-        assert nodes["unresolved_bot_send_count"] == 1
-        assert nodes["bot_explicit_429_total"] == 1
+        assert nodes["unresolved_mtproto_send_count"] == 1
+        assert nodes["mtproto_explicit_flood_total"] == 1
         assert nodes["physical_deletion_enabled"] is False
         (EVIDENCE / "objects.json").write_text(json.dumps(saved), encoding="utf-8")
         write_receipt("seed", {
@@ -219,9 +222,9 @@ def verify_process_restart():
     """
     saved = json.loads((EVIDENCE / "objects.json").read_text(encoding="utf-8"))
     nodes = check_two_web_nodes()
-    assert nodes["unresolved_bot_send_count"] == 1
-    assert nodes["bot_explicit_429_total"] == 1
-    assert nodes["unjournaled_bot_ack_count"] == 0
+    assert nodes["unresolved_mtproto_send_count"] == 1
+    assert nodes["mtproto_explicit_flood_total"] == 1
+    assert nodes["unjournaled_mtproto_receipt_count"] == 0
     remote = DiskTelegram()
     before_media = len(list(REMOTE.glob("*.bin")))
     assert before_media == sum(x["parts"] for x in saved) + 1
@@ -229,10 +232,11 @@ def verify_process_restart():
     try:
         manifest = ManifestStore(db)
         catalog = BucketCatalog(manifest)
-        idx = BotFileIndex(db)
+        idx = UserSendJournal(db)
+        rate = MtprotoRateGuard(db)
         assert idx.unresolved_count() == 1
-        assert idx.total_explicit_429_observations() == 1
-        assert idx.shared_cooldown_wait(ACCOUNT, CHAT, now_ms=1000) == 7
+        assert rate.total_explicit_flood_observations() == 1
+        assert rate.shared_cooldown_wait(ACCOUNT, CHAT, now_ms=1000) == 7
         for original in saved:
             head = catalog.get(BUCKET, original["key"])
             assert head.item.id == original["id"]
@@ -294,9 +298,10 @@ def verify_restored():
                         stream.read(end - start)
                     )
             dest.unlink()
-        idx = BotFileIndex(db)
+        idx = UserSendJournal(db)
+        rate = MtprotoRateGuard(db)
         assert idx.unresolved_count() == 1
-        assert idx.total_explicit_429_observations() == 1
+        assert rate.total_explicit_flood_observations() == 1
         # Deliberately corrupt an externally stored chunk and verify that
         # the production download code refuses to publish partial bytes.
         candidate = next(x for x in saved if x["parts"] >= 2)

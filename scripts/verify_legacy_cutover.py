@@ -16,7 +16,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from teledrive.db import connect_database
-from teledrive.storage.bot_api_adapter import BotApiClient, BotApiChunkTransport, BotFileIndex
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.cutover_acceptance import verify_legacy_cutover
 from teledrive.storage.jobs import StorageUploadJobs
@@ -24,9 +23,14 @@ from teledrive.storage.manifest import ManifestStore
 
 
 async def run(args) -> dict:
-    token = os.environ.get("TELEDRIVE_BOT_TOKEN")
-    if not token:
-        raise ValueError("Missing Bot API credential in environment")
+    from scripts.rehearse_telegram_dr import (
+        ReadOnlyUserChannelTransport, open_read_only_user,
+    )
+    api_id = int(os.environ["TELEDRIVE_STORAGE_MTPROTO_API_ID"])
+    api_hash = os.environ["TELEDRIVE_STORAGE_MTPROTO_API_HASH"]
+    session_file = Path(os.environ.get(
+        "TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE", "config/mtproto-user.session",
+    ))
     db = connect_database(args.database)
     try:
         cfg = SimpleNamespace(
@@ -34,17 +38,21 @@ async def run(args) -> dict:
             allowed_extensions=[s.lower() for s in args.extensions.split(",") if s],
             max_file_size_mb=args.max_file_size_mb,
         )
-        index = BotFileIndex(db)
-        transport = BotApiChunkTransport(
-            BotApiClient(token), index,
-            account=args.account, chat_id=args.chat_id,
-        )
         queue = StorageUploadJobs(BucketCatalog(ManifestStore(db)))
-        return await verify_legacy_cutover(
-            cfg, queue, transport, bucket=args.bucket, prefix=args.prefix,
-            approved_root=args.allowed_root, max_files=args.max_files,
-            max_bytes=args.max_bytes, scratch_directory=args.scratch_dir,
+        client, resolved = await open_read_only_user(
+            session_file, api_id, api_hash, args.target, args.chat_id,
         )
+        try:
+            transport = ReadOnlyUserChannelTransport(
+                client, resolved, account=args.account, chat_id=args.chat_id,
+            )
+            return await verify_legacy_cutover(
+                cfg, queue, transport, bucket=args.bucket, prefix=args.prefix,
+                approved_root=args.allowed_root, max_files=args.max_files,
+                max_bytes=args.max_bytes, scratch_directory=args.scratch_dir,
+            )
+        finally:
+            await client.disconnect()
     finally:
         db.close()
 
@@ -59,6 +67,8 @@ def main() -> int:
     p.add_argument("--prefix", default="")
     p.add_argument("--account", required=True)
     p.add_argument("--chat-id", type=int, required=True)
+    p.add_argument("--target", required=True,
+                   help="Exact authorized original channel")
     p.add_argument("--extensions", default="")
     p.add_argument("--max-file-size-mb", type=int, default=0)
     p.add_argument("--max-files", type=int, default=1000)

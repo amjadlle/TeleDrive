@@ -932,26 +932,26 @@ def test_version_revocation_bypasses_stale_repeatable_read_snapshots(env_name):
         second_reader.close()
 
 @pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
-def test_live_sql_serializes_six_independent_bot_send_workers_and_429(env_name):
+def test_live_sql_serializes_six_independent_user_send_workers_and_flood(env_name):
     """Actual PostgreSQL/MySQL transactions serialize competing channel sends.
 
     Six independent SQL connections start simultaneously with an identical
-    clock tick. A definite 429 then adds a common cooldown; a different
-    Bot account/channel is unaffected. This is not physical Telegram load.
+    clock tick. A definite flood-wait then adds a common cooldown; a
+    different USER account/channel is unaffected. No physical Telegram load.
     """
     url = os.getenv(env_name)
     if not url:
         pytest.skip(f"{env_name} not configured")
     from concurrent.futures import ThreadPoolExecutor
     from uuid import uuid4
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+    from teledrive.storage.mtproto_rate_guard import MtprotoRateGuard
 
     chat = -100_000_000_000 - int(uuid4().hex[:8], 16)
     account = "rate-ci-" + uuid4().hex[:16]
     t = 9_000_000_000
     prepared = connect_database(url)
     try:
-        idx = BotFileIndex(prepared)
+        idx = MtprotoRateGuard(prepared)
         assert idx.reserve_send_slot(account, chat, 0.9, now_ms=t) == 0
     finally:
         prepared.close()
@@ -959,7 +959,7 @@ def test_live_sql_serializes_six_independent_bot_send_workers_and_429(env_name):
     def one_worker(_):
         conn = connect_database(url)
         try:
-            return BotFileIndex(conn).reserve_send_slot(
+            return MtprotoRateGuard(conn).reserve_send_slot(
                 account, chat, 0.9, now_ms=t,
             )
         finally:
@@ -971,15 +971,15 @@ def test_live_sql_serializes_six_independent_bot_send_workers_and_429(env_name):
 
     first, second = connect_database(url), connect_database(url)
     try:
-        original_count = BotFileIndex(second).total_explicit_429_observations()
-        BotFileIndex(first).impose_shared_cooldown(
+        original_count = MtprotoRateGuard(second).total_explicit_flood_observations()
+        MtprotoRateGuard(first).impose_shared_cooldown(
             account, chat, 30, now_ms=t,
         )
-        assert BotFileIndex(second).total_explicit_429_observations() == original_count + 1
-        assert BotFileIndex(second).reserve_send_slot(
+        assert MtprotoRateGuard(second).total_explicit_flood_observations() == original_count + 1
+        assert MtprotoRateGuard(second).reserve_send_slot(
             account, chat, 0.9, now_ms=t,
         ) == 30
-        assert BotFileIndex(first).reserve_send_slot(
+        assert MtprotoRateGuard(first).reserve_send_slot(
             account + "-other", chat, 0.9, now_ms=t,
         ) == 0
     finally:
@@ -987,23 +987,23 @@ def test_live_sql_serializes_six_independent_bot_send_workers_and_429(env_name):
         second.close()
 
 @pytest.mark.parametrize("env_name", ["DB_TEST_POSTGRES_URL", "DB_TEST_MYSQL_URL"])
-def test_live_sql_429_observed_after_another_process_reserves_slot(env_name):
-    """Real database isolation must not hide newly committed 429 backoff."""
+def test_live_sql_flood_observed_after_another_process_reserves_slot(env_name):
+    """Real database isolation must not hide newly committed flood backoff."""
     url = os.getenv(env_name)
     if not url:
         pytest.skip(f"{env_name} not configured")
     from uuid import uuid4
-    from teledrive.storage.bot_api_adapter import BotFileIndex
+    from teledrive.storage.mtproto_rate_guard import MtprotoRateGuard
 
     suffix = uuid4().hex[:16]
-    account = "late-429-" + suffix
+    account = "late-flood-" + suffix
     chat_id = -200_000_000 - int(uuid4().hex[:6], 16)
     before = connect_database(url)
     after = connect_database(url)
     t = 5_000_000
     try:
-        first = BotFileIndex(before)
-        second = BotFileIndex(after)
+        first = MtprotoRateGuard(before)
+        second = MtprotoRateGuard(after)
         assert first.reserve_send_slot(
             account, chat_id, 1.5, now_ms=t,
         ) == 0
@@ -1011,11 +1011,11 @@ def test_live_sql_429_observed_after_another_process_reserves_slot(env_name):
             account, chat_id, 1.5, now_ms=t,
         ) == 1.5
         assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 0
-        initial_429 = second.total_explicit_429_observations()
+        initial_flood = second.total_explicit_flood_observations()
         first.impose_shared_cooldown(
             account, chat_id, 17, now_ms=t,
         )
-        assert second.total_explicit_429_observations() == initial_429 + 1
+        assert second.total_explicit_flood_observations() == initial_flood + 1
         assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 17
         assert first.shared_cooldown_wait(
             account, chat_id, now_ms=t + 17000,
@@ -1026,7 +1026,7 @@ def test_live_sql_429_observed_after_another_process_reserves_slot(env_name):
         first.impose_shared_cooldown(
             account, chat_id, 3, now_ms=t,
         )
-        assert second.total_explicit_429_observations() == initial_429 + 2
+        assert second.total_explicit_flood_observations() == initial_flood + 2
         assert second.shared_cooldown_wait(account, chat_id, now_ms=t) == 17
         assert second.shared_cooldown_wait(
             account + "-other", chat_id, now_ms=t,

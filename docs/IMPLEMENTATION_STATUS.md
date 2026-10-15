@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | P0 — basic upload and supported REST/S3 subset | **Development-validated** | Transfer, authentication, integrity and tested client subset; not complete AWS S3 parity |
 | P1 — disposable Docker acceptance | **Development-validated** | Two Web processes, real PostgreSQL, 13 resilience and cleanup gates; Telegram I/O is synthetic |
-| P1 — real test-channel transfers | **Development-validated** | Bot API, Telethon user, three-worker PostgreSQL integration; not the owner's original production media |
+| P1 — real test-channel transfers | **Development-validated** | Telethon user and three-worker PostgreSQL integration (historical Bot exercises retired with the Bot layer); not the owner's original production media |
 | P1 — physical production operation | **Not signed off** | Independent host identity, owner data recovery and authorized change control not established |
 | P2 — advanced recovery, GC and compatibility | **In development** | Rebuild and offline verification components exist; production safeguards and further protocol work remain |
 
@@ -26,12 +26,12 @@
 - **API and credentials:** separately scoped REST Bearer credentials and S3 SigV4 credentials, signed request checks, conditional writes, restricted administrative operations and fail-closed unsupported inputs.
 - **Supported S3 subset:** object/bucket operations, a bounded multipart implementation, conditional operations, selected versioning (including safe always-Enabled controls), fixed all-private Public Access Block, tags, copies, CORS and presigned requests. Tested clients include boto3, AWS CLI and rclone.
 - **Not complete S3:** arbitrary AWS lifecycle and bucket policy behavior, SSE, every checksum mode, full delete-marker semantics and untested client combinations are not warranted.
-- **Telegram transports:** dedicated test-channel Bot API and user MTProto scenarios plus a shared PostgreSQL multiworker scenario. Credentials and private test channel are isolated from production.
+- **Telegram transports:** dedicated test-channel Telethon USER MTProto scenarios plus a shared PostgreSQL multiworker scenario. Credentials and private test channel are isolated from production; the Bot API layer has been removed.
 - **Backups:** native PostgreSQL/MySQL backups and separate SQL restore rehearsals, plus disposable Docker fault injection. These exercises do not certify recovery of the owner's original Telegram account or channel.
 
 ### P1: development acceptance
 
-The development acceptance criteria consist of the 13 Docker fault-injection gates, four evidence stages and scoped cleanup, plus the distinct real test-channel Bot/User/Multiworker workflows. Run the documented [fault-injection command and checklist](CI_WORKFLOWS.md#3-fault-injection-acceptance-gates); do not maintain a second copy of the 13 gates here.
+The development acceptance criteria consist of the 13 Docker fault-injection gates, four evidence stages and scoped cleanup, plus the distinct real test-channel User/Multiworker workflows. Run the documented [fault-injection command and checklist](CI_WORKFLOWS.md#3-fault-injection-acceptance-gates); do not maintain a second copy of the 13 gates here.
 
 A production installation, original legacy files, signed operator approval, an hour of real production rate limits, and restoration of original production media are **not** prerequisites for declaring disposable *development* acceptance. They are separate owner/operator responsibilities.
 
@@ -47,13 +47,13 @@ The default [`docker-compose.yml`](../docker-compose.yml) creates **one `teledri
 | S3-compatible API | `http://127.0.0.1:9000` | Scoped S3 credentials with SigV4 | **Same** SQL catalog and Telegram object engine |
 | Local-folder durable jobs | Admin job API on 8080 | Basic admin + CSRF | **Same** catalog; files under allowed read-only mount are explicitly queued |
 
-**Read-only channel recovery visibility:** The admin-only `GET /api/v1/admin/storage/channel-history` uses the connected user MTProto session, with bounded `limit` (1–1,000), exclusive `before_message_id` pagination, and optional `include_external_markers=true` for explicitly unverified other-sender marker hints. It neither downloads media nor updates SQL, never infers bucket/key/whole SHA, and is unavailable in Bot mode. An original mapping still needs independently verified metadata and full payload restoration before publication.
+**Read-only channel recovery visibility:** The admin-only `GET /api/v1/admin/storage/channel-history` uses the connected user MTProto session, with bounded `limit` (1–1,000), exclusive `before_message_id` pagination, and optional `include_external_markers=true` for explicitly unverified other-sender marker hints. It neither downloads media nor updates SQL, never infers bucket/key/whole SHA, and requires the connected USER session. An original mapping still needs independently verified metadata and full payload restoration before publication.
 
-**Unified runtime transport:** `TELEDRIVE_STORAGE_TRANSPORT=telethon` is mandatory for REST/S3/local-file jobs. A preauthorized USER StringSession and a dedicated private broadcast channel are required to write. Bot upload mode is retired and stale Bot tokens are never used by the unified runtime. The web application's single ASGI lifespan holds the user session and is shared with the S3 listener. Historical SQL heads are retained; old Bot chunks in the exact same channel can be read through the authorized USER session by message ID. Telethon channel history provides candidate markers but not independent key/whole-hash proof. MTProto unknown-ACK send intents and receipts are durable SQL GC blockers. Do not use Saved Messages.
+**Unified runtime transport:** `TELEDRIVE_STORAGE_TRANSPORT=telethon` is mandatory for REST/S3/local-file jobs. A preauthorized USER StringSession and a dedicated private broadcast channel are required to write. There is no Bot upload mode; the entire Bot API layer has been removed. The web application's single ASGI lifespan holds the user session and is shared with the S3 listener. Historical SQL heads are retained; old Bot chunks in the exact same channel can be read through the authorized USER session by message ID. Telethon channel history provides candidate markers but not independent key/whole-hash proof. MTProto unknown-ACK send intents and receipts are durable SQL GC blockers. Do not use Saved Messages.
 
 An S3 request and a REST request can address the same bucket/key and observe the same published object and generation. A local file is **not** automatically imported merely by copying it into `/uploads`. Create an authenticated job for that path; Compose enables `TELEDRIVE_JOB_AUTO_RUN=1` to process explicitly queued jobs. This is distinct from the original user-account Telethon folder scanner/batch uploader. Explicitly opting in to `TELEDRIVE_JOB_LEGACY_AUTO_BUCKET` now exposes the existing fenced legacy-to-durable-job cutover on the default single-container Compose service. It queues scanned files under the common catalog (with the legacy direct sender disabled); the original direct Telethon uploader is **not** silently cross-indexed or migrated.
 
-For REST/S3 payload I/O, configure an authorized **Telethon USER** (MTProto) session with posting rights in a dedicated private channel; all interfaces use the same session and SQL catalog. Pre-switch Bot chunks can also be read directly by the authorized user from the same channel via their immutable SQL message IDs; for inaccessible/different Bot channels preserve original SQL, media and independent backup until a separately verified migration. The S3 master key/credentials are separate. Launching the listeners alone does not provision those secrets. See the [README](../README.md) for installation and examples and [Security Policy](SECURITY.md) for network exposure rules.
+For REST/S3 payload I/O, configure an authorized **Telethon USER** (MTProto) session with posting rights in a dedicated private channel; all interfaces use the same session and SQL catalog. Legacy `api-bot` chunks from the pre-switch era can also be read directly by the authorized user from the same channel via their immutable SQL message IDs; for inaccessible/different channels preserve original SQL, media and independent backup until a separately verified migration. The S3 master key/credentials are separate. Launching the listeners alone does not provision those secrets. See the [README](../README.md) for installation and examples and [Security Policy](SECURITY.md) for network exposure rules.
 
 ### Metadata and physical payloads
 
@@ -83,7 +83,7 @@ The evidence must demonstrate a run of at least one hour, `telemetry_gate_passed
 
 Keep the original SQL snapshot, expected archive SHA-256, Telegram account credentials and destination/channel identifiers in separate protected storage. Restore into an **isolated staging database**, never over the live production DB.
 
-SQLite backup validation is described in [Backup and Restore](BACKUP_RESTORE.md). **Current script limitation:** `scripts/rehearse_telegram_dr.py` currently requires `TELEDRIVE_BOT_TOKEN` and uses a historical Bot API adapter. It is **not** a Telethon USER restore verifier. The following command is suitable **only for an isolated original Bot-backed source** with retained original Bot credentials; do not use it to certify a Telethon-only original-media recovery:
+SQLite backup validation is described in [Backup and Restore](BACKUP_RESTORE.md). **Current script scope:** `scripts/rehearse_telegram_dr.py` is a read-only USER-MTProto verifier. It authenticates an authorized user session, resolves the exact original broadcast channel, reads the sealed snapshot from a temporary clone and verifies whole-body SHA-256, size and a cross-chunk range for one named object. It never uploads or deletes Telegram media and never modifies the source database. Set `TELEDRIVE_STORAGE_MTPROTO_API_ID`, `TELEDRIVE_STORAGE_MTPROTO_API_HASH` and (optionally) `TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE` in the protected staging environment:
 
 ~~~bash
 python scripts/rehearse_telegram_dr.py \
@@ -92,10 +92,11 @@ python scripts/rehearse_telegram_dr.py \
   --bucket ORIGINAL_BUCKET \
   --key ORIGINAL_KEY \
   --account ORIGINAL_ACCOUNT \
-  --chat-id ORIGINAL_CHAT_ID
+  --chat-id ORIGINAL_CHAT_ID \
+  --target ORIGINAL_CHANNEL_ID_OR_USERNAME
 ~~~
 
-For the historical Bot-backed fixture, this drill checks archive identity, published SQL metadata, original Telegram bytes, object SHA/length and cross-chunk ranges without reuploading or deleting media. **Telethon-only production recovery remains blocked** until an independent USER MTProto restore verifier can attest those same checks from a sealed SQL snapshot and original channel in an isolated environment. PostgreSQL/MySQL installations must use their appropriate native backups and independent restore databases. A consistent SQL dump **alone** is insufficient original-data disaster-recovery proof.
+Old `api-bot` chunks in the same authorized channel are read through the USER session without any Bot token. This drill checks archive identity, published SQL metadata, original Telegram bytes, object SHA/length and cross-chunk ranges without reuploading or deleting media, but it proves **one named object**, not a complete independent payload backup or full archive recovery. PostgreSQL/MySQL installations must use their appropriate native backups and independent restore databases. A consistent SQL dump **alone** is insufficient original-data disaster-recovery proof.
 
 ### 3.3 Legacy cutover only if original legacy sources exist
 
@@ -109,7 +110,8 @@ python scripts/verify_legacy_cutover.py \
   --scratch-dir /secure/scratch \
   --bucket ORIGINAL_BUCKET \
   --account ORIGINAL_ACCOUNT \
-  --chat-id ORIGINAL_CHAT_ID
+  --chat-id ORIGINAL_CHAT_ID \
+  --target ORIGINAL_CHANNEL_ID_OR_USERNAME
 ~~~
 
 Require `verified=true`, a complete scan, zero inconsistent/queued items, and exact source inode/revision/hash correspondence with the published head and original media. If **no legacy installation exists**, obtain an independent owner attestation (`no_legacy_source_attested=true`) and record `{"not_applicable":true}` rather than inventing a test. No live traffic cutover occurs without change approval.
@@ -134,9 +136,9 @@ An incorrect SHA, incomplete drill, duplicate host identity, invalid media proof
 
 ### 4.1 Physical Telegram garbage collection: disabled
 
-**Implemented safeguards:** The mandatory USER MTProto transport uses a durable SQL send journal to persist pre-send ambiguous intents and acknowledged remote message coordinates, which block non-destructive GC candidate approval; actual independent media backup and owner approval are still required. `StorageGCInventory` performs retention/reference previews with a fail-closed, fingerprinted SQL graph covering HEADs, published/removed versions, transitive copy aliases, multipart parts, writer fences and Bot intents/receipts; `RecoveryManager.cleanup` checks SQL heads, published and removed history, copy aliases, multipart references, send intents and Bot receipts. The Telethon ownership probe also checks account/channel/marker identity. Non-destructive GC audits separately count Bot file IDs without any chunk or acknowledged send record, without exposing opaque file IDs in the admin API.
+**Implemented safeguards:** The mandatory USER MTProto transport uses a durable SQL send journal to persist pre-send ambiguous intents and acknowledged remote message coordinates, which block non-destructive GC candidate approval; actual independent media backup and owner approval are still required. `StorageGCInventory` performs retention/reference previews with a fail-closed, fingerprinted SQL graph covering HEADs, published/removed versions, transitive copy aliases, multipart parts, writer fences, active durable upload jobs (by object identity, expected head and bucket/key) and MTProto intents/receipts; `RecoveryManager.cleanup` checks SQL heads, published and removed history, copy aliases, multipart references, MTProto send intents and active durable jobs. The shared MTProto rate guard records flood-wait observations and cooldowns that fence every worker. The Telethon ownership probe also checks account/channel/marker identity.
 
-**Not yet authorized/complete:** transactional version-aware mark/sweep across concurrent writers, a complete writer barrier, independently verified media backups, complete ownership audit, explicit two-person deletion approval and a tested disaster-recovery alternative. Deleted Telegram **message IDs cannot simply be restored from SQL**. Automatic physical GC in WebUI/API remains disabled. Unknown Bot ACKs and ambiguous ownership must stay protected.
+**Not yet authorized/complete:** transactional version-aware mark/sweep across concurrent writers, a complete writer barrier, independently verified media backups, complete ownership audit, explicit two-person deletion approval and a tested disaster-recovery alternative. Deleted Telegram **message IDs cannot simply be restored from SQL**. Automatic physical GC in WebUI/API remains disabled. Unknown MTProto send outcomes and ambiguous ownership must stay protected.
 
 Do not enable physical deletion merely because offline integrity tests pass. Require a signed dry-run plan, complete remote inventory, retention/reference validation, independent payload snapshot plus successful restore drill, writer fencing and recorded approval.
 
@@ -170,7 +172,7 @@ python scripts/inventory_telegram_history.py \
 
 **Independent manifest reconciliation:** `teledrive.storage.reconcile_inventory.reconcile_inventory` compares bounded marker candidates with separately provided, already independently verified recovery plans. Wrong object IDs, ordinals, Telegram account/chat/message coordinates and SHA-prefixes fail closed. `scripts/rebuild_from_telegram.py --inventory /secure/candidates.json` optionally makes this check a prerequisite to full payload byte verification. CI also tests a real channel-marker upload, read-only discovery, independent manifest reconciliation and a new isolated SQLite restore with original Telegram bytes. A match is **not** by itself a verified restore.
 
-**Limits:** inventory markers are **unverified candidates**, not an importable rebuild plan. They do not prove the original bucket/key mapping, complete chunk SHA-256 or sizes, whole-object hash, historical versions, or the existence of messages outside the scanned window/channel. Actual isolated reconstruction still requires independent metadata and byte-level verification. Automated discovery without trustworthy independent metadata is still open work. Historical Bot-only unknown-ACK recovery might require an independently retained `file_id` when the original channel is inaccessible to the USER; this is not a live Bot writer path. This reconstruction does **not** upload or delete Telegram media.
+**Limits:** inventory markers are **unverified candidates**, not an importable rebuild plan. They do not prove the original bucket/key mapping, complete chunk SHA-256 or sizes, whole-object hash, historical versions, or the existence of messages outside the scanned window/channel. Actual isolated reconstruction still requires independent metadata and byte-level verification. Automated discovery without trustworthy independent metadata is still open work. Inaccessible original channels require a separately verified migration and preserved backups. This reconstruction does **not** upload or delete Telegram media.
 
 ### 4.3 Capacity and recovery endurance
 
@@ -185,7 +187,7 @@ Only SQL-only incomplete-multipart lifecycle abort is now supported, applied by 
 ## 5. Outstanding work and release decision rules
 
 - [x] Publish bounded v1.0.7 development milestone with separate release artifacts and evidence.
-- [x] Implement disposable 13-gate Docker validation and distinct live test-channel Bot/User/Multiworker workflows.
+- [x] Implement disposable 13-gate Docker validation and distinct live test-channel User/Multiworker workflows (historical Bot exercises retired with the Bot layer).
 - [x] Implement fail-closed recovery guards, owner-proofed isolated one/multi-object rebuild and an offline dual-approval evidence verifier.
 - [x] Verify nine normal workflows on the newer `aa44bd6` development baseline (not the published v1.0.7 SHA).
 - [ ] Verify **every required workflow on the exact SHA** of any subsequent release candidate.

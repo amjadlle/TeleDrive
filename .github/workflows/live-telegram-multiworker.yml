@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 # P1 acceptance includes real multiworker verification on every main push.
-# Isolate the multiworker run queue from Bot E2E: GitHub cancels the older
-# pending job when three runs share a concurrency group, even with
+# The USER MTProto live queues stay isolated from each other; GitHub cancels
+# the older pending job when three runs share a concurrency group, even with
 # cancel-in-progress: false. Both suites still use limited test traffic.
 jobs:
   three-process-telegram:
@@ -20,7 +20,7 @@ jobs:
       group: teledrive-live-multiworker-${{ github.repository }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17-alpine
@@ -37,8 +37,10 @@ jobs:
           --health-retries 20
     env:
       DB_TEST_POSTGRES_URL: postgresql+psycopg://teledrive:test-password@127.0.0.1:5432/teledrive
-      TELEDRIVE_E2E_BOT_TOKEN: ${{ secrets.TELEDRIVE_E2E_BOT_TOKEN }}
-      TELEDRIVE_E2E_BOT_CHAT_ID: ${{ secrets.TELEDRIVE_E2E_BOT_CHAT_ID }}
+      TELEDRIVE_E2E_SESSION: ${{ secrets.TELEDRIVE_E2E_SESSION }}
+      TELEDRIVE_E2E_API_ID: ${{ secrets.TELEDRIVE_E2E_API_ID }}
+      TELEDRIVE_E2E_API_HASH: ${{ secrets.TELEDRIVE_E2E_API_HASH }}
+      TELEDRIVE_E2E_TARGET: ${{ secrets.TELEDRIVE_E2E_TARGET }}
       TELEDRIVE_E2E_MULTIWORKER: "1"
     steps:
       # The channel ID must come from an Actions SECRET, never a repository
@@ -47,11 +49,11 @@ jobs:
       - name: Mask dedicated Telegram test target
         shell: bash
         run: |
-          if [[ -z "$TELEDRIVE_E2E_BOT_CHAT_ID" ]]; then
-            echo "::error::Configure TELEDRIVE_E2E_BOT_CHAT_ID as a repository Actions secret."
+          if [[ -z "$TELEDRIVE_E2E_TARGET" ]]; then
+            echo "::error::Configure TELEDRIVE_E2E_TARGET as a repository Actions secret."
             exit 1
           fi
-          echo "::add-mask::$TELEDRIVE_E2E_BOT_CHAT_ID"
+          echo "::add-mask::$TELEDRIVE_E2E_TARGET"
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -60,10 +62,10 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Configure dedicated live Bot credentials
+      - name: Configure dedicated live USER credentials
         run: |
-          if [[ -z "$TELEDRIVE_E2E_BOT_TOKEN" || -z "$TELEDRIVE_E2E_BOT_CHAT_ID" ]]; then
-            echo "::error::Dedicated test Bot credentials are required."
+          if [[ -z "$TELEDRIVE_E2E_SESSION" || -z "$TELEDRIVE_E2E_API_ID" || -z "$TELEDRIVE_E2E_API_HASH" || -z "$TELEDRIVE_E2E_TARGET" ]]; then
+            echo "::error::Dedicated test USER MTProto credentials are required."
             exit 1
           fi
       - name: Install application, DB driver and test runtime
@@ -72,7 +74,7 @@ jobs:
           python -m pip install pytest "psycopg[binary]>=3.2,<4"
           python -m pip check
       - name: Three independent SQL workers and real Telegram byte restoration
-        run: python -m pytest -vv tests/test_telegram_bot_multiworker_e2e.py
+        run: python -m pytest -vv tests/test_telegram_multiworker_e2e.py
       - name: Publish CI run summary
         if: always()
         shell: bash

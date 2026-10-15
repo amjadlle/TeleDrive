@@ -8,15 +8,18 @@ Pending sends are never retried automatically after an ambiguous failure.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 import os
 import platform
 import re
+import time
 from pathlib import Path
 
-from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, insert, update
+from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
+from .mtproto_rate_guard import MtprotoRateGuard
 from .telethon_adapter import TelethonChunkTransport
 
 _meta = MetaData()
@@ -169,19 +172,61 @@ class UserSendJournal:
             raise RuntimeError("MTProto upload receipt could not be journaled")
         self.db.commit()
 
+    def unresolved_count(self) -> int:
+        """Durable intents whose remote acceptance is still unknown."""
+        return int(self.db.connection.execute(
+            select(func.count()).select_from(mtproto_send_intents).where(
+                mtproto_send_intents.c.message_id.is_(None)
+            )
+        ).scalar_one())
+
+    def clear_rejected_send(self, account: str, chat_id: int, object_id: str,
+                            ordinal: int, checksum: str, size: int) -> None:
+        """Delete one intent ONLY after a definite, verified rejection.
+
+        A flood-wait or a hard Telegram validation error proves the message
+        was not accepted. Unknown outcomes must never reach this method.
+        """
+        if (not account or not chat_id or not object_id or len(object_id) > 36
+                or ordinal < 0 or size < 1
+                or not re.fullmatch(r"[0-9a-f]{64}", checksum)):
+            raise ValueError("Invalid MTProto rejection identity")
+        from sqlalchemy import delete
+        result = self.db.connection.execute(delete(mtproto_send_intents).where(
+            mtproto_send_intents.c.account == account,
+            mtproto_send_intents.c.chat_id == chat_id,
+            mtproto_send_intents.c.object_id == object_id,
+            mtproto_send_intents.c.ordinal == ordinal,
+            mtproto_send_intents.c.sha256 == checksum,
+            mtproto_send_intents.c.size == size,
+            mtproto_send_intents.c.message_id.is_(None),
+        ))
+        if result.rowcount != 1:
+            self.db.connection.rollback()
+            raise RuntimeError("MTProto rejection could not clear the exact intent")
+        self.db.commit()
+
 
 class UnifiedUserTransport:
     """All live I/O uses USER MTProto; old same-channel Bot messages remain readable."""
 
-    def __init__(self, runtime: UserSessionRuntime, journal: UserSendJournal):
+    def __init__(self, runtime: UserSessionRuntime, journal: UserSendJournal, *,
+                 rate=None, min_upload_interval: float = 1.1):
+        if not 0 <= min_upload_interval <= 60:
+            raise ValueError("Invalid MTProto minimum upload interval")
         self.runtime = runtime
         self.journal = journal
+        self.rate = rate if rate is not None else MtprotoRateGuard(journal.db)
+        self.min_upload_interval = min_upload_interval
+        self._next_upload = 0.0
 
     async def verify_target(self):
         self.runtime.require()
 
     async def upload(self, path: Path, *, object_id: str, ordinal: int,
                      checksum: str):
+        from telethon.errors import FloodWaitError
+
         delegate = self.runtime.require()
         account, chat_id = self.runtime.account, self.runtime.chat_id
         self.journal.start(account, chat_id, object_id, ordinal,
@@ -189,18 +234,50 @@ class UnifiedUserTransport:
         # Uncertain send errors leave a durable intent for history recovery.
         # Normalize remote I/O errors to an opaque backend failure for REST/S3
         # without leaking Telegram message text, session data or phone details.
-        try:
-            received_account, received_chat, message_id = await delegate.upload(
-                path, object_id=object_id, ordinal=ordinal, checksum=checksum,
-            )
-            if (received_account, received_chat) != (account, chat_id):
-                raise RuntimeError("MTProto send returned an unexpected account or channel")
-            self.journal.acknowledged(account, chat_id, object_id, ordinal, message_id)
-            return received_account, received_chat, message_id
-        except Exception:
-            raise RuntimeError(
-                "MTProto send outcome uncertain; reconcile protected intent before retry"
-            ) from None
+        for attempt in range(2):
+            try:
+                # The SQL slot is shared by every worker using this
+                # account/channel, not just this transport instance.
+                shared_wait = self.rate.reserve_send_slot(
+                    account, chat_id, self.min_upload_interval,
+                )
+                pause = max(shared_wait, self._next_upload - time.monotonic(), 0.0)
+                if pause:
+                    await asyncio.sleep(pause)
+                # A different worker may receive a flood-wait after we
+                # reserved this slot. Enforce the server cooldown even for
+                # transports with min_upload_interval=0 (no local pacing).
+                while True:
+                    backoff = self.rate.shared_cooldown_wait(account, chat_id)
+                    if not backoff:
+                        break
+                    await asyncio.sleep(min(backoff, 30.0))
+                received_account, received_chat, message_id = await delegate.upload(
+                    path, object_id=object_id, ordinal=ordinal, checksum=checksum,
+                )
+                if (received_account, received_chat) != (account, chat_id):
+                    raise RuntimeError("MTProto send returned an unexpected account or channel")
+                self.journal.acknowledged(account, chat_id, object_id, ordinal, message_id)
+                self._next_upload = time.monotonic()
+                return received_account, received_chat, message_id
+            except FloodWaitError as exc:
+                # A definitive flood-wait proves the send was REJECTED, so one
+                # bounded retry after the shared cooldown is safe. Publish the
+                # cooldown for every worker before sleeping.
+                wait = int(getattr(exc, "seconds", 1) or 1)
+                self.rate.impose_shared_cooldown(account, chat_id, min(wait, 3600))
+                if attempt == 0:
+                    continue
+                raise RuntimeError(
+                    "MTProto flood-wait persists; reconcile protected intent before retry"
+                ) from None
+            except Exception:
+                raise RuntimeError(
+                    "MTProto send outcome uncertain; reconcile protected intent before retry"
+                ) from None
+        raise RuntimeError(
+            "MTProto send outcome uncertain; reconcile protected intent before retry"
+        )
 
     async def download(self, reference, destination):
         if reference.account == self.runtime.account:

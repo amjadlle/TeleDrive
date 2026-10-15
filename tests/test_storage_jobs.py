@@ -217,7 +217,7 @@ def test_admin_job_endpoints_require_root_auth_csrf_and_do_not_expose_tokens(
     entry = client.get(url, auth=auth)
     assert entry.status_code == 200 and "lease_token" not in entry.text
     remote = MemoryTelegram()
-    monkeypatch.setattr(webapp, "storage_bot_transport", lambda db: remote)
+    monkeypatch.setattr(webapp, "storage_transport", lambda db: remote)
     run = client.post(url + "/run-next", auth=auth,
                       headers={"x-teledrive-csrf": "1"})
     assert run.status_code == 200, run.text

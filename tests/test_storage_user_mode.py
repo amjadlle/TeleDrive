@@ -100,7 +100,7 @@ def test_mtp_user_upload_and_s3_readback_with_bot_fallback(service, monkeypatch)
     # USER session can read an old Bot document directly by its message ID.
     user.posts[1] = (b"original-bot-data", "old-bot-document")
     monkeypatch.setattr(
-        gateway, "storage_bot_transport",
+        gateway, "storage_transport",
         lambda db: UnifiedUserTransport(runtime, UserSendJournal(db)),
     )
     data = b"new-user-mtproto-bytes" * 19
@@ -129,7 +129,7 @@ def test_user_uncertain_ack_remains_fenced_and_gc_preview_is_blocked(service, mo
     user.fail_after_remote_accept = True
     def transport(db):
         return UnifiedUserTransport(runtime, UserSendJournal(db))
-    monkeypatch.setattr(gateway, "storage_bot_transport", transport)
+    monkeypatch.setattr(gateway, "storage_transport", transport)
     response = signed(service, "PUT", "/backup-bucket/unknown.bin", b"uncertain-send")
     assert response.status_code >= 400
     assert len(user.posts) == 1
@@ -234,7 +234,7 @@ def test_user_can_read_old_bot_channel_message_without_bot_token(service, monkey
     runtime, user = configured_runtime()
     # Telegram history exposes the SAME channel message to the authorized user.
     user.posts[1] = (payload, "old-bot-document")
-    monkeypatch.setattr(gateway, "storage_bot_transport", lambda db:
+    monkeypatch.setattr(gateway, "storage_transport", lambda db:
                         UnifiedUserTransport(runtime, UserSendJournal(db)))
     result = signed(service, "GET", "/backup-bucket/bot-old.bin")
     assert result.status_code == 200 and result.content == payload
@@ -305,17 +305,17 @@ def test_production_storage_uses_only_user_mtproto_even_with_stale_bot_secrets(s
     monkeypatch.setenv("TELEDRIVE_STORAGE_BOT_CHAT_ID", "-1001234567890")
     try:
         monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
-        transport = web.storage_bot_transport(conn)
+        transport = web.storage_transport(conn)
         assert isinstance(transport, UnifiedUserTransport)
         assert not hasattr(transport, "bot_fallback")
         monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "bot")
         with pytest.raises(HTTPException) as invalid:
-            web.storage_bot_transport(conn)
+            web.storage_transport(conn)
         assert invalid.value.status_code == 503
         monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
         runtime.client = None
         with pytest.raises(HTTPException) as unavailable:
-            web.storage_bot_transport(conn)
+            web.storage_transport(conn)
         assert unavailable.value.status_code == 503
     finally:
         conn.close()

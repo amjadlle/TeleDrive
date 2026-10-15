@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import time
 from typing import Literal, Protocol
 
-from sqlalchemy import inspect, or_, select, update
+from sqlalchemy import and_, inspect, or_, select, update
 
 from .manifest import ChunkReference, ManifestError, ManifestStore, chunks, objects
 
@@ -99,14 +99,17 @@ class RecoveryManager:
         """A remote ownership marker alone never authorizes physical deletion.
 
         Checks every installed reference table. Historic published versions,
-        logical deletions, aliases, active multipart parts and unresolved Bot
-        ACKs remain retained regardless of the current S3 HEAD. Rechecked
-        during the delete loop because remote operations release SQL locks.
+        logical deletions, aliases, active multipart parts, unresolved MTProto
+        send intents and active durable jobs remain retained regardless of the
+        current S3 HEAD. Rechecked during the delete loop because remote
+        operations release SQL locks.
         """
         from teledrive.storage.catalog import heads, published_versions, removed_versions
         from teledrive.storage.manifest import object_aliases, writer_fences
         from teledrive.s3.multipart import parts
-        from teledrive.storage.bot_api_adapter import _bot_send_intents, _bot_receipts
+        from teledrive.storage.user_mode import mtproto_send_intents
+        from teledrive.storage.gc_safety import ACTIVE_JOB_STATES
+        from teledrive.storage.jobs import jobs as upload_jobs
 
         connection = self.manifests.db.connection
         inspector = inspect(self.manifests.db.engine)
@@ -120,19 +123,33 @@ class RecoveryManager:
                 object_aliases.c.source_object_id == object_id,
             ), object_aliases),
             ("storage_multipart_parts", parts.c.object_id == object_id, parts),
-            ("storage_bot_send_intents", _bot_send_intents.c.object_id == object_id, _bot_send_intents),
-            ("storage_bot_upload_receipts", _bot_receipts.c.object_id == object_id, _bot_receipts),
+            ("storage_mtproto_send_intents",
+             mtproto_send_intents.c.object_id == object_id, mtproto_send_intents),
         )
-        # If one half of the Bot reconciliation schema is missing, never
-        # treat the other half's absence as confirmation of no remote ACK.
-        if inspector.has_table("storage_bot_send_intents") != inspector.has_table(
-            "storage_bot_upload_receipts"
-        ):
-            raise UnsafeCleanup("Bot reconciliation schema is incomplete")
         for name, condition, table in checks:
             if inspector.has_table(name):
                 if connection.execute(select(table).where(condition).limit(1)).first():
                     raise UnsafeCleanup("Telegram media retained by another SQL reference")
+        # Active durable jobs can still publish this object (by identity or
+        # by the same bucket/key), so they fence physical cleanup as well.
+        if inspector.has_table("storage_upload_jobs"):
+            row = connection.execute(select(
+                objects.c.bucket, objects.c.object_key
+            ).where(objects.c.id == object_id)).first()
+            conditions = [
+                upload_jobs.c.object_id == object_id,
+                upload_jobs.c.expected_head_id == object_id,
+            ]
+            if row is not None:
+                bucket, key = row
+                conditions.append(and_(
+                    upload_jobs.c.bucket == bucket,
+                    upload_jobs.c.object_key == key,
+                ))
+            if connection.execute(select(upload_jobs).where(
+                upload_jobs.c.state.in_(ACTIVE_JOB_STATES), or_(*conditions),
+            ).limit(1)).first():
+                raise UnsafeCleanup("Telegram media retained by another SQL reference")
 
     async def cleanup(self, object_id: str, *, dry_run: bool = True) -> CleanupReport:
         """Reconcile journal+Telegram, optionally delete; must run with uploader stopped.

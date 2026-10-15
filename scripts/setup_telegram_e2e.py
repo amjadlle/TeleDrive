@@ -4,12 +4,13 @@
 Prerequisites:
   python -m pip install "Telethon>=1.36,<2"
   gh auth login
-  python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot
+  python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing
 
 Telethon asks for a login code on first sign-in, and for 2FA only if enabled.
 The StringSession and test channel ID are never printed or written to disk.
-Use --secure-bot-chat-id to move the existing unmasked Actions variable
+Use --secure-user-target to move the existing unmasked Actions variable
 into a repository secret without disclosing the value or logging in to Telegram.
+There is no Bot API configuration; the live E2E transport is Telethon USER only.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ def store_secret(repo: str, name: str, value: str) -> None:
     )
 
 
-def legacy_bot_chat_variable_names(repo: str) -> set[str]:
+def legacy_user_target_variable_names(repo: str) -> set[str]:
     """Read only Actions variable names; never expose their stored values."""
     # gh variable list supports names-only JSON, but has no --limit option.
     command = ["gh", "variable", "list", "--repo", repo, "--json", "name"]
@@ -76,10 +77,10 @@ def legacy_bot_chat_variable_names(repo: str) -> set[str]:
     return {entry["name"] for entry in rows}
 
 
-def remove_public_bot_chat_variable(repo: str) -> None:
+def remove_public_user_target_variable(repo: str) -> None:
     """Delete the unmasked legacy variable and re-list to verify absence."""
-    name = "TELEDRIVE_E2E_BOT_CHAT_ID"
-    if name in legacy_bot_chat_variable_names(repo):
+    name = "TELEDRIVE_E2E_TARGET"
+    if name in legacy_user_target_variable_names(repo):
         command = ["gh", "variable", "delete", name, "--repo", repo]
         removed = subprocess.run(command, capture_output=True, check=False)
         if removed.returncode:
@@ -88,11 +89,11 @@ def remove_public_bot_chat_variable(repo: str) -> None:
             )
     # A successful CLI exit does not prove absence (a racing write can
     # re-create the variable). Fail closed rather than making that claim.
-    if name in legacy_bot_chat_variable_names(repo):
+    if name in legacy_user_target_variable_names(repo):
         raise RuntimeError("Legacy unmasked Actions variable is still present")
 
 
-def secure_existing_bot_chat_id(repo: str) -> None:
+def secure_existing_user_target(repo: str) -> None:
     """One-time non-echoing migration from Actions variable to Secret.
 
     Read the existing variable only into Python's captured subprocess
@@ -103,7 +104,7 @@ def secure_existing_bot_chat_id(repo: str) -> None:
 
     require_github_cli(repo)
     fetched = subprocess.run(
-        ["gh", "variable", "get", "TELEDRIVE_E2E_BOT_CHAT_ID", "--repo", repo],
+        ["gh", "variable", "get", "TELEDRIVE_E2E_TARGET", "--repo", repo],
         capture_output=True,
         check=False,
     )
@@ -115,7 +116,7 @@ def secure_existing_bot_chat_id(repo: str) -> None:
     else:
         # A failed 'get' can mean insufficient permissions or network errors,
         # not just an absent variable. A names-only query must confirm absence.
-        if "TELEDRIVE_E2E_BOT_CHAT_ID" in legacy_bot_chat_variable_names(repo):
+        if "TELEDRIVE_E2E_TARGET" in legacy_user_target_variable_names(repo):
             raise RuntimeError(
                 "Legacy Actions variable exists but cannot be securely read"
             )
@@ -123,10 +124,10 @@ def secure_existing_bot_chat_id(repo: str) -> None:
             "Telegram test channel ID (hidden, old variable unavailable): "
         ).strip()
     if not re.fullmatch(r"-100[0-9]{5,16}", chat_id):
-        raise ValueError("Bot target must be a numeric private channel ID")
-    store_secret(repo, "TELEDRIVE_E2E_BOT_CHAT_ID", chat_id)
-    remove_public_bot_chat_variable(repo)
-    print("Saved GitHub Actions secret: TELEDRIVE_E2E_BOT_CHAT_ID")
+        raise ValueError("User target must be a numeric private channel ID")
+    store_secret(repo, "TELEDRIVE_E2E_TARGET", chat_id)
+    remove_public_user_target_variable(repo)
+    print("Saved GitHub Actions secret: TELEDRIVE_E2E_TARGET")
     print("Verified that the previous unmasked variable is absent.")
 
 
@@ -203,26 +204,12 @@ async def setup(repo: str, title: str, create_if_missing: bool,
             store_secret(repo, secret_name, secret_value)
             print(f"Saved GitHub Actions secret: {secret_name}")
 
-        # Bot API requires a numeric private-channel chat_id; it cannot
-        # discover private channels by title. The user session can resolve
-        # that ID during this one-time setup, so no manual ID lookup.
+        # The user session resolves the private channel ID during this
+        # one-time setup, so no manual ID lookup is needed.
         channel_id = int(matches[0].id)
-        store_secret(repo, "TELEDRIVE_E2E_BOT_CHAT_ID", str(channel_id))
-        print("Saved GitHub Actions secret: TELEDRIVE_E2E_BOT_CHAT_ID")
-        remove_public_bot_chat_variable(repo)
-        if configure_bot:
-            bot_token = getpass.getpass("Token from @BotFather (hidden): ").strip()
-            if not bot_token:
-                raise ValueError("Bot token cannot be empty.")
-            # Validate locally before creating the GitHub secret.
-            from teledrive.storage.bot_api_adapter import BotApiClient
-            bot_api = BotApiClient(bot_token)
-            identity = await bot_api.call("getMe", {})
-            if not identity.get("is_bot"):
-                raise RuntimeError("BotFather token did not authenticate a bot.")
-            store_secret(repo, "TELEDRIVE_E2E_BOT_TOKEN", bot_token)
-            print("Saved GitHub Actions secret: TELEDRIVE_E2E_BOT_TOKEN")
-            print("Ensure this bot is channel ADMIN with post and delete permissions.")
+        store_secret(repo, "TELEDRIVE_E2E_TARGET", str(channel_id))
+        print("Saved GitHub Actions secret: TELEDRIVE_E2E_TARGET")
+        remove_public_user_target_variable(repo)
 
         print(
             "\nE2E credentials configured. No session or API hash was displayed.\n"
@@ -240,20 +227,17 @@ def main() -> None:
                         help="Unique private Telegram broadcast channel title")
     parser.add_argument("--create-if-missing", action="store_true",
                         help="Create the private broadcast channel on the test account")
-    parser.add_argument("--configure-bot", action="store_true",
-                        help="Also configure the BotFather token as a GitHub Secret")
-    parser.add_argument("--secure-bot-chat-id", action="store_true",
+    parser.add_argument("--secure-user-target", action="store_true",
                         help="Move an existing test channel ID into a masked GitHub Secret")
     args = parser.parse_args()
     if not args.channel.strip():
         parser.error("--channel cannot be empty")
     try:
-        if args.secure_bot_chat_id:
-            secure_existing_bot_chat_id(args.repo)
+        if args.secure_user_target:
+            secure_existing_user_target(args.repo)
         else:
             asyncio.run(setup(
                 args.repo, args.channel.strip(), args.create_if_missing,
-                args.configure_bot,
             ))
     except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Setup failed: {error}", file=sys.stderr)

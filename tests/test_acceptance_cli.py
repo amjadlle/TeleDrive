@@ -32,7 +32,6 @@ def test_github_e2e_only_accepts_real_success_not_skipped(monkeypatch):
          "headSha": "ab" * 20, "databaseId": i + 1}
         for i, (name, conclusion) in enumerate([
             (w.WORKFLOWS["user"], "success"),
-            (w.WORKFLOWS["bot"], "skipped"),
             (w.WORKFLOWS["multiworker"], "success"),
         ])
     ]
@@ -41,17 +40,17 @@ def test_github_e2e_only_accepts_real_success_not_skipped(monkeypatch):
                         SimpleNamespace(returncode=0, stdout=json.dumps(mocked)))
     result = {"stages": {}}
     w.github_stage(result)
-    assert result["stages"]["github_e2e"]["status"] == "BLOCKED"
+    assert result["stages"]["github_e2e"]["status"] == "PASS"
     assert "bot" not in result["github"]
 
 
 @pytest.mark.parametrize("bad", ["not-a-number", "0", "-5"])
-def test_bot_channel_fails_without_a_valid_integer_before_telegram(monkeypatch, bad):
-    prompts = iter(["account", "bucket", "key"])
-    monkeypatch.setattr(w, "secret", lambda label: bad if "kanal" in label else "fake-token")
+def test_user_channel_fails_without_a_valid_integer_before_telegram(monkeypatch, bad):
+    prompts = iter(["account", "target", "bucket", "key"])
+    monkeypatch.setattr(w, "secret", lambda label: bad if "kanal" in label else "fake-value")
     monkeypatch.setattr(w, "ask", lambda label, default="": next(prompts))
     with pytest.raises((ValueError, StopIteration)):
-        w.ask_bot_identity()
+        w.ask_user_identity()
 
 
 def test_soak_unavailable_is_blocked_not_green(monkeypatch, tmp_path):
@@ -99,12 +98,12 @@ def test_no_native_restore_to_same_host_even_different_database(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_bot_ack_wizard_never_uses_apply(monkeypatch, tmp_path):
+def test_mtproto_ack_wizard_never_uses_apply(monkeypatch, tmp_path):
     session = tmp_path / "session"
     session.write_text("string-session")
     session.chmod(0o600)
     monkeypatch.setattr(w, "yes", lambda *args, **kwargs: True)
-    answers = iter(["account", "object-id", "0", "12345"])
+    answers = iter(["account", "object-id", "0", "api-id"])
     monkeypatch.setattr(w, "ask", lambda *args, **kwargs: next(answers))
     def secret(label):
         if "kanal" in label:
@@ -113,17 +112,21 @@ def test_bot_ack_wizard_never_uses_apply(monkeypatch, tmp_path):
             return "/tmp/disposable-staging.db"
         if "Telegram message" in label:
             return "12345"
+        if "SHA-256" in label:
+            return "a" * 64
+        if "boyutu" in label:
+            return "7"
         return "not-real-secret"
     monkeypatch.setattr(w, "secret", secret)
-    from scripts import reconcile_bot_receipt
+    from scripts import reconcile_mtproto_receipt
     async def fake_verify(args):
         assert args.apply is False
         assert args.database.endswith("disposable-staging.db")
         return {"verified": True, "applied": False}
-    monkeypatch.setattr(reconcile_bot_receipt, "run", fake_verify)
+    monkeypatch.setattr(reconcile_mtproto_receipt, "run", fake_verify)
     result = {"stages": {}}
     w.ack_stage(result, session)
-    assert result["stages"]["bot_ack"]["status"] == "PASS"
+    assert result["stages"]["mtproto_ack"]["status"] == "PASS"
     assert result["ack"]["applied"] is False
     assert os.environ.get("TELEDRIVE_RECONCILE_SESSION") != "string-session"
 

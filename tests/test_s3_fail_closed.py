@@ -25,17 +25,16 @@ def test_remote_crash_before_or_after_ack_never_overwrites_ready_head(
     assert signed(service, "PUT", "/backup-bucket/asset.bin",
                   b"already-safe").status_code == 200
     remote = service[2]
-    original_call = remote.call
+    original_call = remote.upload
     old_uploads = remote.uploads
 
-    async def crashed_send(method, fields, source=None):
-        if method == "sendDocument":
-            if after_remote_ack:
-                await original_call(method, fields, source=source)
-            raise RuntimeError("simulated crash before SQL journal commit")
-        return await original_call(method, fields, source=source)
+    async def crashed_send(path, *, object_id, ordinal, checksum):
+        if after_remote_ack:
+            await original_call(path, object_id=object_id,
+                                ordinal=ordinal, checksum=checksum)
+        raise RuntimeError("simulated crash before SQL journal commit")
 
-    monkeypatch.setattr(remote, "call", crashed_send)
+    monkeypatch.setattr(remote, "upload", crashed_send)
     failed = signed(service, "PUT", "/backup-bucket/asset.bin", b"new-unpublished")
     assert failed.status_code == 503, failed.text
     assert remote.uploads == old_uploads + int(after_remote_ack)

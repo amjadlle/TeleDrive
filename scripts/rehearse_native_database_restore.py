@@ -17,13 +17,15 @@ from pathlib import Path
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 
 from teledrive.db import connect_database
 from teledrive.s3.credentials import S3CredentialStore
 from teledrive.s3.tagging import ObjectTagStore
-from teledrive.storage.bot_api_adapter import BotFileIndex, _bot_receipts, _bot_429_observations
 from teledrive.storage.catalog import BucketCatalog, removed_versions
+from teledrive.storage.manifest import chunks
+from teledrive.storage.mtproto_rate_guard import MtprotoRateGuard, _mtproto_flood_observations
+from teledrive.storage.user_mode import UserSendJournal, mtproto_send_intents
 from teledrive.storage.jobs import StorageUploadJobs
 from teledrive.storage.manifest import ChunkReference, ManifestStore
 
@@ -40,7 +42,7 @@ def fingerprint(url: str, receipt: dict) -> dict:
     db = connect_database(url)
     try:
         catalog = BucketCatalog(ManifestStore(db))
-        index = BotFileIndex(db)
+        journal = UserSendJournal(db)
         owner = receipt["bucket"]
         head = catalog.get(owner, S3_KEY)
         versions, truncated = catalog.list_bucket_versions(owner, limit=10)
@@ -68,18 +70,31 @@ def fingerprint(url: str, receipt: dict) -> dict:
             "parts": [[p.ordinal, p.offset, p.size, p.sha256,
                        p.account, p.chat_id, p.message_id] for p in parts],
             "tags": [list(row) for row in ObjectTagStore(catalog).get(first)],
-            "pending_ack": index.find_receipt(
-                pending, 0, account="ci-dr-bot", chat_id=-100900901,
-                checksum=hashlib.sha256(b"Q").hexdigest(), size=1,
-            ).message_id,
-            "unjournaled": index.unjournaled_count(),
-            "bot_429_evidence": list(db.connection.execute(select(
-                _bot_429_observations.c.observations,
-                _bot_429_observations.c.last_observed_ms,
-                _bot_429_observations.c.last_retry_after_seconds,
+            "pending_ack": db.connection.execute(
+                select(mtproto_send_intents.c.message_id).where(
+                    mtproto_send_intents.c.object_id == pending,
+                    mtproto_send_intents.c.ordinal == 0,
+                )
+            ).scalar_one(),
+            "unjournaled": db.connection.execute(
+                select(func.count()).select_from(
+                    mtproto_send_intents.outerjoin(chunks, and_(
+                        chunks.c.account == mtproto_send_intents.c.account,
+                        chunks.c.chat_id == mtproto_send_intents.c.chat_id,
+                        chunks.c.message_id == mtproto_send_intents.c.message_id,
+                    ))
+                ).where(
+                    mtproto_send_intents.c.message_id.is_not(None),
+                    chunks.c.object_id.is_(None),
+                )
+            ).scalar_one(),
+            "mtproto_flood_evidence": list(db.connection.execute(select(
+                _mtproto_flood_observations.c.observations,
+                _mtproto_flood_observations.c.last_observed_ms,
+                _mtproto_flood_observations.c.last_retry_after_seconds,
             ).where(
-                _bot_429_observations.c.account == receipt["rate_account"],
-                _bot_429_observations.c.chat_id == receipt["rate_chat"],
+                _mtproto_flood_observations.c.account == receipt["rate_account"],
+                _mtproto_flood_observations.c.chat_id == receipt["rate_chat"],
             )).one()),
             "job": next(
                 {"id": j["id"], "state": j["state"], "attempts": j["attempts"]}
@@ -112,7 +127,7 @@ def seed(url: str, receipt_path: Path, source: Path):
                 first, ChunkReference(
                     ordinal=index, offset=index * 8192, size=len(part),
                     sha256=hashlib.sha256(part).hexdigest(),
-                    account="ci-dr-bot", chat_id=-100900901,
+                    account="ci-dr-user", chat_id=-100900901,
                     message_id=message + index,
                 ), now,
             )
@@ -128,17 +143,16 @@ def seed(url: str, receipt_path: Path, source: Path):
             bucket, S3_KEY, [("dr", "restored"), ("lang", "Türkçe")]
         )
         pending = catalog.manifests.begin(bucket, "ack-orphan", 1, now)
-        BotFileIndex(db).put_receipt(
-            "ci-dr-bot", -100900901, message + 3, "ci-test-file-id",
-            object_id=pending, ordinal=0,
-            checksum=hashlib.sha256(b"Q").hexdigest(), size=1,
-        )
+        journal = UserSendJournal(db)
+        journal.start("ci-dr-user", -100900901, pending, 0,
+                      hashlib.sha256(b"Q").hexdigest(), 1)
+        journal.acknowledged("ci-dr-user", -100900901, pending, 0, message + 3)
         # Validate native PostgreSQL/MySQL restore preserves a definitive
         # rejected-send observation, not merely upload manifests/ACKs.
-        # This is a *synthetic* 429: never label it production evidence.
+        # This is a *synthetic* flood-wait: never label it production evidence.
         rate_account = "ci-dr-rate-" + uuid4().hex[:12]
         rate_chat = -100900902
-        rate_index = BotFileIndex(db)
+        rate_index = MtprotoRateGuard(db)
         rate_index.reserve_send_slot(rate_account, rate_chat, 0, now_ms=1000)
         rate_index.impose_shared_cooldown(
             rate_account, rate_chat, 9, now_ms=1000,
@@ -164,7 +178,7 @@ def seed(url: str, receipt_path: Path, source: Path):
     assert receipt["fingerprint"]["removed_count"] == 2
     assert len(receipt["fingerprint"]["parts"]) == 2
     assert receipt["fingerprint"]["unjournaled"] == 1
-    assert receipt["fingerprint"]["bot_429_evidence"] == [1, 1000, 9]
+    assert receipt["fingerprint"]["mtproto_flood_evidence"] == [1, 1000, 9]
     assert receipt["fingerprint"]["s3_credential_decrypts"]
     # Durable test receipt contains only synthetic CI IDs and no secret keys.
     receipt_path.write_text(json.dumps(receipt, ensure_ascii=False), encoding="utf-8")
@@ -184,7 +198,7 @@ def verify(url: str, receipt_path: Path):
         "chunk_refs": len(restored["parts"]),
         "removed_versions": restored["removed_count"],
         "unjournaled_receipts": restored["unjournaled"],
-        "synthetic_bot_429_observations": restored["bot_429_evidence"][0],
+        "synthetic_mtproto_flood_observations": restored["mtproto_flood_evidence"][0],
         "queue_state": restored["job"]["state"],
         "s3_credential_decrypts": restored["s3_credential_decrypts"],
         "physical_telegram_delete": False,

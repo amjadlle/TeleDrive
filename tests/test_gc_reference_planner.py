@@ -10,7 +10,6 @@ from teledrive.db import connect_database
 from teledrive.storage.catalog import BucketCatalog, heads, published_versions, removed_versions
 from teledrive.storage.gc import StorageGCInventory
 from teledrive.storage.manifest import ManifestStore, object_aliases
-from teledrive.storage.bot_api_adapter import BotFileIndex
 
 
 @pytest.fixture
@@ -51,7 +50,7 @@ def test_even_unreferenced_manifest_has_no_deletion_permission(cat):
 
 @pytest.mark.parametrize("source", [
     "head", "published_version", "removed_version", "writer_fence",
-    "copy_alias", "multipart_part", "bot_send_intent", "bot_receipt",
+    "copy_alias", "multipart_part", "mtproto_send_intent_or_receipt",
 ])
 def test_reference_classes_always_block_gc(cat, source):
     ident = old_failure(cat, source)
@@ -88,13 +87,10 @@ def test_reference_classes_always_block_gc(cat, source):
             object_id=child, source_object_id=ident,
         ))
     else:
-        bot = BotFileIndex(db)
+        from teledrive.storage.user_mode import UserSendJournal
         digest = sha256(b"payload").hexdigest()
-        bot.start_send("test", -100123, ident, 0, digest, 7)
-        if source == "bot_receipt":
-            bot.put_receipt("test", -100123, 77, "fixture-file-id",
-                            object_id=ident, ordinal=0, checksum=digest,
-                            size=7, require_intent=True)
+        journal = UserSendJournal(db)
+        journal.start("test", -100123, ident, 0, digest, 7)
     db.commit()
     result = one(cat, ident)
     assert result["reference_blocked"] is True
@@ -136,3 +132,64 @@ def test_incomplete_removed_version_schema_is_unsafe(cat):
     cat.db.commit()
     with pytest.raises(RuntimeError, match="Incomplete GC reference"):
         one(cat, ident)
+
+
+def _active_job(cat, *, state, object_id=None, expected_head_id=None,
+                bucket="gc-audit-test", key="failed"):
+    """Insert one durable upload-job row in an active state."""
+    from teledrive.storage.jobs import StorageUploadJobs, jobs
+    StorageUploadJobs(cat)  # create_all for the jobs table
+    now = int(time.time())
+    cat.db.connection.execute(insert(jobs).values(
+        id=f"job-{state}-{object_id or expected_head_id or key}",
+        bucket=bucket, object_key=key, source_path="/uploads/source.bin",
+        source_size=7, source_device=1, source_inode=2, source_mtime_ns=3,
+        expected_generation=0, expected_head_id=expected_head_id,
+        state=state, object_id=object_id, attempts=0,
+        lease_token="lease", lease_until=now + 60,
+        created_at=now, updated_at=now, last_error=None,
+    ))
+    cat.db.commit()
+
+
+def test_active_durable_job_with_object_id_blocks_gc(cat):
+    ident = old_failure(cat)
+    _active_job(cat, state="running", object_id=ident)
+    row = one(cat, ident)
+    assert row["reference_blocked"] is True
+    assert "durable_job" in row["reference_blockers"]
+    assert row["deletion_permitted"] is False
+
+
+def test_active_durable_job_for_same_bucket_key_blocks_gc_without_object_id(cat):
+    ident = old_failure(cat)
+    _active_job(cat, state="queued", expected_head_id=ident)
+    row = one(cat, ident)
+    assert row["reference_blocked"] is True
+    assert "durable_job" in row["reference_blockers"]
+
+
+def test_finished_job_does_not_mask_missing_head_reference(cat):
+    ident = old_failure(cat)
+    _active_job(cat, state="done", object_id=ident)
+    row = one(cat, ident)
+    assert row["reference_blocked"] is False
+    assert "durable_job" not in row["reference_blockers"]
+
+
+def test_active_job_changes_gc_fingerprint(cat):
+    ident = old_failure(cat)
+    first = one(cat, ident)
+    _active_job(cat, state="staged", object_id=ident)
+    later = one(cat, ident)
+    assert later["sql_reference_fingerprint"] != first["sql_reference_fingerprint"]
+
+
+def test_inventory_counts_active_upload_jobs(cat):
+    _active_job(cat, state="queued", key="a")
+    _active_job(cat, state="running", key="b")
+    _active_job(cat, state="done", key="c", object_id="done-object")
+    from teledrive.storage.gc import StorageGCInventory
+    inventory = StorageGCInventory(cat.manifests).inspect()
+    assert inventory.active_upload_jobs == 2
+    assert inventory.eligible_for_deletion == 0

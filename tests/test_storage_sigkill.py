@@ -146,7 +146,7 @@ def test_real_sigkill_recovers_only_missing_remote_chunks(tmp_path):
     finally:
         reopened.close()
 
-BOT_ACK_CRASH_CHILD = r'''
+MT_ACK_CRASH_CHILD = r'''
 import asyncio
 import hashlib
 import os
@@ -155,28 +155,39 @@ import sys
 from pathlib import Path
 
 from teledrive.db import connect_database
-from teledrive.storage.bot_api_adapter import BotApiChunkTransport, BotFileIndex
+from teledrive.storage.user_mode import UnifiedUserTransport, UserSendJournal
+from teledrive.storage.telethon_adapter import TelethonChunkTransport
 
 class AcceptedThenKilled:
-    async def call(self, method, fields, source=None):
-        if method != "sendDocument":
-            raise AssertionError(method)
+    async def send_file(self, target, path, caption=None, force_document=False):
         # Simulate a remote Telegram post that really accepted the bytes.
-        target = Path(sys.argv[3])
-        target.write_bytes(source.read_bytes())
+        Path(sys.argv[3]).write_bytes(Path(path).read_bytes())
         os.kill(os.getpid(), signal.SIGKILL)
         raise AssertionError("SIGKILL should prevent an ACK from returning")
+
+    async def get_peer_id(self, target):
+        return -1001234
+
+    async def get_messages(self, peer, ids):
+        raise AssertionError("readback is not part of this crash window")
+
+
+class FakeRuntime:
+    account = "user"
+    chat_id = -1001234
+
+    def require(self):
+        return TelethonChunkTransport({"user": (AcceptedThenKilled(), None)})
+
 
 async def main():
     db = connect_database(sys.argv[1])
     try:
         path = Path(sys.argv[2])
-        transport = BotApiChunkTransport(
-            AcceptedThenKilled(), BotFileIndex(db),
-            chat_id=-1001234, min_upload_interval=0,
-        )
+        transport = UnifiedUserTransport(FakeRuntime(), UserSendJournal(db),
+                                         min_upload_interval=0)
         await transport.upload(
-            path, object_id="sigkill-bot-ack", ordinal=0,
+            path, object_id="sigkill-user-ack", ordinal=0,
             checksum=hashlib.sha256(path.read_bytes()).hexdigest(),
         )
     finally:
@@ -187,8 +198,8 @@ asyncio.run(main())
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX SIGKILL required")
-def test_actual_sigkill_after_remote_bot_acceptance_never_blindly_retries(tmp_path):
-    """A real child dies after remote acceptance and before its HTTP ACK.
+def test_actual_sigkill_after_remote_user_acceptance_never_blindly_retries(tmp_path):
+    """A real child dies after remote acceptance and before its MTProto receipt.
 
     Recovery sees the previously committed send intent on a new SQL
     connection and cannot retransmit that exact object chunk. An operator
@@ -196,11 +207,13 @@ def test_actual_sigkill_after_remote_bot_acceptance_never_blindly_retries(tmp_pa
     automatically inserted into the manifest or deleted.
     """
     import hashlib
-    from teledrive.storage.bot_api_adapter import (
-        BotApiChunkTransport, BotApiError, BotFileIndex,
+    from teledrive.storage.user_mode import (
+        UnifiedUserTransport, UserSendJournal, mtproto_send_intents,
     )
+    from teledrive.storage.telethon_adapter import TelethonChunkTransport
+    from sqlalchemy import select
 
-    path = tmp_path / "bot-intents.db"
+    path = tmp_path / "mtproto-intents.db"
     chunk = tmp_path / "signed-binary.bin"
     accepted = tmp_path / "telegram-accepted.bin"
     data = bytes(range(256)) * 400 + bytes((0, 255)) * 170
@@ -208,12 +221,12 @@ def test_actual_sigkill_after_remote_bot_acceptance_never_blindly_retries(tmp_pa
     sha = hashlib.sha256(data).hexdigest()
     seed = connect_database(str(path))
     try:
-        BotFileIndex(seed)
+        UserSendJournal(seed)
     finally:
         seed.close()
 
     result = subprocess.run(
-        [sys.executable, "-c", BOT_ACK_CRASH_CHILD,
+        [sys.executable, "-c", MT_ACK_CRASH_CHILD,
          str(path), str(chunk), str(accepted)],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True, timeout=30, check=False,
@@ -223,42 +236,45 @@ def test_actual_sigkill_after_remote_bot_acceptance_never_blindly_retries(tmp_pa
 
     reopened = connect_database(str(path))
     try:
-        index = BotFileIndex(reopened)
-        assert index.unresolved_count() == 1
-        with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
-            index.find_receipt(
-                "sigkill-bot-ack", 0, account="bot",
-                chat_id=-1001234, checksum=sha, size=len(data),
-            )
+        journal = UserSendJournal(reopened)
+        assert journal.unresolved_count() == 1
+        with pytest.raises(RuntimeError, match="Unresolved MTProto upload intent"):
+            journal.start("user", -1001234, "sigkill-user-ack", 0, sha, len(data))
 
         class UnexpectedResend:
             calls = 0
 
-            async def call(self, method, fields, source=None):
+            async def send_file(self, target, path, caption=None,
+                                force_document=False):
                 self.calls += 1
                 raise AssertionError("Unknown-outcome chunk was resent")
 
         fake = UnexpectedResend()
-        transport = BotApiChunkTransport(
-            fake, index, chat_id=-1001234, min_upload_interval=0,
-        )
-        with pytest.raises(BotApiError, match="Unresolved Bot API send intent"):
+
+        class ResendRuntime:
+            account = "user"
+            chat_id = -1001234
+
+            def require(self):
+                return TelethonChunkTransport({"user": (fake, None)})
+
+        transport = UnifiedUserTransport(ResendRuntime(), journal,
+                                         min_upload_interval=0)
+        with pytest.raises(RuntimeError, match="Unresolved MTProto upload intent"):
             asyncio.run(transport.upload(
-                chunk, object_id="sigkill-bot-ack", ordinal=0, checksum=sha,
+                chunk, object_id="sigkill-user-ack", ordinal=0, checksum=sha,
             ))
         assert fake.calls == 0
-        # A separate owner-authorized proof of original message identity,
-        # file ID and byte-for-byte match is required before recovery.
+        # A separate owner-authorized proof of original message identity
+        # and byte-for-byte match is required before recovery.
         assert hashlib.sha256(accepted.read_bytes()).hexdigest() == sha
-        index.put_receipt(
-            "bot", -1001234, 99, "owner-verified-original-message",
-            object_id="sigkill-bot-ack", ordinal=0, checksum=sha, size=len(data),
-        )
-        assert index.unresolved_count() == 0
-        original = index.find_receipt(
-            "sigkill-bot-ack", 0, account="bot",
-            chat_id=-1001234, checksum=sha, size=len(data),
-        )
-        assert original and original.message_id == 99
+        journal.acknowledged("user", -1001234, "sigkill-user-ack", 0, 99)
+        assert journal.unresolved_count() == 0
+        recorded = reopened.connection.execute(
+            select(mtproto_send_intents.c.message_id).where(
+                mtproto_send_intents.c.object_id == "sigkill-user-ack",
+            )
+        ).scalar_one()
+        assert recorded == 99
     finally:
         reopened.close()
