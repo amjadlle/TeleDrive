@@ -165,12 +165,104 @@ class MultipartStore:
         return rows[:limit], len(rows) > limit
 
     def list_parts(self, identifier: str, bucket: str, key: str, owner: str):
+        """Legacy internal unpaged result for recovery/metadata callers."""
         self.require(identifier, bucket, key, owner)
         return self.db.connection.execute(
             select(parts.c.number, parts.c.size, parts.c.etag).where(
                 parts.c.upload_id == identifier
             ).order_by(parts.c.number)
         ).all()
+
+    def list_parts_page(self, identifier: str, bucket: str, key: str, owner: str,
+                        *, marker: int = 0, limit: int = 1000):
+        """Bounded S3 ListParts page selected in SQL, never Python slicing."""
+        if not 0 <= marker <= MAX_PARTS or not 1 <= limit <= 1000:
+            raise MultipartError("InvalidArgument", "Invalid ListParts pagination")
+        self.require(identifier, bucket, key, owner)
+        rows = self.db.connection.execute(
+            select(
+                parts.c.number, parts.c.size, parts.c.etag, parts.c.updated_at,
+            ).where(
+                parts.c.upload_id == identifier,
+                parts.c.number > marker,
+            ).order_by(parts.c.number).limit(limit + 1)
+        ).all()
+        return rows[:limit], len(rows) > limit
+
+    def list_uploads_grouped(
+        self, bucket: str, owner: str, *, prefix: str = "",
+        delimiter: str, after_key: str = "", after_id: str = "",
+        limit: int = 1000,
+    ):
+        """Return ordered Upload/CommonPrefixes entries using bounded SQL batches.
+
+        Query in stable (key, upload ID) order, reduce groups by their first
+        delimiter after prefix, and page over *returned entries*. Cursors for
+        common prefixes carry the prefix and an empty upload ID, so the next
+        request suppresses that already-delivered group.
+        """
+        if (not 1 <= limit <= 1000 or len(prefix.encode("utf-8")) > 1024
+                or not delimiter or len(delimiter.encode("utf-8")) > 16
+                or (after_id and not after_key)):
+            raise MultipartError("InvalidArgument", "Invalid multipart list pagination")
+        self.catalog._keyhash(after_key) if after_key else None
+        base = select(
+            uploads.c.id, uploads.c.object_key, uploads.c.created_at,
+        ).where(
+            uploads.c.bucket == bucket,
+            uploads.c.owner_access_key == owner,
+            uploads.c.state == "active",
+        )
+        if prefix:
+            base = base.where(uploads.c.object_key.startswith(prefix, autoescape=True))
+        cursor_key, cursor_id = after_key, after_id
+        results = []
+        last_cursor = ("", "")
+        # One extra *emittable* result detects truncation. Never pull all rows
+        # into Python; also avoid repeatedly materializing large common-prefix
+        # groups in a single unbounded SELECT.
+        while len(results) <= limit:
+            statement = base
+            if cursor_key:
+                statement = statement.where(
+                    (uploads.c.object_key > cursor_key)
+                    | ((uploads.c.object_key == cursor_key) &
+                       (uploads.c.id > cursor_id))
+                )
+            batch = self.db.connection.execute(
+                statement.order_by(uploads.c.object_key, uploads.c.id).limit(256)
+            ).all()
+            if not batch:
+                break
+            for record in batch:
+                cursor_key, cursor_id = record.object_key, record.id
+                suffix = record.object_key[len(prefix):]
+                before, found, _ = suffix.partition(delimiter)
+                if found:
+                    group = prefix + before + delimiter
+                    if group <= after_key:
+                        continue
+                    if results and results[-1][0] == "prefix" and results[-1][1] == group:
+                        continue
+                    if any(kind == "prefix" and value == group for kind, value in results):
+                        continue
+                    results.append(("prefix", group))
+                    last_cursor = (group, "")
+                else:
+                    results.append(("upload", record))
+                    last_cursor = (record.object_key, record.id)
+                if len(results) > limit:
+                    break
+            if len(results) > limit:
+                break
+            if len(batch) < 256:
+                break
+        truncated = len(results) > limit
+        page = results[:limit]
+        if page:
+            kind, value = page[-1]
+            last_cursor = (value, "") if kind == "prefix" else (value.object_key, value.id)
+        return page, truncated, last_cursor
 
     def record_part(self, identifier: str, bucket: str, key: str, owner: str,
                     *, number: int, object_id: str, etag: str) -> None:

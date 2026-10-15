@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 from xml.etree import ElementTree as ET
+from urllib.parse import quote
 
 import pytest
 from test_s3_gateway import service, signed
@@ -24,7 +25,7 @@ def xml_text(response, key):
 
 
 def begin(svc, key="asset.bin"):
-    response = signed(svc, "POST", "/backup-bucket/" + key + "?uploads")
+    response = signed(svc, "POST", "/backup-bucket/" + quote(key, safe="/") + "?uploads")
     assert response.status_code == 200, response.text
     return xml_text(response, "UploadId")
 
@@ -259,9 +260,28 @@ def test_boto3_multipart_real_http_transport(service):
             Bucket="sdk-multipart", Key="large.bin", UploadId=uid,
             PartNumber=2, Body=payload2,
         )
-        assert len(client.list_parts(
-            Bucket="sdk-multipart", Key="large.bin", UploadId=uid
-        )["Parts"]) == 2
+        first_page = client.list_parts(
+            Bucket="sdk-multipart", Key="large.bin", UploadId=uid, MaxParts=1,
+        )
+        assert first_page["IsTruncated"] is True
+        assert first_page["NextPartNumberMarker"] == 1
+        assert first_page["StorageClass"] == "STANDARD"
+        assert first_page["Parts"][0]["LastModified"]
+        next_page = client.list_parts(
+            Bucket="sdk-multipart", Key="large.bin", UploadId=uid,
+            MaxParts=1, PartNumberMarker=1,
+        )
+        assert [x["PartNumber"] for x in next_page["Parts"]] == [2]
+        assert next_page["IsTruncated"] is False
+        pending = client.list_multipart_uploads(
+            Bucket="sdk-multipart", Prefix="large", Delimiter="/",
+            EncodingType="url", MaxUploads=1,
+        )
+        assert pending["Prefix"] == "large"
+        assert pending["Delimiter"] == "/"
+        assert pending["EncodingType"] == "url"
+        assert pending["Uploads"][0]["Key"] == "large.bin"
+        assert pending["Uploads"][0]["StorageClass"] == "STANDARD"
         before = remote.uploads
         done = client.complete_multipart_upload(
             Bucket="sdk-multipart", Key="large.bin", UploadId=uid,
@@ -337,6 +357,146 @@ def test_list_multipart_uploads_is_owner_scoped_and_paginated(service):
         "a.bin", "c.bin"
     ]
 
+
+
+def test_list_parts_sql_paging_and_replaced_part_metadata(service):
+    setup(service)
+    uid = begin(service)
+    part(service, uid, 9, b"original")
+    replacement = part(service, uid, 9, b"replacement")
+    part(service, uid, 1, b"first")
+    part(service, uid, 5, b"middle")
+    before_download = service[2].downloads
+    first = signed(service, "GET",
+                   f"/backup-bucket/asset.bin?uploadId={uid}&max-parts=2")
+    assert first.status_code == 200, first.text
+    root = ET.fromstring(first.content)
+    assert [n.findtext(NS + "PartNumber") for n in root.findall(NS + "Part")] == ["1", "5"]
+    assert root.findtext(NS + "StorageClass") == "STANDARD"
+    assert root.findtext(NS + "IsTruncated") == "true"
+    assert root.findtext(NS + "NextPartNumberMarker") == "5"
+    for entry in root.findall(NS + "Part"):
+        assert entry.findtext(NS + "LastModified").endswith("Z")
+        assert entry.findtext(NS + "Size")
+    later = signed(service, "GET",
+                   f"/backup-bucket/asset.bin?uploadId={uid}&max-parts=2&part-number-marker=5")
+    assert later.status_code == 200
+    rest = ET.fromstring(later.content)
+    assert rest.findtext(NS + "IsTruncated") == "false"
+    parts = rest.findall(NS + "Part")
+    assert [p.findtext(NS + "PartNumber") for p in parts] == ["9"]
+    assert parts[0].findtext(NS + "ETag") == replacement
+    assert service[2].downloads == before_download
+    for marker, maxparts in (
+        ("-1", "1"), ("10001", "1"), ("no", "1"), ("1.0", "1"),
+        ("0", "0"), ("0", "1001"), ("0", "foo"),
+    ):
+        invalid = signed(service, "GET",
+                         f"/backup-bucket/asset.bin?uploadId={uid}"
+                         f"&part-number-marker={marker}&max-parts={maxparts}")
+        assert invalid.status_code == 400, (marker, maxparts, invalid.text)
+        assert b"InvalidArgument" in invalid.content
+    assert service[2].downloads == before_download
+
+    # A completed upload is no longer an active ListParts target.
+    assert complete(service, uid, [(9, replacement)]).status_code == 200
+    inactive = signed(service, "GET", f"/backup-bucket/asset.bin?uploadId={uid}")
+    assert inactive.status_code == 404 and b"NoSuchUpload" in inactive.content
+
+
+def test_list_multipart_uploads_grouping_unicode_encoding_and_cursors(service):
+    setup(service)
+    # Interleaved prefixes, same-key duplicate uploads and Unicode keys.
+    first_a = begin(service, key="assets/a/one")
+    begin(service, key="assets/a/two")
+    first_b = begin(service, key="assets/b/one")
+    begin(service, key="assets/b/two")
+    begin(service, key="assets/single")
+    begin(service, key="misc/ü(1).bin")
+    before_download = service[2].downloads
+
+    grouped = signed(service, "GET",
+                     "/backup-bucket?uploads&prefix=assets%2F&delimiter=%2F&max-uploads=2")
+    assert grouped.status_code == 200, grouped.text
+    root = ET.fromstring(grouped.content)
+    assert root.findtext(NS + "Prefix") == "assets/"
+    assert root.findtext(NS + "Delimiter") == "/"
+    assert [node.findtext(NS + "Prefix") for node in root.findall(NS+"CommonPrefixes")] == [
+        "assets/a/", "assets/b/",
+    ]
+    assert root.findtext(NS + "IsTruncated") == "true"
+    assert root.findtext(NS + "NextKeyMarker") == "assets/b/"
+    from urllib.parse import quote
+    next_page = signed(service, "GET",
+                       "/backup-bucket?uploads&prefix=assets%2F&delimiter=%2F&max-uploads=2"
+                       "&key-marker=" + quote(root.findtext(NS+"NextKeyMarker"), safe="")
+                       + "&upload-id-marker=")
+    assert next_page.status_code == 200, next_page.text
+    follow = ET.fromstring(next_page.content)
+    assert [node.findtext(NS+"Key") for node in follow.findall(NS+"Upload")] == ["assets/single"]
+    assert follow.find(NS+"CommonPrefixes") is None
+    assert follow.findtext(NS+"IsTruncated") == "false"
+
+    utf8 = signed(service, "GET",
+                  "/backup-bucket?uploads&prefix=misc%2F&encoding-type=url")
+    assert utf8.status_code == 200, utf8.text
+    encoded = ET.fromstring(utf8.content)
+    assert encoded.findtext(NS+"EncodingType") == "url"
+    assert encoded.findtext(NS+"Upload/"+NS+"Key") == "misc/%C3%BC%281%29.bin"
+
+    same_key = begin(service, key="repeat")
+    same_key2 = begin(service, key="repeat")
+    first = signed(service, "GET", "/backup-bucket?uploads&prefix=repeat&max-uploads=1")
+    assert first.status_code == 200
+    start = ET.fromstring(first.content)
+    assert start.findtext(NS+"IsTruncated") == "true"
+    last_id = start.findtext(NS+"NextUploadIdMarker")
+    last_key = start.findtext(NS+"NextKeyMarker")
+    next_result = signed(service, "GET",
+        "/backup-bucket?uploads&prefix=repeat&max-uploads=1"
+        "&key-marker="+quote(last_key)+"&upload-id-marker="+quote(last_id))
+    assert next_result.status_code == 200
+    end = ET.fromstring(next_result.content)
+    assert len(end.findall(NS+"Upload")) == 1
+    assert end.findtext(NS+"Upload/"+NS+"UploadId") in {same_key, same_key2} - {last_id}
+    assert end.findtext(NS+"Upload/"+NS+"StorageClass") == "STANDARD"
+    assert end.findtext(NS+"IsTruncated") == "false"
+
+    for path in (
+        "/backup-bucket?uploads&encoding-type=garbage",
+        "/backup-bucket?uploads&max-uploads=0",
+        "/backup-bucket?uploads&max-uploads=1001",
+        "/backup-bucket?uploads&upload-id-marker=x",
+    ):
+        failure = signed(service, "GET", path)
+        assert failure.status_code == 400, (path, failure.text)
+    assert service[2].downloads == before_download
+    assert signed(service, "DELETE",
+                  "/backup-bucket/assets/a/one?uploadId="+first_a).status_code == 204
+    assert signed(service, "DELETE",
+                  "/backup-bucket/assets/b/one?uploadId="+first_b).status_code == 204
+
+
+def test_list_multipart_pages_are_scoped_to_credential_without_telegram_reads(service):
+    setup(service)
+    uid = begin(service)
+    part(service, uid, 1, b"private")
+    db = service[3]()
+    try:
+        guest = S3CredentialStore(db, service[4]).create(
+            "listing-only", ["s3:ListBucket", "s3:GetObject"],
+        )
+    finally:
+        db.close()
+    before = service[2].downloads
+    page = signed(service, "GET", "/backup-bucket?uploads&delimiter=%2F",
+                  access=guest.access_key, secret=guest.secret_key)
+    assert page.status_code == 200
+    assert ET.fromstring(page.content).findall(NS+"Upload") == []
+    denied = signed(service, "GET", f"/backup-bucket/asset.bin?uploadId={uid}",
+                    access=guest.access_key, secret=guest.secret_key)
+    assert denied.status_code == 404 and b"NoSuchUpload" in denied.content
+    assert service[2].downloads == before
 
 def test_bucket_delete_rejects_uncommitted_multipart_history(service):
     setup(service)

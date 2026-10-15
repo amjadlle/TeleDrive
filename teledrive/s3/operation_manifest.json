@@ -91,12 +91,12 @@
     },
     {
       "name": "ListParts",
-      "status": "partial",
+      "status": "supported",
       "workstream": "implemented"
     },
     {
       "name": "ListMultipartUploads",
-      "status": "partial",
+      "status": "supported",
       "workstream": "implemented"
     },
     {

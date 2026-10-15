@@ -19,6 +19,7 @@ TeleDrive stores object payloads in Telegram and keeps object metadata, upload s
 | [Security Policy](docs/SECURITY.md) | Responsible disclosure, trusted components, credentials and network isolation |
 | [Contributing](CONTRIBUTING.md) | Development workflow and documentation rules |
 | [S3 Compatibility Matrix](docs/S3_SPECS.md) | 116-operation status matrix, supported limits and P2 advanced implementation roadmap |
+| [Local Agent Acceptance Mission](docs/LOCAL_AGENT_ACCEPTANCE.md) | Docker test installation, real bytes, independent recovery and GC safety acceptance, with owner-only gates |
 | [Working Checklist](TODO.md) | Short, actionable outstanding tasks |
 
 **Contents:** [Quick start](#1-quick-start-docker) · [Architecture](#2-storage-architecture) · [REST API](#3-rest-api) · [S3 gateway](#4-s3-compatible-api) · [Local jobs](#5-local-file-upload-jobs) · [Desktop/CLI](#6-desktop-and-command-line-usage) · [Databases](#7-database-configuration) · [Security](#8-security-and-operational-limits) · [Development](#9-development-and-testing).

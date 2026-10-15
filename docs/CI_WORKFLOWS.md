@@ -133,4 +133,6 @@ For feature status and production release boundaries, see [Project Status](IMPLE
 
 **S3 P2-0 selector gate:** `tests/test_s3_route_guard.py` is mandatory in both Quality and REST/S3 workflow regressions. It verifies 116/116 operation statuses in the machine-readable inventory against `docs/S3_SPECS.md` and rejects unrecognized signed bucket/object selectors without exposing or mutating data.
 
+**Multipart listing parity:** `tests/test_s3_multipart.py` verifies scoped SQL-bounded ListParts/ListMultipartUploads cursors, sparse/replaced part metadata, timestamps, grouping, URL encoding, invalid requests and actual boto3 over live HTTP. These are developer/test-channel gates; physical GC, recovery and owner sign-off use [Local Agent Acceptance](LOCAL_AGENT_ACCEPTANCE.md).
+
 **ListBuckets pagination contract:** `tests/test_s3_bucket_listing.py` exercises SigV4/boto3 end-to-end, SQL creation dates, 1–10,000 page bounds, prefix and region filters, cursor integrity and credential scoping. Quality and REST/S3 workflows both require it.

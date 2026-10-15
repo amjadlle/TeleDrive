@@ -13,6 +13,8 @@
 
 ## 2. Engineering backlog
 
+- [x] Write a complete [owner-local Docker, independent media backup, restore and GC acceptance mission](docs/LOCAL_AGENT_ACCEPTANCE.md). This checks off the **runbook delivery only**, not operator execution or production authorization.
+- [x] Complete bounded ListParts and ListMultipartUploads with SQL-keyset pagination, genuine metadata fields, delimiter/URL encoding, ownership isolation, boto3 and adversarial tests; promote both documented private S3 contracts after CI.
 - [x] Test non-destructive GC SQL graph guards (including removed versions and writer fences) and real test-channel history inventory automatically in CI.
 - [ ] Implement full version-aware, writer-fenced physical garbage collection **only after** sealed independent payload backup, ownership/alias/retention checks, an actual restore drill and explicit two-person approval.
 - [x] Add a bounded, read-only marker inventory for one owner-authorized Telegram channel, with private output and synthetic regression coverage; candidate hints are not recovery proofs.
@@ -35,6 +37,7 @@
 
 ## 3. Operator-only production sign-off
 
+**Assigned to on-device agent:** [Owner-local acceptance mission](docs/LOCAL_AGENT_ACCEPTANCE.md). Its safe synthetic and test-channel work can run on one Docker host. Original-media recovery, physically distinct hosts, authorized soak, real legacy cutover and independent approvals must remain unchecked until documented original-owner evidence exists.
 - [ ] Collect independently verified identities from physically distinct deployment hosts sharing the intended SQL database.
 - [ ] Rehearse original-media recovery using the owner's sealed SQL archive, Telegram credentials and real channel without overwriting production data.
 - [ ] Conduct the authorized physical soak; capture genuine telemetry without deliberately flooding Telegram.

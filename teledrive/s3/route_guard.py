@@ -24,7 +24,8 @@ _BUCKET_GET_VERSIONS = frozenset({
     "versions", "prefix", "max-keys", "key-marker", "version-id-marker",
 })
 _BUCKET_GET_MULTIPART = frozenset({
-    "uploads", "prefix", "key-marker", "upload-id-marker", "max-uploads",
+    "uploads", "prefix", "delimiter", "encoding-type",
+    "key-marker", "upload-id-marker", "max-uploads",
 })
 _BUCKET_CONTROL = frozenset({
     "location", "cors", "tagging", "versioning", "publicAccessBlock", "lifecycle",

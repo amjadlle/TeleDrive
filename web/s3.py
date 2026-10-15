@@ -1100,33 +1100,68 @@ async def _handle(request: Request):
                     media_type="application/xml",
                 )
             if mpu_bucket_list:
-                records, more = MultipartStore(catalog).list_uploads(
-                    bucket, owner,
-                    prefix=request.query_params.get("prefix", ""),
-                    after_key=request.query_params.get("key-marker", ""),
-                    after_id=request.query_params.get("upload-id-marker", ""),
-                    limit=int(request.query_params.get("max-uploads", "1000")),
-                )
+                query = request.query_params
+                prefix = query.get("prefix", "")
+                delimiter = query.get("delimiter", "")
+                encoding = query.get("encoding-type")
+                if encoding not in (None, "url"):
+                    return _error("InvalidArgument", "Only encoding-type=url is supported", 400)
+                if len(prefix.encode("utf-8")) > 1024 or len(delimiter.encode("utf-8")) > 16:
+                    return _error("InvalidArgument", "Multipart prefix/delimiter too long", 400)
+                try:
+                    limit = int(query.get("max-uploads", "1000"))
+                except ValueError:
+                    return _error("InvalidArgument", "Invalid max-uploads", 400)
+                if not 1 <= limit <= 1000:
+                    return _error("InvalidArgument", "max-uploads must be 1..1000", 400)
+                marker_key = query.get("key-marker", "")
+                marker_id = query.get("upload-id-marker", "")
+                if marker_id and not marker_key:
+                    return _error("InvalidArgument", "Upload-id marker requires key marker", 400)
+                multipart = MultipartStore(catalog)
+                if delimiter:
+                    entries, more, next_marker = multipart.list_uploads_grouped(
+                        bucket, owner, prefix=prefix, delimiter=delimiter,
+                        after_key=marker_key, after_id=marker_id, limit=limit,
+                    )
+                else:
+                    records, more = multipart.list_uploads(
+                        bucket, owner, prefix=prefix, after_key=marker_key,
+                        after_id=marker_id, limit=limit,
+                    )
+                    entries = [("upload", record) for record in records]
+                    next_marker = ((records[-1].object_key, records[-1].id)
+                                   if records else ("", ""))
+
+                encode = (lambda value: quote(value, safe="/") if encoding == "url" else value)
                 root = ET.Element("ListMultipartUploadsResult", xmlns=NAMESPACE)
                 for label, val in (
-                    ("Bucket", bucket),
-                    ("KeyMarker", request.query_params.get("key-marker", "")),
-                    ("UploadIdMarker", request.query_params.get("upload-id-marker", "")),
-                    ("MaxUploads", request.query_params.get("max-uploads", "1000")),
-                    ("IsTruncated", str(more).lower()),
+                    ("Bucket", bucket), ("KeyMarker", encode(marker_key)),
+                    ("UploadIdMarker", marker_id), ("Prefix", encode(prefix)),
+                    ("MaxUploads", limit), ("IsTruncated", str(more).lower()),
                 ):
                     ET.SubElement(root, label).text = str(val)
-                if more and records:
-                    ET.SubElement(root, "NextKeyMarker").text = records[-1].object_key
-                    ET.SubElement(root, "NextUploadIdMarker").text = records[-1].id
-                for record in records:
+                if delimiter:
+                    ET.SubElement(root, "Delimiter").text = encode(delimiter)
+                if encoding:
+                    ET.SubElement(root, "EncodingType").text = encoding
+                if more:
+                    ET.SubElement(root, "NextKeyMarker").text = encode(next_marker[0])
+                    ET.SubElement(root, "NextUploadIdMarker").text = next_marker[1]
+                for kind, value in entries:
+                    if kind == "prefix":
+                        ET.SubElement(
+                            ET.SubElement(root, "CommonPrefixes"), "Prefix"
+                        ).text = encode(value)
+                        continue
                     item = ET.SubElement(root, "Upload")
-                    for label, value in (
-                        ("Key", record.object_key), ("UploadId", record.id),
+                    for label, contents in (
+                        ("Key", encode(value.object_key)), ("UploadId", value.id),
+                        ("StorageClass", "STANDARD"),
                         ("Initiated", time.strftime("%Y-%m-%dT%H:%M:%S.000Z",
-                                                    time.gmtime(record.created_at))),
+                                                    time.gmtime(value.created_at))),
                     ):
-                        ET.SubElement(item, label).text = str(value)
+                        ET.SubElement(item, label).text = str(contents)
                 return Response(ET.tostring(root, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml")
             list_type = request.query_params.get("list-type")
@@ -1253,29 +1288,38 @@ async def _handle(request: Request):
                 mpu.abort(upload_id, bucket, key, owner)
                 return Response(status_code=204)
             if mpu_list:
-                rows = mpu.list_parts(upload_id, bucket, key, owner)
                 try:
-                    marker = int(request.query_params.get("part-number-marker", "0"))
-                    limit = int(request.query_params.get("max-parts", "1000"))
+                    raw_marker = request.query_params.get("part-number-marker", "0")
+                    raw_limit = request.query_params.get("max-parts", "1000")
+                    if (re.fullmatch(r"[0-9]{1,5}", raw_marker) is None
+                            or re.fullmatch(r"[0-9]{1,4}", raw_limit) is None):
+                        raise ValueError("Invalid decimal")
+                    marker = int(raw_marker)
+                    limit = int(raw_limit)
                 except ValueError:
                     raise MultipartError("InvalidArgument", "Invalid ListParts pagination")
-                if marker < 0 or not (1 <= limit <= 1000):
-                    raise MultipartError("InvalidArgument", "Invalid ListParts pagination")
-                visible = [row for row in rows if row.number > marker]
-                selected_parts = visible[:limit]
+                selected_parts, more = mpu.list_parts_page(
+                    upload_id, bucket, key, owner, marker=marker, limit=limit,
+                )
                 result = ET.Element("ListPartsResult", xmlns=NAMESPACE)
                 for title, val in (
                     ("Bucket", bucket), ("Key", key), ("UploadId", upload_id),
                     ("PartNumberMarker", marker), ("MaxParts", limit),
-                    ("IsTruncated", str(len(visible) > len(selected_parts)).lower()),
+                    ("StorageClass", "STANDARD"),
+                    ("IsTruncated", str(more).lower()),
                 ):
                     ET.SubElement(result, title).text = str(val)
-                if len(visible) > len(selected_parts):
-                    ET.SubElement(result, "NextPartNumberMarker").text = str(selected_parts[-1].number)
+                if more:
+                    ET.SubElement(result, "NextPartNumberMarker").text = str(
+                        selected_parts[-1].number
+                    )
                 for part in selected_parts:
                     row = ET.SubElement(result, "Part")
                     ET.SubElement(row, "PartNumber").text = str(part.number)
                     ET.SubElement(row, "ETag").text = '"' + part.etag + '"'
+                    ET.SubElement(row, "LastModified").text = time.strftime(
+                        "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(part.updated_at),
+                    )
                     ET.SubElement(row, "Size").text = str(part.size)
                 return Response(ET.tostring(result, encoding="utf-8", xml_declaration=True),
                                 media_type="application/xml")
