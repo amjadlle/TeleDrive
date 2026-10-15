@@ -13,14 +13,13 @@ GitHub Actions does not support workflow folders in its sidebar. The numeric pre
 | 01 · Quality | [Security & Regression](../.github/workflows/quality-security.yml) | Python regression, security checks, dependencies, Docker image and listener smoke tests |
 | 02 · Integration | [Databases](../.github/workflows/integration-databases.yml) | PostgreSQL/MySQL, native backups and isolated restores |
 | 02 · Integration | [REST & S3](../.github/workflows/integration-storage.yml) | API contracts, signed always-Enabled versioning and all-private Public Access Block (real boto3), SigV4, AWS CLI, rclone and shared storage catalog |
-| 02 · Integration | [Desktop](../.github/workflows/integration-desktop.yml) | Windows/Linux desktop, CLI and packaging |
 | 03 · Resilience | [Docker Fault Injection](../.github/workflows/resilience-docker.yml) | Disposable PostgreSQL, two Web instances, crash/restart, corruption and recovery |
 | 04 · Live Telegram | [User MTProto E2E](../.github/workflows/live-telegram-user.yml) | Real Telethon user session, checksum and range recovery |
 | 04 · Live Telegram | [Multiworker PostgreSQL E2E](../.github/workflows/live-telegram-multiworker.yml) | Three independent workers sharing PostgreSQL and a real Telegram test target |
 | 05 · Delivery | [Release Gate & Packages](../.github/workflows/delivery-release.yml) | Release regression, gated Linux/Windows packages and publishing |
 | 06 · Endurance | [Isolated Capacity Soak](../.github/workflows/endurance-capacity.yml) | Manually dispatched 60–110-minute synthetic-media SQLite durability test |
 
-The **first eight workflows** form the normal `main` validation matrix. The endurance workflow is deliberately manual (`workflow_dispatch`). The live Telegram workflows require dedicated **test** credentials; synthetic Docker validation does not.
+The **first seven workflows** form the normal `main` validation matrix. The endurance workflow is deliberately manual (`workflow_dispatch`). The live Telegram workflows require dedicated **test** credentials; synthetic Docker validation does not.
 
 ### Interpreting CI results
 
@@ -36,13 +35,13 @@ The **first eight workflows** form the normal `main` validation matrix. The endu
 Python 3.11+, the appropriate dependencies, and optional Docker Engine/Compose v2 are required.
 
 ~~~bash
-python -m pip install -r requirements/server.txt pytest
+python -m pip install -r requirements.txt pytest
 python -m pytest -q
 python -m compileall -q teledrive web app tests
 docker compose config --quiet
 ~~~
 
-For the desktop application, install `requirements/desktop.txt` separately. Docker integration jobs install the tools and database services they need inside disposable runners; they do not require a pre-existing TeleDrive deployment.
+Docker integration jobs install the tools and database services they need inside disposable runners; they do not require a pre-existing TeleDrive deployment.
 
 ### One-command Docker fault-injection acceptance
 
@@ -125,8 +124,7 @@ An actual PASS requires the complete four-stage evidence and `stages.acceptance.
 | [`docker-compose.yml`](../docker-compose.yml) | **One-container** default WebUI/REST/S3 deployment |
 | [`scripts/run_docker_fault_injection.sh`](../scripts/run_docker_fault_injection.sh) | Fault test entrypoint |
 | [`scripts/docker_fault_scenarios.py`](../scripts/docker_fault_scenarios.py) | Synthetic fault scenarios and evidence |
-| [`requirements/server.txt`](../requirements/server.txt) | Headless API/runtime dependencies |
-| [`requirements/desktop.txt`](../requirements/desktop.txt) | Desktop GUI dependencies |
+| [`requirements.txt`](../requirements.txt) | API/runtime dependencies |
 
 For feature status and production release boundaries, see [Project Status](IMPLEMENTATION_STATUS.md). For actual database backups and restore procedures, see [Backup and Restore](BACKUP_RESTORE.md). For security reporting, see [Security Policy](SECURITY.md).
 

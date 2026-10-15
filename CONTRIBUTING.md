@@ -1,6 +1,6 @@
 # Contributing to TeleDrive
 
-> **Audience:** maintainers and external contributors. This fork includes a single-container WebUI/REST/S3 service, a PySide6 desktop client, a Telegram uploader and an Astro marketing site.
+> **Audience:** maintainers and external contributors. This fork includes a single-container WebUI/REST/S3 service, a Telegram uploader and an Astro marketing site.
 
 ## 1. Before changing code
 
@@ -12,7 +12,7 @@
 ## 2. Local development and validation
 
 ~~~bash
-python -m pip install -r requirements/server.txt pytest
+python -m pip install -r requirements.txt pytest
 python -m pytest -q
 python -m compileall -q teledrive web app tests
 docker compose config --quiet
@@ -24,7 +24,7 @@ Run the dedicated [Docker fault-injection acceptance](docs/CI_WORKFLOWS.md) when
 bash scripts/run_docker_fault_injection.sh
 ~~~
 
-For the desktop app, install `requirements/desktop.txt`. For website work:
+For website work:
 
 ~~~bash
 cd website
