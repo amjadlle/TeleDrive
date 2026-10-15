@@ -2,28 +2,26 @@
 
 > **Purpose:** short, actionable development and release tasks. For decisions and evidence limits, see [Project Status](docs/IMPLEMENTATION_STATUS.md). For commands and CI contracts, see [CI and Test Guide](docs/CI_WORKFLOWS.md).
 
-## 0. In progress — Telethon-only purge (owner directive, executed carefully)
+## 0. Telethon-only purge — complete (merged PR #15)
 
-> Owner: Bot work is discarded completely; every live transport becomes Telethon USER MTProto only. Run carefully: keep every batch committing, pushing and CI-verified.
+> Owner: Bot work is discarded completely; every live transport becomes Telethon USER MTProto only. CI was green on the exact PR head `56813a8`.
 
-- [x] Delete Bot adapter/receipt modules, Bot tests and the Bot E2E workflow.
+- [x] Bot adapter/receipt modules, Bot tests and the Bot E2E workflow deleted.
 - [x] GC inventory/reference graph and physical-cleanup fences: MTProto send intents/receipts + active durable jobs only.
 - [x] Web/S3 services: `storage_transport` factory, Telethon `RECOMMENDED_CHUNK_SIZE`, MTProto health alerts, `mtproto-unresolved` admin endpoint.
 - [x] `rehearse_telegram_dr.py`: USER-only read path, reusable `open_read_only_user`, no Bot fallback.
 - [x] MTProto rate guard: shared send slots, flood-wait cooldowns, durable flood observations; wired into `UnifiedUserTransport`.
-- [x] Fault-injection scenarios + converted S3/REST/GC/recovery/health/sigkill/metadata test fakes to USER MTProto.
-- [x] Multiworker PostgreSQL E2E converted to USER MTProto (`tests/test_telegram_multiworker_e2e.py`, workflow uses USER secrets).
-- [ ] Convert `scripts/ops/acceptance.py`, `rehearse_native_database_restore.py`, `setup_telegram_e2e.py`, `verify_legacy_cutover.py` to USER-only.
-- [ ] Purge Bot references from remaining workflows, `test_ci_workflows.py` (9 → 8 workflow matrix) and all docs.
-- [ ] Full local suite green; CI green on the exact PR head SHA; merge; clean up only proven-merged branches.
+- [x] Fault-injection scenarios and all converted test fakes run USER MTProto.
+- [x] Multiworker PostgreSQL E2E converted to USER MTProto; channel resolution by name or numeric target.
+- [x] All scripts (acceptance, rehearse, setup, cutover), workflows (7-workflow matrix), `test_ci_workflows.py` and docs converted.
 
-## 1. Owner directives (new)
+## 1. Owner directives
 
-- [x] **Desktop app cancelled completely.** Only the Docker/baremetal WebUI service remains: removed `app/` (PySide6), `installer/`, `requirements/desktop.txt`, `examples/config.desktop.yaml`, desktop build scripts, desktop tests, the desktop CI workflow, desktop entry modules and pyproject desktop extras. The shared config/state helpers the Web service uses are retained.
-- [x] **Single requirements + single config.** One `requirements.txt` and one `examples/config.yaml` for the service; no desktop/server split.
-- [ ] **Website not maintained here.** `website/` belongs to the original author; remove it from this fork.
-- [ ] **Multiple api_id/api_hash pairs.** Support more than one Telegram API credential set with round-robin/failover strategies across the unified USER transport.
-- [ ] **Regroup and reorganize `scripts/`, `teledrive/`, `web/`, `tests/`.** Analyze each file's role and reorganize cleanly; update every import, CI path and doc reference.
+- [x] **Desktop app cancelled completely** (merged PR #16): removed `app/`, `installer/`, desktop requirements/example config, build scripts, desktop modules/tests and the desktop CI workflow. Shared config/state helpers kept.
+- [x] **Single requirements + single config** (merged PR #16): one `requirements.txt`, one `examples/config.yaml`.
+- [x] **Website not maintained here** (merged PR #18): `website/` and every reference removed.
+- [x] **Multiple api_id/api_hash pairs** (merged PR #17): comma-separated credential sets with `round_robin`/`failover` strategies; adversarial tests.
+- [x] **Regroup `scripts/` and `tests/`** (PR #19): tests split into `s3/ storage/ web/ e2e/ meta/`, scripts into `ops/ dev/`; every import, CI path and doc link updated. Release packaging now builds the single-container Docker image.
 
 ## 2. Verified milestones
 
