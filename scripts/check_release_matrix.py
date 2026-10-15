@@ -8,7 +8,6 @@ REQUIRED = {
     "01 · Quality | Security & Regression",
     "02 · Integration | Databases",
     "02 · Integration | REST & S3",
-    "02 · Integration | Desktop",
     "03 · Resilience | Docker Fault Injection",
     "04 · Live Telegram | User MTProto E2E",
     "04 · Live Telegram | Multiworker PostgreSQL E2E",

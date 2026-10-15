@@ -1,6 +1,6 @@
 # TeleDrive
 
-**Telegram-backed personal file storage and automation** with a single-container Web UI/REST/S3 service, a Windows/Linux desktop application, and a command-line uploader.
+**Telegram-backed personal file storage and automation** with a single-container Web UI/REST/S3 service and a command-line uploader.
 
 TeleDrive stores object payloads in Telegram and keeps object metadata, upload state, and references in a local or external SQL database. This fork supports multiple Telegram accounts for the original folder uploader and a unified USER MTProto-backed object catalog for REST, S3, and durable local-file jobs.
 
@@ -22,7 +22,7 @@ TeleDrive stores object payloads in Telegram and keeps object metadata, upload s
 | [Local Agent Acceptance Mission](docs/LOCAL_AGENT_ACCEPTANCE.md) | Docker test installation, real bytes, independent recovery and GC safety acceptance, with owner-only gates |
 | [Working Checklist](TODO.md) | Short, actionable outstanding tasks |
 
-**Contents:** [Quick start](#1-quick-start-docker) · [Architecture](#2-storage-architecture) · [REST API](#3-rest-api) · [S3 gateway](#4-s3-compatible-api) · [Local jobs](#5-local-file-upload-jobs) · [Desktop/CLI](#6-desktop-and-command-line-usage) · [Databases](#7-database-configuration) · [Security](#8-security-and-operational-limits) · [Development](#9-development-and-testing).
+**Contents:** [Quick start](#1-quick-start-docker) · [Architecture](#2-storage-architecture) · [REST API](#3-rest-api) · [S3 gateway](#4-s3-compatible-api) · [Local jobs](#5-local-file-upload-jobs) · [CLI](#6-command-line-usage) · [Databases](#7-database-configuration) · [Security](#8-security-and-operational-limits) · [Development](#9-development-and-testing).
 
 ## 1. Quick start: Docker
 
@@ -33,7 +33,7 @@ git clone https://github.com/babico/TeleDrive.git
 cd TeleDrive
 mkdir -p config data uploads
 cp .env.example .env
-cp examples/config.docker.yaml config/config.yaml
+cp examples/config.yaml config/config.yaml
 chmod 600 .env config/config.yaml
 ~~~
 
@@ -163,7 +163,7 @@ PY
 ~~~
 
 3. Install the `cryptography` package on the host if necessary. Ensure the container's `PUID`/`PGID` can **read** this file. Back up the key separately: losing it makes stored S3 secrets undecryptable.
-4. Start the default Compose service and issue a **scoped** S3 access key and secret in **WebUI → API Management → S3-compatible gateway** (or the desktop S3 Management page). The secret appears once and is encrypted in SQL. When sharing metadata with Desktop, point it at the **same** master key rather than silently creating another.
+4. Start the default Compose service and issue a **scoped** S3 access key and secret in **WebUI → API Management → S3-compatible gateway** . The secret appears once and is encrypted in SQL.
 
 ### SDK example
 
@@ -228,42 +228,14 @@ In Docker Compose, `TELEDRIVE_JOB_AUTO_RUN=1` processes **explicitly queued** jo
 
 Jobs are persisted in SQL and protect against source mutation, unexpected generation changes and interrupted uploads. Keep the source file until the job reaches `done`. The admin API also supports job inspection/retry, stale-pending previews, history restore and safe health checks. Failed/uncertain remote sends do not authorize physical cleanup.
 
-## 6. Desktop and command-line usage
-
-### Windows and Linux desktop
-
-The PySide6 application provides account-scoped login/2FA, multi-account scheduling, configuration, queue/history, and database settings.
-
-~~~bash
-python -m pip install -r requirements/desktop.txt
-python -m app.main
-~~~
-
-Desktop configuration examples live at [`examples/config.desktop.yaml`](examples/config.desktop.yaml). User data is located under `%LOCALAPPDATA%/Telegram Auto Upload` on Windows or `~/.local/share/Telegram Auto Upload` on Linux (unless `XDG_DATA_HOME` overrides the latter).
-
-Build scripts:
-
-~~~powershell
-# Windows; run in PowerShell:
-./scripts/build.ps1
-./scripts/build-installer.ps1
-~~~
-
-~~~bash
-# Linux:
-bash scripts/build-linux.sh
-~~~
-
-![Desktop dashboard](website/public/images/dashboard.png)
-![Upload queue](website/public/images/upload-queue.png)
-![Settings](website/public/images/settings.png)
+## 6. Command-line usage
 
 ### Headless folder uploader
 
 The original Telethon scanner can run without a GUI:
 
 ~~~bash
-cp examples/config.desktop.yaml local-config.yaml
+cp examples/config.yaml local-config.yaml
 # Edit credentials, source root, target and database settings first.
 python -m teledrive.uploader --config local-config.yaml --scan-only
 python -m teledrive.uploader --config local-config.yaml --run-once
@@ -324,16 +296,15 @@ Repository layout:
 | --- | --- |
 | `teledrive/` | Telegram uploader, object engine, SQL state, recovery, API/transport adapters |
 | `web/` | Unified WebUI/REST/S3 ASGI service and admin interface |
-| `app/` | PySide6 desktop application |
-| `scripts/` | Setup, maintenance, CI and desktop packaging |
-| `examples/` | Desktop and Docker configuration examples |
+| `scripts/` | Setup, maintenance and CI tooling |
+| `examples/` | Configuration examples |
 | `tests/` | Offline regression, integration and live test contracts |
 | `.github/workflows/` | Categorized GitHub Actions pipelines |
 | `.github/ci/` | Workflow-specific supporting Docker assets |
 | `website/` | Marketing website |
 
 ~~~bash
-python -m pip install -r requirements/server.txt pytest
+python -m pip install -r requirements.txt pytest
 python -m pytest -q
 python -m compileall -q teledrive web app tests
 docker compose config --quiet

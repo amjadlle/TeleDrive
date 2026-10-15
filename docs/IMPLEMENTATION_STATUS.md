@@ -189,7 +189,7 @@ Only SQL-only incomplete-multipart lifecycle abort is now supported, applied by 
 - [x] Publish bounded v1.0.7 development milestone with separate release artifacts and evidence.
 - [x] Implement disposable 13-gate Docker validation and distinct live test-channel User/Multiworker workflows (historical Bot exercises retired with the Bot layer).
 - [x] Implement fail-closed recovery guards, owner-proofed isolated one/multi-object rebuild and an offline dual-approval evidence verifier.
-- [x] Verify nine normal workflows on the newer `aa44bd6` development baseline (not the published v1.0.7 SHA).
+- [x] Verify nine normal workflows on the newer `aa44bd6` development baseline (not the published v1.0.7 SHA). The Desktop workflow was later removed together with the desktop application; the current matrix has seven workflows.
 - [ ] Verify **every required workflow on the exact SHA** of any subsequent release candidate.
 - [ ] Obtain owner-supplied physical-host identities, original-media disaster-recovery evidence and legacy cutover/no-legacy attestation.
 - [ ] Implement and independently rehearse the complete physical GC safety/rollback alternative before authorizing deletion.

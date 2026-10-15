@@ -19,8 +19,8 @@
 
 ## 1. Owner directives (new)
 
-- [ ] **Desktop app cancelled completely.** Only the Docker/baremetal WebUI service remains. Remove `app/` (PySide6), `installer/`, `requirements/desktop.txt`, `examples/config.desktop.yaml`, desktop build scripts, desktop tests and the desktop CI workflow. Keep the shared config parser the Web service still uses.
-- [ ] **Single requirements + single config.** One `requirements.txt` and one config style for the service; no desktop/server split.
+- [x] **Desktop app cancelled completely.** Only the Docker/baremetal WebUI service remains: removed `app/` (PySide6), `installer/`, `requirements/desktop.txt`, `examples/config.desktop.yaml`, desktop build scripts, desktop tests, the desktop CI workflow, desktop entry modules and pyproject desktop extras. The shared config/state helpers the Web service uses are retained.
+- [x] **Single requirements + single config.** One `requirements.txt` and one `examples/config.yaml` for the service; no desktop/server split.
 - [ ] **Website not maintained here.** `website/` belongs to the original author; remove it from this fork.
 - [ ] **Multiple api_id/api_hash pairs.** Support more than one Telegram API credential set with round-robin/failover strategies across the unified USER transport.
 - [ ] **Regroup and reorganize `scripts/`, `teledrive/`, `web/`, `tests/`.** Analyze each file's role and reorganize cleanly; update every import, CI path and doc reference.
@@ -28,7 +28,7 @@
 ## 2. Verified milestones
 
 - [x] Publish [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7) from `747747652cd1ca36878453d49daf627d8c0a60ad` with Linux and Windows release assets.
-- [x] Validate the bounded REST/S3/desktop storage feature set and 13-gate disposable Docker fault-injection acceptance.
+- [x] Validate the bounded REST/S3 storage feature set and 13-gate disposable Docker fault-injection acceptance (the desktop application was later removed).
 - [x] Exercise real Bot API, user MTProto and multiworker PostgreSQL transfer scenarios against dedicated test Telegram targets.
 - [x] Provide shared REST/S3/local-job object catalog and a single WebUI/REST/S3 Docker container.
 - [x] Implement guarded metadata recovery, owner-verified isolated Telegram rebuild (atomic bounded multi-object batches), and the offline two-person production-evidence verifier.

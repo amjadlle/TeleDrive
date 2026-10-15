@@ -26,7 +26,7 @@ python3 --version
 umask 077
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r requirements/server.txt pytest boto3
+python -m pip install -r requirements.txt pytest boto3
 python -m compileall -q teledrive web app tests
 python -m pytest -q
 docker compose config --quiet

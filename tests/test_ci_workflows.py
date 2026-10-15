@@ -19,7 +19,6 @@ EXPECTED = (
     "quality-security.yml",
     "integration-storage.yml",
     "integration-databases.yml",
-    "integration-desktop.yml",
     "live-telegram-user.yml",
     "live-telegram-multiworker.yml",
     "delivery-release.yml",
@@ -31,7 +30,6 @@ DISPLAY_NAMES = {
     "quality-security.yml": "01 · Quality | Security & Regression",
     "integration-databases.yml": "02 · Integration | Databases",
     "integration-storage.yml": "02 · Integration | REST & S3",
-    "integration-desktop.yml": "02 · Integration | Desktop",
     "resilience-docker.yml": "03 · Resilience | Docker Fault Injection",
     "live-telegram-user.yml": "04 · Live Telegram | User MTProto E2E",
     "live-telegram-multiworker.yml": "04 · Live Telegram | Multiworker PostgreSQL E2E",
@@ -158,16 +156,6 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
                and "tests/test_storage_recovery.py" in s.get("run", "")
                for s in db["steps"])
 
-    desktop = workflow("integration-desktop.yml")["jobs"]["desktop"]
-    assert set(desktop["strategy"]["matrix"]["os"]) == {
-        "ubuntu-latest", "windows-latest"
-    }
-    steps = "\n".join(s.get("run", "") for s in desktop["steps"])
-    assert "tests/test_desktop_ui.py" in steps
-    assert "tests/test_desktop_support.py" in steps
-    assert "scripts/build-linux.sh" in steps
-    assert "scripts/build.ps1" in steps
-
     api = workflow("integration-storage.yml")["jobs"]["storage-api"]
     commands = "\n".join(s.get("run", "") for s in api["steps"])
     for path in ("tests/test_rest_api.py", "tests/test_rest_transfer.py",
@@ -177,7 +165,7 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
 
 
 def test_final_p0_contract_runs_on_every_database_and_desktop_push():
-    for name in ("integration-databases.yml", "integration-desktop.yml", "integration-storage.yml"):
+    for name in ("integration-databases.yml", "integration-storage.yml"):
         rules = workflow(name)["on"]
         for event in ("push", "pull_request"):
             assert event in rules
@@ -192,7 +180,7 @@ def test_final_p0_contract_runs_on_every_database_and_desktop_push():
 
 
 def test_acceptance_report_updates_cannot_skip_required_ci():
-    for name in ("integration-databases.yml", "integration-desktop.yml", "integration-storage.yml"):
+    for name in ("integration-databases.yml", "integration-storage.yml"):
         events = workflow(name)["on"]
         assert "paths" not in events["push"]
         assert "paths" not in events["pull_request"]
@@ -200,7 +188,7 @@ def test_acceptance_report_updates_cannot_skip_required_ci():
 
 
 def test_status_audit_rechecks_every_release_workflow():
-    for name in ("integration-databases.yml", "integration-desktop.yml", "integration-storage.yml"):
+    for name in ("integration-databases.yml", "integration-storage.yml"):
         triggers = workflow(name)["on"]
         for event in ("push", "pull_request"):
             assert "paths" not in triggers[event]
@@ -675,7 +663,7 @@ def test_every_test_file_is_referenced_by_a_real_ci_workflow():
 
 
 def test_critical_ci_is_unfiltered_at_every_commit_sha():
-    for name in ("integration-databases.yml", "integration-desktop.yml", "integration-storage.yml"):
+    for name in ("integration-databases.yml", "integration-storage.yml"):
         events = workflow(name)["on"]
         for trigger in ("push", "pull_request"):
             assert "paths" not in events[trigger]
@@ -821,20 +809,15 @@ def test_canonical_docs_and_generated_release_notes():
 
 def test_explicit_dependencies_and_isolated_docker_build_contexts():
     """Keep desktop GUI out of production API image and keep CI Docker isolated."""
-    desktop = [line.strip().lower() for line in
-               (ROOT / "requirements/desktop.txt").read_text("utf-8").splitlines()
-               if line.strip() and not line.lstrip().startswith("#")]
     server = [line.strip().lower() for line in
-              (ROOT / "requirements/server.txt").read_text("utf-8").splitlines()
+              (ROOT / "requirements.txt").read_text("utf-8").splitlines()
               if line.strip() and not line.lstrip().startswith("#")]
-    assert any(line.startswith("pyside6") for line in desktop)
-    assert not any(line.startswith("fastapi") for line in desktop)
     assert any(line.startswith("fastapi") for line in server)
     assert not any(line.startswith("pyside6") for line in server)
     web = (ROOT / "Dockerfile").read_text("utf-8")
     isolated = (ROOT / ".github/ci/fault-injection/Dockerfile").read_text("utf-8")
     compose = (ROOT / ".github/ci/fault-injection/compose.yml").read_text("utf-8")
-    assert "requirements/server.txt" in web and "requirements/server.txt" in isolated
+    assert "requirements.txt" in web and "requirements.txt" in isolated
     assert "context: ../../.." in compose
     assert "dockerfile: .github/ci/fault-injection/Dockerfile" in compose
     prod_compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text("utf-8"))
@@ -855,13 +838,12 @@ def test_pip_cache_keys_follow_explicit_target_requirements():
     """Renamed manifest paths must be used by setup-python caching too."""
     for workflow_name in (
         "quality-security.yml", "integration-storage.yml",
-        "integration-databases.yml", "integration-desktop.yml",
+        "integration-databases.yml",
         "delivery-release.yml",
     ):
         job = next(iter(workflow(workflow_name)["jobs"].values()))
         setup = next(s for s in job["steps"] if s.get("name") == "Set up Python")
-        expected = ("requirements/desktop.txt" if "desktop" in workflow_name
-                    else "requirements/server.txt")
+        expected = "requirements.txt"
         assert setup["with"]["cache-dependency-path"] == expected
     endurance = workflow("endurance-capacity.yml")
     assert endurance["name"] == "06 · Endurance | Isolated Capacity Soak"

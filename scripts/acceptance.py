@@ -31,7 +31,6 @@ if str(ROOT) not in sys.path:
 REPO = "babico/TeleDrive"
 WORKFLOWS = {
     "user": "04 · Live Telegram | User MTProto E2E",
-    "user": "04 · Live Telegram | User MTProto E2E",
     "multiworker": "04 · Live Telegram | Multiworker PostgreSQL E2E",
 }
 

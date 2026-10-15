@@ -30,7 +30,7 @@ git clone https://github.com/babico/TeleDrive.git
 cd TeleDrive
 mkdir -p config data uploads
 cp .env.example .env
-cp examples/config.docker.yaml config/config.yaml
+cp examples/config.yaml config/config.yaml
 # Set a unique long TELEDRIVE_WEB_PASSWORD and configure credentials securely.
 docker compose up -d --build
 ~~~
