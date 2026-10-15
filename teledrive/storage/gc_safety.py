@@ -34,6 +34,7 @@ class GCReferenceGuard:
     def evidence(self, identifier):
         from teledrive.s3.multipart import parts
         from teledrive.storage.bot_api_adapter import _bot_receipts, _bot_send_intents
+        from teledrive.storage.user_mode import mtproto_send_intents
 
         names = self.validate_schema()
         db = self.db.connection
@@ -80,6 +81,8 @@ class GCReferenceGuard:
                 if "storage_bot_send_intents" in names else [],
             "bot_receipt": refs(_bot_receipts.c.object_id)
                 if "storage_bot_upload_receipts" in names else [],
+            "mtproto_send_intent_or_receipt": refs(mtproto_send_intents.c.object_id)
+                if "storage_mtproto_send_intents" in names else [],
         }
         chunk_journal = [
             (int(n), account, int(chat), int(mid), digest)

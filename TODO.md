@@ -13,6 +13,7 @@
 
 ## 2. Engineering backlog
 
+- [x] Add an optional authenticated USER-MTProto transport for the unified REST/S3/local-job SQL catalog, private-channel-only operation, durable uncertain-send evidence, signed S3 synthetic regression and backward-compatible Bot object read fallback. A live user-mode REST/S3 deployment and original-channel recovery remain operator acceptance tasks.
 - [x] Write a complete [owner-local Docker, independent media backup, restore and GC acceptance mission](docs/LOCAL_AGENT_ACCEPTANCE.md). This checks off the **runbook delivery only**, not operator execution or production authorization.
 - [x] Complete bounded ListParts and ListMultipartUploads with SQL-keyset pagination, genuine metadata fields, delimiter/URL encoding, ownership isolation, boto3 and adversarial tests; promote both documented private S3 contracts after CI.
 - [x] Test non-destructive GC SQL graph guards (including removed versions and writer fences) and real test-channel history inventory automatically in CI.

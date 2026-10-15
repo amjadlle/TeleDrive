@@ -2,7 +2,7 @@
 
 **Telegram-backed personal file storage and automation** with a single-container Web UI/REST/S3 service, a Windows/Linux desktop application, and a command-line uploader.
 
-TeleDrive stores object payloads in Telegram and keeps object metadata, upload state, and references in a local or external SQL database. This fork supports multiple Telegram accounts for the original folder uploader and a Bot-backed, shared object catalog for REST, S3, and durable local-file jobs.
+TeleDrive stores object payloads in Telegram and keeps object metadata, upload state, and references in a local or external SQL database. This fork supports multiple Telegram accounts for the original folder uploader and a unified Bot API or user-MTProto-backed object catalog for REST, S3, and durable local-file jobs.
 
 > **Security:** ordinary Telegram cloud chats and Saved Messages are **not end-to-end encrypted**. Encrypt sensitive content before uploading if it must be confidential from Telegram.
 >
@@ -26,7 +26,7 @@ TeleDrive stores object payloads in Telegram and keeps object metadata, upload s
 
 ## 1. Quick start: Docker
 
-Prerequisites: Docker Engine, Docker Compose v2 and a Telegram account for the legacy uploader. For REST/S3 object storage, additionally configure a Bot with posting permission in a dedicated private Telegram channel.
+Prerequisites: Docker Engine and Docker Compose v2. For modern REST/S3 storage use an owner-authorized Telethon USER session (recommended for channel history recovery) or retain the Bot API mode for existing deployments. Either mode needs access to a dedicated private Telegram broadcast channel; Saved Messages are not a supported unified storage target.
 
 ~~~bash
 git clone https://github.com/babico/TeleDrive.git
@@ -62,7 +62,7 @@ Ports bind to loopback by default (`TELEDRIVE_BIND_ADDRESS=127.0.0.1`). For remo
 
 To use a different source directory, change the host side of the `/uploads` mount, retaining the container-side path and read-only mode. The image has no GUI/X11/PySide6 dependency.
 
-**Configure S3 before writing:** the gateway listener starts automatically, but writing S3 objects requires Telegram Bot credentials, a persistent encryption key and scoped S3 credentials. See [Section 4](#4-s3-compatible-api).
+**Configure S3 before writing:** the gateway listener starts automatically, but writing S3 objects requires configured user MTProto or Bot credentials, a persistent encryption key and scoped S3 credentials. See [Section 4](#4-s3-compatible-api).
 
 ## 2. Storage architecture
 
@@ -70,9 +70,9 @@ To use a different source directory, change the host side of the `/uploads` moun
 
 | Entry point | How it writes | Can REST/S3 read it? |
 | --- | --- | --- |
-| REST `PUT /api/v1/buckets/{bucket}/content` | Bot API → `TelegramObjectStorage` → `BucketCatalog` | **Yes** |
+| REST `PUT /api/v1/buckets/{bucket}/content` | Selected Telegram transport → `TelegramObjectStorage` → `BucketCatalog` | **Yes** |
 | Signed S3 `PutObject` / multipart upload | Same Telegram chunk engine and SQL catalog | **Yes** |
-| Authenticated local-file upload job | Explicit queued file → same Bot-backed object catalog | **Yes**, after the job finishes |
+| Authenticated local-file upload job | Explicit queued file → same shared object catalog | **Yes**, after the job finishes |
 | Original Telethon folder scan/batch | User-session uploader and its legacy workflow | **Not automatically**; use the shared-job path for REST/S3 visibility |
 
 The SQL catalog stores object heads, generations, checksums, version references, job state and encrypted S3 credential metadata. Object payloads remain in Telegram; the temporary upload scratch directory is **not** a second primary storage backend. Completed transfers have SHA-256 checks and byte-range reads. Failed/unknown Telegram acknowledgments remain protected from unsafe physical deletion.
@@ -88,9 +88,9 @@ The original uploader accepts Telegram user accounts through MTProto/Telethon; a
 | `failover` | Try configured accounts in priority order |
 | `parallel` | Independent account-affine workers with fallback |
 
-**Saved Messages belong to each user account separately.** Use a shared private channel if all uploader accounts must target the same destination. Respect Telegram rate limits; never share a writable Telethon session file across independent worker processes.
+**Unified storage never uses Saved Messages**: select a private broadcast channel that the Telethon user can post to, or a channel administered by the Bot. The unrelated original uploader still has historical `me` configuration support; do not enable it in the shared service. Respect Telegram rate limits; do not reuse a writable Telethon session file across independent uploader processes.
 
-The **REST/S3 shared object service uses the Telegram Bot API**, not a Telethon user login. It requires a Bot token and numeric private channel ID. The official hosted Bot API limits file downloads to 20 MiB per Telegram file, so the object engine uses bounded Telegram chunks (normally 16 MiB) for larger objects. These are two supported transport modes with different access/recovery constraints; they must not be conflated.
+The **REST/S3 shared object service supports `TELEDRIVE_STORAGE_TRANSPORT=telethon` (authenticated user MTProto, recommended for new owner-controlled deployments) or `bot` (backward-compatible default when the setting is absent)**. Both use one SQL catalogue and the same 16 MiB chunk engine. With an authorized user session, channel message-history inspection and marker recovery are possible; the bot still cannot enumerate arbitrary channel history. Historical `api-bot` chunks also remain readable **without the Bot token** when the authorized user can read the **same original channel** and the SQL manifest retains the original chat/message IDs. For other Bot channels, original Bot credentials plus file-ID metadata remain necessary. Switching modes does not migrate existing bytes or make missing history mappings magically recoverable.
 
 ## 3. REST API
 
@@ -123,7 +123,7 @@ curl -f -H "Authorization: Bearer $TELEDRIVE_API_KEY" \
   -o restored.bin
 ~~~
 
-The default REST upload ceiling is 2 GiB, configurable with `TELEDRIVE_REST_MAX_UPLOAD_BYTES`. Uploads require the configured Telegram storage Bot and permitted private channel. Physical Telegram message deletion is **not** implied by an HTTP object delete.
+The default REST upload ceiling is 2 GiB, configurable with `TELEDRIVE_REST_MAX_UPLOAD_BYTES`. Uploads require either the configured authorized user session or the storage Bot, both with access to a dedicated private channel. Physical Telegram message deletion is **not** implied by an HTTP object delete.
 
 ## 4. S3-compatible API
 
@@ -133,7 +133,18 @@ The S3 endpoint is **part of the default container**, not a separate Compose pro
 
 ### Provision the S3 master key and credentials
 
-1. Set `TELEDRIVE_STORAGE_BOT_TOKEN` and `TELEDRIVE_STORAGE_BOT_CHAT_ID` in the private `.env` file. Add the Bot as an admin with posting rights in the dedicated private Telegram channel.
+An account holder creates the user StringSession **once** on a trusted interactive host (no credentials are written to Git). The server then reconnects automatically under that real user authorization:
+
+~~~bash
+# Set TELEDRIVE_STORAGE_MTPROTO_API_ID and TELEDRIVE_STORAGE_MTPROTO_API_HASH
+# privately in the shell before running this command.
+python scripts/create_storage_user_session.py --output config/mtproto-user.session
+chmod 600 config/mtproto-user.session
+~~~
+
+The API ID/hash are from [my.telegram.org](https://my.telegram.org/apps). The script prompts for the real user's Telegram sign-in code and optional 2FA and refuses to overwrite an existing session. Its MTProto application/device metadata identifies the TeleDrive client accurately; it does **not** masquerade as an official Telegram Desktop/Android app. Choose a channel username or a numeric channel ID present in this user's dialogs. If selecting a numeric private channel, it must be visible among the user's first 5,000 dialogs. No user account => no user-only history access.
+
+1. For new installations, set `TELEDRIVE_STORAGE_TRANSPORT=telethon` and `TELEDRIVE_STORAGE_MTPROTO_API_ID`, `TELEDRIVE_STORAGE_MTPROTO_API_HASH`, `TELEDRIVE_STORAGE_MTPROTO_CHANNEL` in the private `.env`. Save an authorized user StringSession in `./config/mtproto-user.session` (mode 0600) using the interactive command below. The user must have posting rights in that private **broadcast channel**, not Saved Messages. For existing Bot installations use `TELEDRIVE_STORAGE_TRANSPORT=bot` and keep `TELEDRIVE_STORAGE_BOT_TOKEN`/`TELEDRIVE_STORAGE_BOT_CHAT_ID` instead.
 2. Generate a persistent master encryption key once, on the trusted host:
 
 ~~~bash
@@ -256,7 +267,7 @@ python -m teledrive.uploader --config local-config.yaml --scan-only
 python -m teledrive.uploader --config local-config.yaml --run-once
 ~~~
 
-WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. The original direct-send legacy scanner uses a distinct upload path from the REST/S3 catalog. For **unified ingestion in the existing single container**, first create a bucket, disable legacy `app.auto_run`, place the configured `upload.source_dir` under the read-only `/uploads` mount, and opt in with `TELEDRIVE_JOB_LEGACY_AUTO_BUCKET=<bucket>` in `.env`. Optional `TELEDRIVE_JOB_LEGACY_AUTO_PREFIX` and `TELEDRIVE_JOB_LEGACY_AUTO_LIMIT` bound the queue. The scheduler uses the shared SQL catalog, fenced legacy scan, durable Bot transport and existing WebUI/REST/S3 service; it never starts the old Telethon direct-send path. The bucket setting is **empty by default** to prevent unintended source scanning or live-data migration. Never run both upload modes on the same source concurrently.
+WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. The original direct-send legacy scanner uses a distinct upload path from the REST/S3 catalog. For **unified ingestion in the existing single container**, first create a bucket, disable legacy `app.auto_run`, place the configured `upload.source_dir` under the read-only `/uploads` mount, and opt in with `TELEDRIVE_JOB_LEGACY_AUTO_BUCKET=<bucket>` in `.env`. Optional `TELEDRIVE_JOB_LEGACY_AUTO_PREFIX` and `TELEDRIVE_JOB_LEGACY_AUTO_LIMIT` bound the queue. The scheduler uses the shared SQL catalog, fenced legacy scan, selected durable Telegram transport and existing WebUI/REST/S3 service; it never starts the old Telethon direct-send path. The bucket setting is **empty by default** to prevent unintended source scanning or live-data migration. Never run both upload modes on the same source concurrently.
 
 ### Telegram account setup
 
@@ -265,7 +276,7 @@ WebUI automation is configured through **Settings → Automation**. Do not launc
 3. Authenticate with the Telegram code and, if enabled, 2FA password.
 4. Test a small scan/upload and confirm readback before enabling scheduling.
 
-A BotFather token is **not** required for the legacy user-account uploader; it **is** required for the REST/S3 object service. Never put account sessions, API hashes or Bot tokens in committed configuration.
+A BotFather token is not required in Telethon USER storage mode; it is needed for Bot storage mode or reading previously uploaded Bot-backed objects. Never put account sessions, API hashes or Bot tokens in committed configuration.
 
 ## 7. Database configuration
 

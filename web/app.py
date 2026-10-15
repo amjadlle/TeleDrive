@@ -39,6 +39,10 @@ from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.bot_api_adapter import (
     BotApiClient, BotApiChunkTransport, BotFileIndex, BOT_RECOMMENDED_CHUNK_SIZE,
 )
+from teledrive.storage.user_mode import (
+    UserSessionRuntime, UserSendJournal, UnifiedUserTransport, transport_mode,
+)
+mtproto_storage_runtime = UserSessionRuntime()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("TELEDRIVE_CONFIG", "/config/config.yaml"))
@@ -521,6 +525,8 @@ async def lifespan(_: FastAPI):
     if WEB_PASSWORD and len(WEB_PASSWORD) < 16:
         raise RuntimeError("TELEDRIVE_WEB_PASSWORD must be at least 16 characters")
     ensure_config()
+    if transport_mode() == "telethon":
+        await mtproto_storage_runtime.start()
     try:
         conn = db_connect()
         conn.close()
@@ -539,6 +545,7 @@ async def lifespan(_: FastAPI):
         lifecycle_scheduler_task.cancel()
         await asyncio.gather(lifecycle_scheduler_task, return_exceptions=True)
     await stop_uploader()
+    await mtproto_storage_runtime.stop()
 
 
 app = FastAPI(
@@ -678,18 +685,29 @@ class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
 def storage_bot_transport(conn):
-    """Bot API is an optional Telegram transport for REST object transfers."""
+    """Shared REST/S3/job transport; keep this name for existing integrations."""
     token = os.environ.get("TELEDRIVE_STORAGE_BOT_TOKEN", "").strip()
     chat_raw = os.environ.get("TELEDRIVE_STORAGE_BOT_CHAT_ID", "").strip()
-    if not token or not chat_raw:
+    bot = None
+    if token and chat_raw:
+        try:
+            bot = BotApiChunkTransport(
+                BotApiClient(token), BotFileIndex(conn), chat_id=int(chat_raw),
+                account="api-bot",
+            )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(503, "Telegram Bot storage configuration invalid") from exc
+    if transport_mode() == "telethon":
+        try:
+            mtproto_storage_runtime.require()
+            return UnifiedUserTransport(
+                mtproto_storage_runtime, UserSendJournal(conn), bot,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(503, "Telegram user storage session not ready") from exc
+    if bot is None:
         raise HTTPException(503, "REST object transfer requires Telegram Bot credentials")
-    try:
-        chat_id = int(chat_raw)
-        client = BotApiClient(token)
-        return BotApiChunkTransport(client, BotFileIndex(conn), chat_id=chat_id,
-                                    account="api-bot")
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(503, "Telegram Bot storage configuration is invalid") from exc
+    return bot
 
 
 def _byte_range(value: str | None, size: int) -> tuple[int, int, bool]:

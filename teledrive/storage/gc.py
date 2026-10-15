@@ -212,6 +212,27 @@ class StorageGCInventory:
                 )).where(chunks.c.object_id.is_(None))
             ).scalar_one())
 
+        # Count USER-MTProto unknown ACKs/receipts as protected remote assets.
+        if inspector.has_table("storage_mtproto_send_intents"):
+            from teledrive.storage.user_mode import mtproto_send_intents
+            unresolved_bot_intents += int(connection.execute(
+                select(func.count()).select_from(mtproto_send_intents).where(
+                    mtproto_send_intents.c.message_id.is_(None)
+                )
+            ).scalar_one())
+            unjournaled_bot_receipts += int(connection.execute(
+                select(func.count()).select_from(
+                    mtproto_send_intents.outerjoin(chunks, and_(
+                        chunks.c.account == mtproto_send_intents.c.account,
+                        chunks.c.chat_id == mtproto_send_intents.c.chat_id,
+                        chunks.c.message_id == mtproto_send_intents.c.message_id,
+                    ))
+                ).where(
+                    mtproto_send_intents.c.message_id.is_not(None),
+                    chunks.c.object_id.is_(None),
+                )
+            ).scalar_one())
+
         # Roots with no current refs can still be historical versions; do not
         # interpret this report as an approved deletion plan.
         audits = tuple(

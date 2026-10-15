@@ -133,6 +133,8 @@ For feature status and production release boundaries, see [Project Status](IMPLE
 
 **S3 P2-0 selector gate:** `tests/test_s3_route_guard.py` is mandatory in both Quality and REST/S3 workflow regressions. It verifies 116/116 operation statuses in the machine-readable inventory against `docs/S3_SPECS.md` and rejects unrecognized signed bucket/object selectors without exposing or mutating data.
 
+**User MTProto unified transport:** `tests/test_storage_user_mode.py` checks signed S3 user-MTProto write/readback, old Bot-object fallback, unknown-ACK SQL fencing, owner isolation and fail-closed transport selection. The ASGI user session has its own encrypted secret handling outside the repository; separate real user E2E tests exercise account/chunk behavior but do not prove live REST/S3 user-mode deployment. Do not use a bot MTProto session to claim `getHistory` support.
+
 **Multipart listing parity:** `tests/test_s3_multipart.py` verifies scoped SQL-bounded ListParts/ListMultipartUploads cursors, sparse/replaced part metadata, timestamps, grouping, URL encoding, invalid requests and actual boto3 over live HTTP. These are developer/test-channel gates; physical GC, recovery and owner sign-off use [Local Agent Acceptance](LOCAL_AGENT_ACCEPTANCE.md).
 
 **ListBuckets pagination contract:** `tests/test_s3_bucket_listing.py` exercises SigV4/boto3 end-to-end, SQL creation dates, 1–10,000 page bounds, prefix and region filters, cursor integrity and credential scoping. Quality and REST/S3 workflows both require it.

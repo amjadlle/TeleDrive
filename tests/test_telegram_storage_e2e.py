@@ -347,3 +347,85 @@ def test_live_telethon_large_payload_chunk_boundaries_and_remote_restore(size):
                     await client.disconnect()
                     db.close()
     asyncio.run(scenario())
+
+
+def test_live_user_session_unified_transport_and_history_marker(monkeypatch):
+    """Real owner-authorized USER session: unified engine and read-only history.
+
+    This test uses the dedicated CI channel only and removes only the message
+    uploaded by its own fixture. It never touches production Telegram media.
+    """
+    api_id = os.getenv("TELEDRIVE_E2E_API_ID", "")
+    api_hash = os.getenv("TELEDRIVE_E2E_API_HASH", "")
+    session = os.getenv("TELEDRIVE_E2E_SESSION", "")
+    if not all((api_id, api_hash, session)):
+        pytest.skip("Dedicated user Telegram E2E session is not configured")
+
+    from teledrive.storage.user_mode import (
+        UserSessionRuntime, UserSendJournal, UnifiedUserTransport,
+    )
+    from teledrive.storage.history_inventory import inventory_channel
+    from teledrive.storage.gc_safety import GCReferenceGuard
+
+    async def scenario():
+        with tempfile.TemporaryDirectory(prefix="teledrive-user-transport-") as folder:
+            root = Path(folder)
+            session_file = root / "mtproto-user.session"
+            session_file.write_text(session + "\n", encoding="ascii")
+            session_file.chmod(0o600)
+            # Resolve the channel with the same trusted, preauthorized user.
+            resolver = TelegramClient(StringSession(session), int(api_id), api_hash)
+            await resolver.connect()
+            try:
+                target = await resolve_telegram_target(
+                    resolver, os.getenv("TELEDRIVE_E2E_TARGET"),
+                    os.getenv("TELEDRIVE_E2E_CHANNEL_NAME"),
+                )
+                channel_id = int(await resolver.get_peer_id(target))
+            finally:
+                await resolver.disconnect()
+            monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
+            monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_API_ID", api_id)
+            monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_API_HASH", api_hash)
+            monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_CHANNEL", str(channel_id))
+            monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE", str(session_file))
+            runtime = UserSessionRuntime()
+            await runtime.start()
+            db = connect_database(str(root / "isolated.db"))
+            published = []
+            try:
+                content = os.urandom(4221)
+                source = root / "source.bin"
+                source.write_bytes(content)
+                backend = TelegramObjectStorage(
+                    ManifestStore(db),
+                    UnifiedUserTransport(runtime, UserSendJournal(db)),
+                    chunk_size=8192,
+                )
+                item = await backend.put_file("ci", "unified-user-test", source)
+                published = backend.manifests.parts(item.id)
+                source.unlink()
+                output = root / "verified.bin"
+                await backend.download_to_path(item.id, output)
+                assert output.read_bytes() == content
+                report = await inventory_channel(
+                    runtime.client,
+                    runtime.transport.accounts[runtime.account][1],
+                    account=runtime.account, scan_limit=100,
+                )
+                assert any(
+                    obj["object_id"] == item.id
+                    for obj in report["candidate_objects"]
+                )
+                safety = GCReferenceGuard(backend.manifests).evidence(item.id)
+                assert not safety["deletion_permitted"]
+                assert "mtproto_send_intent_or_receipt" in safety["reference_blockers"]
+            finally:
+                for part in published:
+                    await runtime.client.delete_messages(
+                        runtime.transport.accounts[runtime.account][1],
+                        [part.message_id],
+                    )
+                db.close()
+                await runtime.stop()
+    asyncio.run(scenario())
