@@ -46,9 +46,9 @@ Docker integration jobs install the tools and database services they need inside
 ### One-command Docker fault-injection acceptance
 
 ~~~bash
-bash scripts/run_docker_fault_injection.sh
+bash scripts/dev/run_docker_fault_injection.sh
 # Optional interactive operator wrapper:
-python scripts/acceptance.py
+python scripts/ops/acceptance.py
 ~~~
 
 **Purpose:** development acceptance, not a simulated production cutover. The runner creates a randomly named, isolated Compose project with **PostgreSQL 17, two TeleDrive Web containers, and a fault-scenario container** using actual SQLAlchemy and `TelegramObjectStorage`. The Telegram side is persistent, disk-backed synthetic media. Test credentials, a deployed production instance, an original Telegram account and a legacy folder are **not required**.
@@ -109,7 +109,7 @@ An actual PASS requires the complete four-stage evidence and `stages.acceptance.
 
 - The USER MTProto shared flood-wait cooldown must be preceded by `reserve_send_slot`; tests cannot bypass send fencing to manufacture a passing flood observation.
 - The Web `/api/health` endpoint alone does not validate full configuration; fault tests use the actual `load_config` parser, including `sleep_min_seconds`, `sleep_max_seconds`, `max_files_per_run` and `max_files_per_day`.
-- `tests/test_unified_service.py` verifies REST-to-S3, S3-to-REST, local-job-to-S3 data visibility and the shared generation/catalog. The Security workflow checks both listeners **inside one container**.
+- `tests/web/test_unified_service.py` verifies REST-to-S3, S3-to-REST, local-job-to-S3 data visibility and the shared generation/catalog. The Security workflow checks both listeners **inside one container**.
 - Live User and Multiworker E2E are distinct from synthetic fault tests. A generated flood observation is not a measured production rate limit.
 - Normal Security and Storage CI run adversarial GC reference-graph tests. The live User MTProto E2E job creates one owned Telegram marker fixture, validates bounded read-only history inventory, reconciles independently known marker coordinates, creates a fresh isolated catalog after full byte/SHA verification, then cleans up only its own fixture. This does not exercise production garbage collection.
 - Offline marker inventory and independent-plan reconciliation tests cover bounded Telegram history reads, forged/non-media messages, scan truncation, duplicate ordinals and private non-overwriting reports; discovery is not a recovery plan or full historic inventory.
@@ -122,18 +122,18 @@ An actual PASS requires the complete four-stage evidence and `stages.acceptance.
 | [`.github/workflows/`](../.github/workflows/) | GitHub Actions YAML definitions |
 | [`.github/ci/fault-injection/`](../.github/ci/fault-injection/) | Test-only Dockerfile, ignore rules and Compose project |
 | [`docker-compose.yml`](../docker-compose.yml) | **One-container** default WebUI/REST/S3 deployment |
-| [`scripts/run_docker_fault_injection.sh`](../scripts/run_docker_fault_injection.sh) | Fault test entrypoint |
-| [`scripts/docker_fault_scenarios.py`](../scripts/docker_fault_scenarios.py) | Synthetic fault scenarios and evidence |
+| [`scripts/dev/run_docker_fault_injection.sh`](../scripts/dev/run_docker_fault_injection.sh) | Fault test entrypoint |
+| [`scripts/dev/docker_fault_scenarios.py`](../scripts/dev/docker_fault_scenarios.py) | Synthetic fault scenarios and evidence |
 | [`requirements.txt`](../requirements.txt) | API/runtime dependencies |
 
 For feature status and production release boundaries, see [Project Status](IMPLEMENTATION_STATUS.md). For actual database backups and restore procedures, see [Backup and Restore](BACKUP_RESTORE.md). For security reporting, see [Security Policy](SECURITY.md).
 
-**S3 P2-0 selector gate:** `tests/test_s3_route_guard.py` is mandatory in both Quality and REST/S3 workflow regressions. It verifies 116/116 operation statuses in the machine-readable inventory against `docs/S3_SPECS.md` and rejects unrecognized signed bucket/object selectors without exposing or mutating data.
+**S3 P2-0 selector gate:** `tests/s3/test_s3_route_guard.py` is mandatory in both Quality and REST/S3 workflow regressions. It verifies 116/116 operation statuses in the machine-readable inventory against `docs/S3_SPECS.md` and rejects unrecognized signed bucket/object selectors without exposing or mutating data.
 
 **Unified transport policy:** Live REST/S3/local-job I/O is USER MTProto only; there is no Bot API transport. The delivery workflow automatically prunes proven merged, unchanged and unprotected PR branches.
 
-**User MTProto unified transport:** `tests/test_storage_user_mode.py` checks signed S3 user-MTProto write/readback, same-channel legacy Bot-media read without any Bot fallback, unknown-ACK SQL fencing, owner isolation and fail-closed transport selection. The ASGI user session has its own encrypted secret handling outside the repository; separate real user E2E tests exercise account/chunk behavior but do not prove live REST/S3 user-mode deployment. Only an authorized USER session supports channel-history enumeration.
+**User MTProto unified transport:** `tests/storage/test_storage_user_mode.py` checks signed S3 user-MTProto write/readback, same-channel legacy Bot-media read without any Bot fallback, unknown-ACK SQL fencing, owner isolation and fail-closed transport selection. The ASGI user session has its own encrypted secret handling outside the repository; separate real user E2E tests exercise account/chunk behavior but do not prove live REST/S3 user-mode deployment. Only an authorized USER session supports channel-history enumeration.
 
-**Multipart listing parity:** `tests/test_s3_multipart.py` verifies scoped SQL-bounded ListParts/ListMultipartUploads cursors, sparse/replaced part metadata, timestamps, grouping, URL encoding, invalid requests and actual boto3 over live HTTP. These are developer/test-channel gates; physical GC, recovery and owner sign-off use [Local Agent Acceptance](LOCAL_AGENT_ACCEPTANCE.md).
+**Multipart listing parity:** `tests/s3/test_s3_multipart.py` verifies scoped SQL-bounded ListParts/ListMultipartUploads cursors, sparse/replaced part metadata, timestamps, grouping, URL encoding, invalid requests and actual boto3 over live HTTP. These are developer/test-channel gates; physical GC, recovery and owner sign-off use [Local Agent Acceptance](LOCAL_AGENT_ACCEPTANCE.md).
 
-**ListBuckets pagination contract:** `tests/test_s3_bucket_listing.py` exercises SigV4/boto3 end-to-end, SQL creation dates, 1–10,000 page bounds, prefix and region filters, cursor integrity and credential scoping. Quality and REST/S3 workflows both require it.
+**ListBuckets pagination contract:** `tests/s3/test_s3_bucket_listing.py` exercises SigV4/boto3 end-to-end, SQL creation dates, 1–10,000 page bounds, prefix and region filters, cursor integrity and credential scoping. Quality and REST/S3 workflows both require it.

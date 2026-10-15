@@ -21,7 +21,7 @@ docker compose config --quiet
 Run the dedicated [Docker fault-injection acceptance](docs/CI_WORKFLOWS.md) when changing upload durability, SQL state, scheduler behavior, recovery or container wiring:
 
 ~~~bash
-bash scripts/run_docker_fault_injection.sh
+bash scripts/dev/run_docker_fault_injection.sh
 ~~~
 
 For the command-line uploader, use the existing test suite and the [Docker fault-injection acceptance](docs/CI_WORKFLOWS.md) above.

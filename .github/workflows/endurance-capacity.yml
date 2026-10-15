@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           if ! [[ "$REQUEST_MINUTES" =~ ^[0-9]{1,3}$ ]]; then exit 2; fi
           if (( 10#$REQUEST_MINUTES < 60 || 10#$REQUEST_MINUTES > 110 )); then exit 2; fi
-          python scripts/capacity_probe.py \
+          python scripts/ops/capacity_probe.py \
             --duration-seconds "$((10#$REQUEST_MINUTES * 60))" \
             --object-bytes 65536 \
             --output "$RUNNER_TEMP/capacity-evidence.json"
