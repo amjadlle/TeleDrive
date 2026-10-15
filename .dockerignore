@@ -9,7 +9,6 @@ dist
 build
 
 # Keep the runtime image context minimal
-website/
 app/
 scripts/
 installer/

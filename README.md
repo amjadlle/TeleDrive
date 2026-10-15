@@ -281,15 +281,6 @@ For additional reviewed packages, set `TELEDRIVE_DB_EXTRA_PACKAGES` in `.env` an
 
 ## 9. Development and testing
 
-The standalone Astro marketing site under [`website/`](website/) is **not** the Docker administration UI:
-
-~~~bash
-cd website
-npm ci
-npm run dev
-npm run build
-~~~
-
 Repository layout:
 
 | Directory | Purpose |
@@ -301,7 +292,6 @@ Repository layout:
 | `tests/` | Offline regression, integration and live test contracts |
 | `.github/workflows/` | Categorized GitHub Actions pipelines |
 | `.github/ci/` | Workflow-specific supporting Docker assets |
-| `website/` | Marketing website |
 
 ~~~bash
 python -m pip install -r requirements.txt pytest
