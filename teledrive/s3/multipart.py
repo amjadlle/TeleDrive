@@ -70,6 +70,17 @@ multipart_etags = Table(
     Column("object_id", String(36), primary_key=True),
     Column("etag", String(128), nullable=False),
 )
+# Additive immutable snapshot. Completion publishes this in the SAME SQL
+# transaction as the final manifest, multipart ETag, and catalog head.
+# Never derive logical S3 part numbers from physical Telegram chunks.
+multipart_object_parts = Table(
+    "storage_multipart_object_parts", _meta,
+    Column("object_id", String(36), primary_key=True),
+    Column("number", Integer, primary_key=True),
+    Column("size", BigInteger, nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("etag", String(64), nullable=False),
+)
 
 
 class MultipartError(ValueError):
@@ -396,6 +407,7 @@ class MultipartStore:
                 select(parts).where(parts.c.upload_id == identifier)
             ).all()}
             chosen = []
+            chosen_hashes: list[str] = []
             total_size = 0
             full_sha = hashlib.sha256()
             etag_md5 = hashlib.md5(usedforsecurity=False)
@@ -405,16 +417,22 @@ class MultipartStore:
                     raise MultipartError("InvalidPart", "Missing part or mismatched ETag")
                 if index < len(selected) - 1 and part.size < MIN_PART_SIZE:
                     raise MultipartError("EntityTooSmall", "All parts except the last must be at least 5 MiB")
-                # Re-read Telegram rather than trusting unverified SQL metadata.
+                # Read real Telegram bytes, checking each immutable part digest
+                # as well as the final concatenated plaintext SHA-256.
+                source_manifest = self.manifests.get(part.object_id)
                 measured = 0
+                part_sha = hashlib.sha256()
                 async for block in engine.iter_bytes(part.object_id):
                     measured += len(block)
+                    part_sha.update(block)
                     full_sha.update(block)
-                if measured != part.size:
-                    raise MultipartError("InvalidPart", "Part size changed")
+                if (measured != part.size or source_manifest.size != part.size
+                        or part_sha.hexdigest() != source_manifest.sha256):
+                    raise MultipartError("InvalidPart", "Part size or SHA-256 changed")
                 total_size += part.size
                 etag_md5.update(bytes.fromhex(etag))
                 chosen.append(part)
+                chosen_hashes.append(source_manifest.sha256)
             # Stop background DB writes before the publication transaction.
             stop.set()
             await renewal
@@ -471,6 +489,16 @@ class MultipartStore:
                 self.db.connection.execute(insert(multipart_etags).values(
                     object_id=object_id, etag=final_etag,
                 ))
+                # Publish the selected logical multipart layout atomically.
+                # A discarded/replaced upload part is never exposed by this
+                # object's attributes or historical VersionId.
+                for (number, etag), part, part_sha in zip(
+                    selected, chosen, chosen_hashes, strict=True
+                ):
+                    self.db.connection.execute(insert(multipart_object_parts).values(
+                        object_id=object_id, number=number, size=part.size,
+                        sha256=part_sha, etag=etag,
+                    ))
                 # Metadata set at CreateMultipartUpload becomes immutable
                 # metadata on the newly published version, not on parts.
                 ObjectMetadataStore(self.catalog).attach_upload_uncommitted(
@@ -543,6 +571,99 @@ class MultipartStore:
         finally:
             stop.set()
             await renewal
+
+    def object_parts_for_version(
+        self, object_id: str, object_size: int
+    ) -> list[tuple[int, int, str, str]] | None:
+        """Return the immutable S3 layout, or None for a non-multipart object.
+
+        Old completed uploads are read through their original SQL completion
+        journal; no destructive backfill and no Telegram I/O are needed.
+        Aliased server-side copies resolve their verified original payload.
+        Missing/inconsistent records fail closed rather than emitting a
+        plausible but false ObjectParts success response.
+        """
+        tag = self.db.connection.execute(select(multipart_etags.c.etag).where(
+            multipart_etags.c.object_id == object_id
+        )).scalar_one_or_none()
+        if tag is None:
+            return None
+        match = re.fullmatch(r"[0-9a-f]{32}-([0-9]+)", tag)
+        if match is None:
+            raise MultipartError("InvalidObjectState", "Invalid multipart ETag record", 409)
+        count = int(match.group(1))
+        if count < 1 or count > MAX_PARTS:
+            raise MultipartError("InvalidObjectState", "Invalid multipart part count", 409)
+
+        content_id = self.manifests.resolve_content_id(object_id)
+        content = self.manifests.get(content_id)
+        target = self.manifests.get(object_id)
+        if (content.size != target.size or content.sha256 != target.sha256
+                or target.size != object_size):
+            raise MultipartError("InvalidObjectState", "Copied multipart manifest mismatch", 409)
+
+        def saved(identifier: str) -> list[tuple[int, int, str, str]]:
+            rows = self.db.connection.execute(select(
+                multipart_object_parts.c.number,
+                multipart_object_parts.c.size,
+                multipart_object_parts.c.sha256,
+                multipart_object_parts.c.etag,
+            ).where(
+                multipart_object_parts.c.object_id == identifier
+            ).order_by(multipart_object_parts.c.number)).all()
+            return [(int(row[0]), int(row[1]), str(row[2]), str(row[3]))
+                    for row in rows]
+
+        layout = saved(object_id)
+        if not layout and content_id != object_id:
+            layout = saved(content_id)
+        if not layout:
+            # Compatibility for multipart versions committed before the
+            # additive object-parts snapshot table was deployed. A completed
+            # journal binds this source object ID, not the current HEAD.
+            rows = self.db.connection.execute(
+                select(
+                    completion_parts.c.number, parts.c.size,
+                    objects.c.sha256, completion_parts.c.etag, parts.c.etag,
+                ).select_from(
+                    completion_parts.join(
+                        uploads, uploads.c.id == completion_parts.c.upload_id,
+                    ).join(
+                        parts, and_(
+                            parts.c.upload_id == completion_parts.c.upload_id,
+                            parts.c.number == completion_parts.c.number,
+                        ),
+                    ).join(objects, objects.c.id == parts.c.object_id)
+                ).where(
+                    uploads.c.completed_object_id == content_id,
+                    uploads.c.state == "completed",
+                ).order_by(completion_parts.c.position)
+            ).all()
+            if any(row[3] != row[4] for row in rows):
+                raise MultipartError("InvalidObjectState", "Legacy multipart ETag mismatch", 409)
+            layout = [(int(r[0]), int(r[1]), str(r[2]), str(r[3])) for r in rows]
+
+        if len(layout) != count or sum(p[1] for p in layout) != object_size:
+            raise MultipartError("InvalidObjectState", "Multipart snapshot is incomplete", 409)
+        previous = 0
+        for number, size, digest, etag in layout:
+            if (number <= previous or number > MAX_PARTS or size < 0
+                    or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                    or not re.fullmatch(r"[0-9a-f]{32}", etag)):
+                raise MultipartError("InvalidObjectState", "Invalid immutable multipart part", 409)
+            previous = number
+        return layout
+
+    def snapshot_copy_parts(
+        self, source_id: str, destination_id: str, source_size: int
+    ) -> None:
+        """Clone logical part metadata, never Telegram messages, in COPY's txn."""
+        layout = self.object_parts_for_version(source_id, source_size)
+        for number, size, digest, etag in layout or ():
+            self.db.connection.execute(insert(multipart_object_parts).values(
+                object_id=destination_id, number=number, size=size,
+                sha256=digest, etag=etag,
+            ))
 
     def object_etag(self, object_id: str, default_sha256: str) -> str:
         etag = self.db.connection.execute(select(multipart_etags.c.etag).where(

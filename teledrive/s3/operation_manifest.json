@@ -76,7 +76,7 @@
     },
     {
       "name": "GetObjectAttributes",
-      "status": "partial",
+      "status": "supported",
       "workstream": "implemented"
     },
     {

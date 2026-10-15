@@ -183,7 +183,7 @@ assert client.get_object(Bucket="backup-bucket", Key="hello.txt")["Body"].read()
 | Buckets and listing | Create/Head/DeleteBucket; V1/V2 object listing, prefixes, delimiters, marker/continuation and URL encoding |
 | Objects | Put/Get/Head/Delete (logical unlink), Range, CopyObject, conditional GET/HEAD and signed conditional writes/deletes |
 | Multipart | UploadPart, Complete/Abort and guarded stale-completion recovery through an admin-only API |
-| Metadata and versions | Selected published VersionId reads/listing, always-Enabled versioning, fixed private-only Public Access Block and incomplete-MPU lifecycle abort rules, object/bucket tags, metadata, CopySource, CORS and bounded GetObjectAttributes (`ETag`, `ObjectSize`, immutable full-object SHA-256 `Checksum`, `STANDARD` storage class and published historical `VersionId`; no `ObjectParts`) |
+| Metadata and versions | Selected published VersionId reads/listing, always-Enabled versioning, fixed private-only Public Access Block and incomplete-MPU lifecycle abort rules, object/bucket tags, metadata, CopySource, CORS and GetObjectAttributes (`ETag`, `ObjectSize`, full-object SHA-256 `Checksum`, `STANDARD`, historical `VersionId`, immutable multipart `ObjectParts` with bounded pagination) |
 | Checksums | SHA-256, SHA-1, Content-MD5, CRC32, CRC32C and CRC64NVME validation where explicitly implemented |
 | Known gaps | Object lifecycle expiration/transitions, bucket policies, SSE, full AWS delete-marker semantics, every multipart POST variant and unverified clients |
 

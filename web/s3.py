@@ -132,9 +132,6 @@ def _reject_unimplemented_write_options(request: Request) -> None:
         "x-amz-bypass-governance-retention", "x-amz-mfa",
         "x-amz-expected-bucket-owner",
         "x-amz-decoded-content-length",
-        # GetObjectAttributes ObjectParts pagination is not implemented.
-        # Refusing these headers prevents a successful but misleading page.
-        "x-amz-max-parts", "x-amz-part-number-marker",
     }
     # The S3 gateway is permanently private and has exactly one storage
     # tier, so these explicit default values do not change actual behavior.
@@ -838,6 +835,13 @@ async def _handle(request: Request):
         # Ignoring those headers can turn a supposedly protected delete into
         # an ordinary tombstone or pretend to verify a requested checksum.
         _reject_unimplemented_write_options(request)
+        if not is_object_attributes and any(
+            name in request.headers for name in
+            ("x-amz-max-parts", "x-amz-part-number-marker")
+        ):
+            raise SigV4Error(
+                "NotImplemented", "Multipart attributes headers require GetObjectAttributes"
+            )
         checksum_mode = request.headers.get("x-amz-checksum-mode")
         if checksum_mode is not None:
             # AWS CLI/botocore send ENABLED by default for standard downloads.
@@ -1684,16 +1688,34 @@ async def _handle(request: Request):
             signed = signed_header_names(request)
             if "x-amz-object-attributes" not in signed:
                 raise SigV4Error("AccessDenied", "Object attributes header must be signed")
+            if len(request.headers.getlist("x-amz-object-attributes")) != 1:
+                return _error("InvalidArgument", "Duplicate object attributes header", 400)
             requested = raw.split(",")
             if (not requested or any(not name for name in requested)
                     or len(set(requested)) != len(requested)):
                 return _error("InvalidArgument", "Invalid object attributes list", 400)
-            permitted = {"ETag", "ObjectSize", "Checksum", "StorageClass"}
+            permitted = {"ETag", "ObjectSize", "Checksum", "StorageClass", "ObjectParts"}
             if any(name not in permitted for name in requested):
-                # ObjectParts needs accurate completed-multipart part metadata
-                # and pagination. Never turn Telegram chunk boundaries into
-                # fabricated S3 multipart part records.
                 return _error("NotImplemented", "Requested object attributes are unsupported", 501)
+
+            options = {}
+            for name, default, low, high in (
+                ("x-amz-max-parts", 1000, 1, 1000),
+                ("x-amz-part-number-marker", 0, 0, MAX_PARTS),
+            ):
+                values = request.headers.getlist(name)
+                if values:
+                    if name not in signed:
+                        raise SigV4Error("AccessDenied", "Object parts pagination must be signed")
+                    if (len(values) != 1
+                            or re.fullmatch(r"[0-9]{1,5}", values[0]) is None
+                            or not low <= int(values[0]) <= high):
+                        return _error("InvalidArgument", "Invalid object parts pagination", 400)
+                    if "ObjectParts" not in requested:
+                        return _error("InvalidArgument", "Part pagination requires ObjectParts", 400)
+                    options[name] = int(values[0])
+                else:
+                    options[name] = default
             result = ET.Element("GetObjectAttributesOutput", xmlns=NAMESPACE)
             if "ETag" in requested:
                 ET.SubElement(result, "ETag").text = '"' + item_etag + '"'
@@ -1711,6 +1733,32 @@ async def _handle(request: Request):
                 # TeleDrive exposes one immutable STANDARD-like tier; archived
                 # or replica-backed AWS storage classes do not exist here.
                 ET.SubElement(result, "StorageClass").text = "STANDARD"
+            if "ObjectParts" in requested:
+                layout = MultipartStore(catalog).object_parts_for_version(item.id, item.size)
+                # AWS omits ObjectParts for a plain single PUT. This must not
+                # fabricate logical parts out of Telegram's internal chunks.
+                if layout is not None:
+                    marker = options["x-amz-part-number-marker"]
+                    limit = options["x-amz-max-parts"]
+                    remaining = [part for part in layout if part[0] > marker]
+                    page = remaining[:limit]
+                    listing = ET.SubElement(result, "ObjectParts")
+                    for name, value in (
+                        ("PartsCount", len(layout)),
+                        ("PartNumberMarker", marker),
+                        ("MaxParts", limit),
+                        ("IsTruncated", str(len(remaining) > len(page)).lower()),
+                    ):
+                        ET.SubElement(listing, name).text = str(value)
+                    if len(remaining) > len(page):
+                        ET.SubElement(listing, "NextPartNumberMarker").text = str(page[-1][0])
+                    for number, size, digest, _etag in page:
+                        part_node = ET.SubElement(listing, "Part")
+                        ET.SubElement(part_node, "PartNumber").text = str(number)
+                        ET.SubElement(part_node, "Size").text = str(size)
+                        ET.SubElement(part_node, "ChecksumSHA256").text = base64.b64encode(
+                            bytes.fromhex(digest)
+                        ).decode("ascii")
             return Response(
                 ET.tostring(result, encoding="utf-8", xml_declaration=True),
                 media_type="application/xml", status_code=200,

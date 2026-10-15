@@ -101,6 +101,10 @@ def copy_object(
             db.connection.execute(insert(multipart_etags).values(
                 object_id=identifier, etag=original_tag,
             ))
+            # Preserve actual selected part boundaries as immutable metadata.
+            # Without this, a copied historical multipart ETag could claim a
+            # part count while GetObjectAttributes cannot prove its contents.
+            multipart.snapshot_copy_parts(source.id, identifier, source.size)
 
         current = db.connection.execute(select(
             heads.c.object_id, heads.c.generation
