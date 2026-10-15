@@ -51,7 +51,7 @@ jobs:
             tests/test_security.py tests/test_openapi.py \
             tests/test_storage_engine.py \
             tests/test_storage_recovery.py tests/test_storage_rebuild.py tests/test_storage_pending_admin.py tests/test_storage_jobs.py tests/test_storage_versions.py tests/test_storage_ops_health.py tests/test_host_soak.py tests/test_acceptance_cli.py tests/test_storage_gc_retention.py tests/test_s3_version_reads.py tests/test_storage_catalog.py \
-            tests/test_storage_user_mode.py tests/test_mtproto_rate_guard.py tests/test_telegram_dr_rehearsal.py tests/test_production_bundle.py tests/test_capacity_probe.py tests/test_legacy_cutover_acceptance.py tests/test_telegram_target_resolution.py tests/test_ci_workflows.py tests/test_release_matrix.py \
+            tests/test_storage_user_mode.py tests/test_mtproto_rate_guard.py tests/test_mtproto_multi_credentials.py tests/test_telegram_dr_rehearsal.py tests/test_production_bundle.py tests/test_capacity_probe.py tests/test_legacy_cutover_acceptance.py tests/test_telegram_target_resolution.py tests/test_ci_workflows.py tests/test_release_matrix.py \
             tests/test_api_keys.py tests/test_rest_api.py tests/test_rest_transfer.py tests/test_unified_service.py \
             tests/test_s3_fail_closed.py tests/test_s3_contract.py tests/test_metadata_backup.py tests/test_storage_sigkill.py tests/test_metadata_snapshot_rehearsal.py tests/test_s3_multipart_preconditions.py
       - name: Security checks
