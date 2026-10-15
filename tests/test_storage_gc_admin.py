@@ -9,7 +9,7 @@ from teledrive.db import connect_database
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object
 from teledrive.storage.manifest import ManifestStore, ChunkReference, chunks
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 
 
 def test_admin_gc_audit_requires_auth_and_never_deletes_referenced_media(admin):
@@ -132,3 +132,33 @@ def test_gc_audit_counts_stray_file_ids_without_implicitly_authorizing_deletion(
     assert report["eligible_for_deletion"] == 0
     assert report["physical_deletion_enabled"] is False
     assert "ci-only-opaque-file-id" not in response.text
+
+
+def test_gc_audit_reports_active_upload_jobs_and_never_deletes(admin):
+    """Queued durable jobs are live references and appear in the admin audit."""
+    from teledrive.storage.jobs import StorageUploadJobs, jobs
+    client, url, _ = admin
+    now = int(time.time())
+    db = connect_database(url)
+    try:
+        catalog = BucketCatalog(ManifestStore(db))
+        catalog.create_bucket("gc-jobs-proof", now)
+        StorageUploadJobs(catalog)
+        db.connection.execute(insert(jobs).values(
+            id="queued-job-proof", bucket="gc-jobs-proof", object_key="a.bin",
+            source_path="/uploads/a.bin", source_size=4, source_device=1,
+            source_inode=2, source_mtime_ns=3, expected_generation=0,
+            expected_head_id=None, state="queued", object_id=None, attempts=0,
+            lease_token=None, lease_until=None, created_at=now,
+            updated_at=now, last_error=None,
+        ))
+        db.commit()
+    finally:
+        db.close()
+    response = client.get("/api/v1/admin/storage/gc-audit",
+                          auth=("testadmin", "secure-auth-password"))
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["active_upload_jobs"] == 1
+    assert report["eligible_for_deletion"] == 0
+    assert report["physical_deletion_enabled"] is False

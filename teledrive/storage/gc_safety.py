@@ -8,9 +8,43 @@ from __future__ import annotations
 import hashlib
 import json
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, or_, select
 from teledrive.storage.catalog import heads, published_versions, removed_versions
 from teledrive.storage.manifest import chunks, object_aliases, objects, writer_fences
+
+ACTIVE_JOB_STATES = ("queued", "running", "staged", "publishing")
+
+
+def durable_job_blockers(db, names, linked):
+    """Active durable upload-job IDs that hold or will publish linked objects.
+
+    A queued/running job can still publish the candidate head (by object_id,
+    expected_head_id, or the same bucket/key), so it is a live reference.
+    Terminal jobs are excluded: their published head is covered by the head
+    graph entry, and failed/cancelled jobs hold no pending publication.
+    """
+    if "storage_upload_jobs" not in names:
+        return []
+    from teledrive.storage.jobs import jobs as upload_jobs
+
+    by_identity = db.execute(select(upload_jobs.c.id).where(
+        upload_jobs.c.state.in_(ACTIVE_JOB_STATES),
+        or_(
+            upload_jobs.c.object_id.in_(linked),
+            upload_jobs.c.expected_head_id.in_(linked),
+        ),
+    )).scalars()
+    blocked = set(by_identity)
+    keyed = db.execute(select(
+        objects.c.bucket, objects.c.object_key
+    ).where(objects.c.id.in_(linked))).all()
+    for bucket, key in {(row[0], row[1]) for row in keyed}:
+        blocked.update(db.execute(select(upload_jobs.c.id).where(
+            upload_jobs.c.state.in_(ACTIVE_JOB_STATES),
+            upload_jobs.c.bucket == bucket,
+            upload_jobs.c.object_key == key,
+        )).scalars())
+    return sorted(blocked)
 
 
 class GCReferenceGuard:
@@ -83,6 +117,7 @@ class GCReferenceGuard:
                 if "storage_bot_upload_receipts" in names else [],
             "mtproto_send_intent_or_receipt": refs(mtproto_send_intents.c.object_id)
                 if "storage_mtproto_send_intents" in names else [],
+            "durable_job": durable_job_blockers(db, names, linked),
         }
         chunk_journal = [
             (int(n), account, int(chat), int(mid), digest)

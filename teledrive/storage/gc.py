@@ -41,6 +41,8 @@ class GCInventory:
     unresolved_bot_intents: int = 0
     # File IDs not backed by a chunk journal or ACK receipt remain unknown media.
     unattributed_bot_file_ids: int = 0
+    # Queued/running durable upload jobs can still publish new heads.
+    active_upload_jobs: int = 0
 
 
 class StorageGCInventory:
@@ -212,7 +214,7 @@ class StorageGCInventory:
                 )).where(chunks.c.object_id.is_(None))
             ).scalar_one())
 
-        # Count USER-MTProto unknown ACKs/receipts as protected remote assets.
+    # Count USER-MTProto unknown ACKs/receipts as protected remote assets.
         if inspector.has_table("storage_mtproto_send_intents"):
             from teledrive.storage.user_mode import mtproto_send_intents
             unresolved_bot_intents += int(connection.execute(
@@ -230,6 +232,18 @@ class StorageGCInventory:
                 ).where(
                     mtproto_send_intents.c.message_id.is_not(None),
                     chunks.c.object_id.is_(None),
+                )
+            ).scalar_one())
+
+        # In-flight durable upload jobs are live references: a queued/running
+        # job can still publish a head over the candidate's bucket/key.
+        active_upload_jobs = 0
+        if inspector.has_table("storage_upload_jobs"):
+            from teledrive.storage.gc_safety import ACTIVE_JOB_STATES
+            from teledrive.storage.jobs import jobs as upload_jobs
+            active_upload_jobs = int(connection.execute(
+                select(func.count()).select_from(upload_jobs).where(
+                    upload_jobs.c.state.in_(ACTIVE_JOB_STATES)
                 )
             ).scalar_one())
 
@@ -261,4 +275,5 @@ class StorageGCInventory:
             unjournaled_bot_receipts=unjournaled_bot_receipts,
             unresolved_bot_intents=unresolved_bot_intents,
             unattributed_bot_file_ids=unattributed_bot_file_ids,
+            active_upload_jobs=active_upload_jobs,
         )

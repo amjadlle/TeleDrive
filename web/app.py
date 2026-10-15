@@ -999,6 +999,7 @@ def get_storage_gc_audit(
             "unjournaled_bot_receipts": inventory.unjournaled_bot_receipts,
             "unattributed_bot_file_ids": inventory.unattributed_bot_file_ids,
             "unresolved_bot_intents": inventory.unresolved_bot_intents,
+            "active_upload_jobs": inventory.active_upload_jobs,
             "live_object_heads": inventory.live_object_heads,
             "copy_aliases": inventory.copy_aliases,
             "multipart_parts": inventory.multipart_parts,
