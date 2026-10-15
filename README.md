@@ -131,6 +131,8 @@ For the **116-operation AWS S3 API compatibility matrix**, parameter-level limit
 
 The S3 endpoint is **part of the default container**, not a separate Compose profile. It implements a tested **subset** of S3 over the shared Telegram-backed catalog. It is **not AWS S3 feature parity**.
 
+A connected user-MTProto server also exposes **admin-only, read-only** `GET /api/v1/admin/storage/channel-history?limit=100&include_external_markers=true`. Use `before_message_id=<next_before_message_id>` to enumerate older pages. Other authors' marker captions are reported only as **unverified clues**: do not use them to restore a bucket/key or authorize physical deletion without independent manifests and checksum evidence. Bot transport returns 503 because the Bot API cannot enumerate arbitrary channel history.
+
 ### Provision the S3 master key and credentials
 
 An account holder creates the user StringSession **once** on a trusted interactive host (no credentials are written to Git). The server then reconnects automatically under that real user authorization:

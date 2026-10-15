@@ -239,3 +239,56 @@ def test_user_can_read_old_bot_channel_message_without_bot_token(service, monkey
     result = signed(service, "GET", "/backup-bucket/bot-old.bin")
     assert result.status_code == 200 and result.content == payload
     assert user.next_id == 0, "Bot message was read, never reuploaded"
+
+
+def test_authenticated_admin_can_scan_user_channel_history_without_mutation(monkeypatch):
+    from fastapi.testclient import TestClient
+    import web.app as web
+    from uuid import uuid4
+
+    runtime, user = configured_runtime()
+    uid = str(uuid4())
+    user.posts[9] = (b"owned", f"teledrive:{uid}:0:{'a'*16}")
+    class ScannableUser(FakeUser):
+        async def iter_messages(self, target, *, limit, max_id=None):
+            for mid in sorted(self.posts, reverse=True):
+                if max_id is None or mid < max_id:
+                    yield SimpleNamespace(
+                        id=mid, chat_id=-1001234567890,
+                        message=self.posts[mid][1], out=True, media=True,
+                    )
+    scannable = ScannableUser()
+    scannable.posts = user.posts
+    runtime.client = scannable
+    runtime.transport = TelethonChunkTransport({
+        runtime.account: (scannable, object()),
+    })
+    monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
+    monkeypatch.setattr(web, "mtproto_storage_runtime", runtime)
+    monkeypatch.setattr(web, "WEB_USER", "owner")
+    monkeypatch.setattr(web, "WEB_PASSWORD", "secure-test-password-1234")
+    client = TestClient(web.app, base_url="http://localhost")
+    assert client.get("/api/v1/admin/storage/channel-history").status_code == 401
+    response = client.get(
+        "/api/v1/admin/storage/channel-history?limit=3",
+        auth=("owner", "secure-test-password-1234"),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["candidate_object_count"] == 1
+    assert body["candidate_objects"][0]["object_id"] == uid
+    assert body["payload_downloads"] == body["telegram_mutations"] == 0
+    assert body["restorable_without_independent_manifest"] is False
+    assert response.headers["cache-control"] == "no-store"
+    invalid = client.get(
+        "/api/v1/admin/storage/channel-history?before_message_id=-10",
+        auth=("owner", "secure-test-password-1234"),
+    )
+    assert invalid.status_code == 422
+    monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "bot")
+    disabled = client.get(
+        "/api/v1/admin/storage/channel-history",
+        auth=("owner", "secure-test-password-1234"),
+    )
+    assert disabled.status_code == 503
+    assert list(scannable.posts) == [9]

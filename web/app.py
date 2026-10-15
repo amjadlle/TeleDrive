@@ -42,6 +42,7 @@ from teledrive.storage.bot_api_adapter import (
 from teledrive.storage.user_mode import (
     UserSessionRuntime, UserSendJournal, UnifiedUserTransport, transport_mode,
 )
+from teledrive.storage.history_inventory import inventory_channel
 mtproto_storage_runtime = UserSessionRuntime()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -1442,6 +1443,35 @@ def abandon_stale_pending_object(
                 "abandoned": bool(affected), "dry_run": False}
     finally:
         conn.close()
+
+
+@app.get("/api/v1/admin/storage/channel-history", tags=["Storage history"],
+         summary="Bounded read-only user-MTProto channel history (unverified candidates)")
+async def inspect_user_channel_history(
+    limit: int = Query(default=100, ge=1, le=1000),
+    before_message_id: int | None = Query(default=None, ge=1),
+    include_external_markers: bool = Query(default=False),
+    _: None = Depends(require_auth),
+):
+    """Never download media, change catalog mappings or delete channel posts.
+
+    Other senders' markers are NOT trusted ownership/manifest evidence.
+    The endpoint deliberately only runs with the already-connected USER
+    transport; a Bot token cannot enumerate arbitrary history.
+    """
+    if transport_mode() != "telethon":
+        raise HTTPException(503, "User MTProto history requires telethon storage mode")
+    try:
+        runtime = mtproto_storage_runtime
+        runtime.require()
+        target = runtime.transport.accounts[runtime.account][1]
+        return await inventory_channel(
+            runtime.client, target, account=runtime.account,
+            scan_limit=limit, before_message_id=before_message_id,
+            include_external_markers=include_external_markers,
+        )
+    except (ValueError, RuntimeError, OSError):
+        raise HTTPException(503, "Authorized channel history inspection unavailable") from None
 
 
 @app.get("/api/v1/admin/s3-multipart/stale", tags=["API keys"],

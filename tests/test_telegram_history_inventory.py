@@ -176,3 +176,68 @@ def test_private_report_rejects_symlink_and_missing_directory(tmp_path):
     assert target.read_text(encoding="utf-8") == "untouched"
     with pytest.raises(FileNotFoundError):
         write_private_report(tmp_path / "missing" / "inventory.json", {})
+
+
+def test_paginated_read_only_history_and_external_markers():
+    ident = str(uuid4())
+    bot_ident = str(uuid4())
+    foreign = message(99, marker(bot_ident, 0), out=False)
+    telegram = FakeTelegram([
+        message(103, "general channel post"),
+        message(102, marker(ident, 0)),
+        message(101, "another unrelated post"),
+        message(100, marker(ident, 1)),
+        foreign,
+    ])
+    async def first():
+        return await inventory_channel(
+            telegram, "authorized-channel", account="owner",
+            scan_limit=2, include_external_markers=True,
+        )
+    first_page = asyncio.run(first())
+    assert first_page["truncated"]
+    assert first_page["next_before_message_id"] == 102
+    assert first_page["external_marker_candidate_count"] == 0
+    assert first_page["candidate_chunk_count"] == 1
+    assert telegram.calls[-1] == ("iter_messages", "authorized-channel", 3)
+
+    class PagedTelegram(FakeTelegram):
+        async def iter_messages(self, target, *, limit, max_id=None):
+            self.calls.append(("iter_messages", target, limit, max_id))
+            for item in self.messages:
+                if max_id is None or item.id < max_id:
+                    yield item
+                    limit -= 1
+                    if limit == 0:
+                        break
+
+    paged = PagedTelegram(telegram.messages)
+    other = asyncio.run(inventory_channel(
+        paged, "authorized-channel", account="owner", scan_limit=3,
+        before_message_id=first_page["next_before_message_id"],
+        include_external_markers=True,
+    ))
+    assert other["scanned_messages"] == 3
+    assert other["truncated"] is False
+    assert other["candidate_chunk_count"] == 1
+    assert other["external_marker_candidate_count"] == 1
+    candidate = other["external_marker_candidates"][0]
+    assert candidate["object_id"] == bot_ident
+    assert candidate["message_id"] == 99
+    assert candidate["ownership_verified"] is False
+    assert candidate["payload_verified"] is False
+    assert candidate["safe_to_publish_or_delete"] is False
+    assert other["restorable_without_independent_manifest"] is False
+    assert other["telegram_mutations"] == other["payload_downloads"] == 0
+    assert paged.calls[-1] == ("iter_messages", "authorized-channel", 4, 102)
+
+
+@pytest.mark.parametrize("before", [0, -1, "42", True, 1.5])
+def test_invalid_history_cursor_fails_before_network(before):
+    client = FakeTelegram([])
+    with pytest.raises(ValueError, match="continuation"):
+        asyncio.run(inventory_channel(
+            client, "authorized-channel", account="owner",
+            before_message_id=before,
+        ))
+    assert client.calls == []

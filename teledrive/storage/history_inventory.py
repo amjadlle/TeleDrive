@@ -40,7 +40,9 @@ def parse_candidate_marker(caption: str | None) -> tuple[str, int, str] | None:
 
 
 async def inventory_channel(client, target, *, account: str,
-                            scan_limit: int = 1000) -> dict:
+                            scan_limit: int = 1000,
+                            before_message_id: int | None = None,
+                            include_external_markers: bool = False) -> dict:
     """Inspect at most scan_limit messages from a single resolved target.
 
     The extra message is used solely to detect truncation; it is not
@@ -52,21 +54,35 @@ async def inventory_channel(client, target, *, account: str,
     if (not isinstance(account, str) or not 1 <= len(account) <= 255
             or any(ord(char) < 32 or ord(char) == 127 for char in account)):
         raise ValueError("Invalid authorized account label")
+    if (before_message_id is not None and
+            (type(before_message_id) is not int or before_message_id < 1)):
+        raise ValueError("Invalid channel-history continuation message ID")
+    if type(include_external_markers) is not bool:
+        raise ValueError("Invalid external-marker inventory flag")
     chat_id = int(await client.get_peer_id(target))
     groups: dict[str, list[dict]] = {}
     seen_message_ids: set[int] = set()
     scanned = 0
     rejected_markers = 0
     truncated = False
-    async for message in client.iter_messages(target, limit=scan_limit + 1):
+    external_markers = []
+    last_message_id = None
+    iterator_kwargs = {"limit": scan_limit + 1}
+    if before_message_id is not None:
+        # Telethon max_id is EXCLUSIVE; do not re-read the last page's tail.
+        iterator_kwargs["max_id"] = before_message_id
+    async for message in client.iter_messages(target, **iterator_kwargs):
         if scanned == scan_limit:
             truncated = True
             break
         scanned += 1
+        mid = getattr(message, "id", None)
+        if type(mid) is int and mid > 0:
+            last_message_id = (mid if last_message_id is None
+                               else min(last_message_id, mid))
         marker = parse_candidate_marker(getattr(message, "message", None))
         if marker is None:
             continue
-        mid = getattr(message, "id", None)
         remote_chat = getattr(message, "chat_id", None)
         # The outgoing flag and chat match are prerequisites for a candidate,
         # but even together they do NOT prove independently verified ownership.
@@ -75,6 +91,21 @@ async def inventory_channel(client, target, *, account: str,
                 or type(mid) is not int or mid <= 0
                 or type(remote_chat) is not int or remote_chat != chat_id):
             rejected_markers += 1
+            # A user can read bot/other-admin channel posts but not prove
+            # authorship. Preserve only exact markers from the SAME channel
+            # as explicitly UNVERIFIED hints for owner-side investigation.
+            if (include_external_markers and not getattr(message, "out", False)
+                    and getattr(message, "media", None) is not None
+                    and type(mid) is int and mid > 0
+                    and type(remote_chat) is int and remote_chat == chat_id):
+                object_id, ordinal, prefix = marker
+                external_markers.append({
+                    "object_id": object_id, "ordinal": ordinal,
+                    "checksum_prefix": prefix, "chat_id": chat_id,
+                    "message_id": mid, "ownership_verified": False,
+                    "payload_verified": False,
+                    "safe_to_publish_or_delete": False,
+                })
             continue
         if mid in seen_message_ids:
             raise ValueError("Duplicate Telegram message ID in channel scan")
@@ -88,6 +119,8 @@ async def inventory_channel(client, target, *, account: str,
             "message_id": mid,
         })
 
+    if truncated and last_message_id is None:
+        raise ValueError("History page cannot advance safely without message IDs")
     objects = []
     for object_id, parts in sorted(groups.items()):
         parts.sort(key=lambda item: (item["ordinal"], item["message_id"]))
@@ -116,6 +149,10 @@ async def inventory_channel(client, target, *, account: str,
                   "scan_limit": scan_limit},
         "scanned_messages": scanned,
         "truncated": truncated,
+        "before_message_id": before_message_id,
+        "next_before_message_id": last_message_id if truncated else None,
+        "external_marker_candidates": external_markers,
+        "external_marker_candidate_count": len(external_markers),
         "readable_window_exhausted": not truncated,
         "rejected_marker_messages": rejected_markers,
         "candidate_objects": objects,
