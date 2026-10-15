@@ -79,10 +79,11 @@ async def run():
                     resolved = await resolve_telegram_target(
                         client, target or None, channel_name,
                     )
+                    peer_chat_id = int(await client.get_peer_id(resolved))
 
                     class Runtime:
                         account = account
-                        chat_id = int(await client.get_peer_id(resolved))
+                        chat_id = peer_chat_id
 
                         def require(self):
                             return TelethonChunkTransport({account: (client, resolved)})
@@ -168,6 +169,13 @@ def test_live_three_worker_user_mtproto_soak_with_remote_checksum_cleanup():
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Three SQL worker processes did not start")
                 if any(proc.poll() is not None for proc, _ in processes):
+                    for proc, _ in processes:
+                        if proc.poll() is not None:
+                            _, stderr = proc.communicate(timeout=10)
+                            raise RuntimeError(
+                                "Real USER worker failed before the start gate: "
+                                + stderr.decode(errors="replace")[-1500:]
+                            )
                     raise RuntimeError("Real USER worker failed before the start gate")
                 time.sleep(0.05)
             go.write_text("go", encoding="ascii")
@@ -240,3 +248,8 @@ async def _collect_range(engine, ident, size, start):
             block_size=7,
         )
     ])
+
+
+def test_embedded_worker_script_is_valid_python():
+    """The subprocess worker must compile before any live CI run."""
+    compile(WORKER, "<multiworker-e2e-worker>", "exec")
