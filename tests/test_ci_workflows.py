@@ -21,7 +21,6 @@ EXPECTED = (
     "integration-databases.yml",
     "integration-desktop.yml",
     "live-telegram-user.yml",
-    "live-telegram-bot.yml",
     "live-telegram-multiworker.yml",
     "delivery-release.yml",
     "resilience-docker.yml",
@@ -34,7 +33,6 @@ DISPLAY_NAMES = {
     "integration-storage.yml": "02 · Integration | REST & S3",
     "integration-desktop.yml": "02 · Integration | Desktop",
     "resilience-docker.yml": "03 · Resilience | Docker Fault Injection",
-    "live-telegram-bot.yml": "04 · Live Telegram | Bot API E2E",
     "live-telegram-user.yml": "04 · Live Telegram | User MTProto E2E",
     "live-telegram-multiworker.yml": "04 · Live Telegram | Multiworker PostgreSQL E2E",
     "delivery-release.yml": "05 · Delivery | Release Gate & Packages",
@@ -88,8 +86,6 @@ def test_all_external_actions_are_pinned_to_full_commit_sha(name):
 @pytest.mark.parametrize("name,job_name,test_file", (
     ("live-telegram-user.yml", "telegram-roundtrip",
      "tests/test_telegram_storage_e2e.py"),
-    ("live-telegram-bot.yml", "telegram-bot-roundtrip",
-     "tests/test_telegram_bot_e2e.py"),
 ))
 def test_live_e2e_is_push_manual_only_fails_closed_and_never_aborts_cleanup(
     name, job_name, test_file
@@ -129,13 +125,14 @@ def test_release_requires_regressions_before_build_and_tag_before_publication():
     assert jobs["publish"]["permissions"]["contents"] == "write"
 
 
-def test_security_includes_bot_target_and_api_tests():
+def test_security_includes_storage_and_api_tests():
     doc = workflow("quality-security.yml")
     assert doc["permissions"]["contents"] == "read"
     scripts = "\n".join(s.get("run", "") for s in doc["jobs"]["security"]["steps"])
     for path in (
         "tests/test_ci_workflows.py",
-        "tests/test_bot_storage.py",
+        "tests/test_storage_user_mode.py",
+        "tests/test_mtproto_rate_guard.py",
         "tests/test_telegram_target_resolution.py",
         "tests/test_storage_recovery.py",
         "tests/test_api_keys.py",
@@ -174,19 +171,9 @@ def test_db_and_desktop_matrix_and_storage_contracts_are_present():
     api = workflow("integration-storage.yml")["jobs"]["storage-api"]
     commands = "\n".join(s.get("run", "") for s in api["steps"])
     for path in ("tests/test_rest_api.py", "tests/test_rest_transfer.py",
-                 "tests/test_storage_catalog.py", "tests/test_bot_storage.py",
+                 "tests/test_storage_catalog.py", "tests/test_storage_user_mode.py",
                  "tests/test_s3_permissions.py"):
         assert path in commands
-
-
-def test_live_multipart_push_is_explicitly_opted_in():
-    bot = workflow("live-telegram-bot.yml")
-    job = bot["jobs"]["telegram-bot-roundtrip"]
-    expression = job["env"]["TELEDRIVE_E2E_MULTIPART"]
-    assert "inputs.run_multipart" in expression
-    assert "[p0-live-multipart]" in expression
-    assert "github.event_name == 'push'" in expression
-    assert job["timeout-minutes"] == "25"
 
 
 def test_final_p0_contract_runs_on_every_database_and_desktop_push():
@@ -238,20 +225,7 @@ def test_storage_ci_runs_legacy_migration_on_every_change():
         assert path in command
 
 
-def test_real_bot_soak_is_explicitly_opted_in_and_never_silently_skipped():
-    bot = workflow("live-telegram-bot.yml")
-    assert bot["on"]["workflow_dispatch"]["inputs"]["run_soak"]["type"] == "boolean"
-    script = bot["jobs"]["telegram-bot-roundtrip"]["steps"]
-    assert any("tests/test_telegram_bot_e2e.py" in s.get("run", "") for s in script)
-    expression = bot["jobs"]["telegram-bot-roundtrip"]["env"]["TELEDRIVE_E2E_SOAK"]
-    assert "inputs.run_soak" in expression
-    assert "[p1-live-soak]" in expression
-    assert "github.event_name == 'push'" in expression
-    assert bot["concurrency"]["cancel-in-progress"] == "false"
-    assert bot["jobs"]["telegram-bot-roundtrip"]["timeout-minutes"] == "25"
-
-
-def test_bot_send_intent_contract_and_operator_health_run_on_every_push():
+def test_mtproto_send_intent_contract_and_operator_health_run_on_every_push():
     storage = workflow("integration-storage.yml")
     for event in ("push", "pull_request"):
         assert "paths" not in storage["on"][event]
@@ -259,16 +233,16 @@ def test_bot_send_intent_contract_and_operator_health_run_on_every_push():
         s.get("run", "") for s in storage["jobs"]["storage-api"]["steps"]
     )
     for test_file in (
-        "tests/test_bot_storage.py",
+        "tests/test_storage_user_mode.py",
         "tests/test_storage_ops_health.py",
-        "tests/test_bot_receipt_reconcile.py",
-        "tests/test_bot_rate_slots.py",
+        "tests/test_mtproto_rate_guard.py",
     ):
         assert test_file in executed
     security_steps = "\n".join(
         s.get("run", "") for s in workflow("quality-security.yml")["jobs"]["security"]["steps"]
     )
-    assert "tests/test_bot_storage.py" in security_steps
+    assert "tests/test_storage_user_mode.py" in security_steps
+    assert "tests/test_mtproto_rate_guard.py" in security_steps
 
 
 def test_production_acceptance_dr_ack_cutover_gates_are_run_in_ci():
@@ -276,15 +250,14 @@ def test_production_acceptance_dr_ack_cutover_gates_are_run_in_ci():
     for filename in ("integration-storage.yml", "quality-security.yml", "delivery-release.yml"):
         content = (WORKFLOWS / filename).read_text(encoding="utf-8")
         for path in (
-            "tests/test_bot_receipt_reconcile.py",
-            "tests/test_bot_rate_slots.py",
+            "tests/test_mtproto_rate_guard.py",
             "tests/test_telegram_dr_rehearsal.py",
             "tests/test_legacy_cutover_acceptance.py",
         ):
             assert path in content, (filename, path)
 
 
-def test_mainline_multi_process_live_postgres_bot_acceptance():
+def test_mainline_multi_process_live_postgres_user_acceptance():
     name = "live-telegram-multiworker.yml"
     path = WORKFLOWS / name
     assert path.is_file()
@@ -294,67 +267,56 @@ def test_mainline_multi_process_live_postgres_bot_acceptance():
     assert "push" in wf["on"] and "pull_request" not in wf["on"]
     assert wf["permissions"]["contents"] == "read"
     job = wf["jobs"]["three-process-telegram"]
-    assert "concurrency" not in wf  # job-level serialization with Bot E2E
+    assert "concurrency" not in wf  # job-level serialization with the user E2E
     assert job["concurrency"]["cancel-in-progress"] == "false"
-    assert job["concurrency"]["group"] != workflow(
-        "live-telegram-bot.yml"
-    )["concurrency"]["group"]
     assert job["concurrency"]["group"] != workflow(
         "live-telegram-user.yml"
     )["concurrency"]["group"]
     assert "postgres" in job["services"]
     assert "postgres:17-alpine" in job["services"]["postgres"]["image"]
     assert "if" not in job  # every main push runs the P1 multiworker acceptance
-    assert "TELEDRIVE_E2E_BOT_TOKEN" in job["env"]
-    assert "TELEDRIVE_E2E_BOT_CHAT_ID" in job["env"]
+    assert "TELEDRIVE_E2E_SESSION" in job["env"]
+    assert "TELEDRIVE_E2E_API_ID" in job["env"]
+    assert "TELEDRIVE_E2E_API_HASH" in job["env"]
+    assert "TELEDRIVE_E2E_TARGET" in job["env"]
     assert "DB_TEST_POSTGRES_URL" in job["env"]
     assert job["env"]["TELEDRIVE_E2E_MULTIWORKER"] == "1"
-    assert any("tests/test_telegram_bot_multiworker_e2e.py" in step.get(
+    assert any("tests/test_telegram_multiworker_e2e.py" in step.get(
         "run", "") for step in job["steps"])
     assert "continue-on-error" not in content
     for action in re.findall(r"(?m)^\s*uses:\s*(\S+)", content):
         assert re.fullmatch(r".+@[0-9a-f]{40}", action)
 
 
-def test_cross_client_bot_ack_requires_opt_in():
-    wf = workflow("live-telegram-bot.yml")
-    expressions = wf["jobs"]["telegram-bot-roundtrip"]["env"]
-    assert "inputs.run_ack_proof" in expressions["TELEDRIVE_E2E_CROSS_CLIENT"]
-    assert "[p1-live-ack-proof]" in expressions["TELEDRIVE_E2E_CROSS_CLIENT"]
-    assert "TELEDRIVE_E2E_API_ID" in expressions
-    assert "TELEDRIVE_E2E_API_HASH" in expressions
-    assert "TELEDRIVE_E2E_SESSION" in expressions
-
 @pytest.mark.parametrize("name", [
-    "live-telegram-bot.yml", "live-telegram-multiworker.yml",
+    "live-telegram-multiworker.yml",
 ])
-def test_bot_target_is_masked_secret_before_any_live_step(name):
+def test_user_target_is_masked_secret_before_any_live_step(name):
     """Reject accidental reintroduction of clear-text Actions channel IDs."""
     raw = (WORKFLOWS / name).read_text(encoding="utf-8")
     doc = workflow(name)
-    job = (doc["jobs"]["telegram-bot-roundtrip"]
-           if name == "live-telegram-bot.yml"
-           else doc["jobs"]["three-process-telegram"])
-    target = job["env"]["TELEDRIVE_E2E_BOT_CHAT_ID"]
-    assert target == "${{ secrets.TELEDRIVE_E2E_BOT_CHAT_ID }}"
-    assert "vars.TELEDRIVE_E2E_BOT_CHAT_ID" not in raw
-    assert not re.search(r"(?m)^\s*TELEDRIVE_E2E_BOT_CHAT_ID:\s*['\"]?-100[0-9]+", raw)
+    job = doc["jobs"]["three-process-telegram"]
+    target = job["env"]["TELEDRIVE_E2E_TARGET"]
+    assert target == "${{ secrets.TELEDRIVE_E2E_TARGET }}"
+    assert "vars.TELEDRIVE_E2E_TARGET" not in raw
+    assert not re.search(r"(?m)^\s*TELEDRIVE_E2E_TARGET:\s*['\"]?-100[0-9]+", raw)
     mask = job["steps"][0]
     assert mask["name"] == "Mask dedicated Telegram test target"
     assert mask["shell"] == "bash"
-    assert "::add-mask::$TELEDRIVE_E2E_BOT_CHAT_ID" in mask["run"]
+    assert "::add-mask::$TELEDRIVE_E2E_TARGET" in mask["run"]
     assert "exit 1" in mask["run"]
     assert mask["run"].index("exit 1") < mask["run"].index("::add-mask::")
     assert job["steps"][1]["name"] == "Checkout"
 
 
-def test_telegram_setup_writes_bot_target_as_secret_and_avoids_value_output():
+def test_telegram_setup_writes_user_target_as_secret_and_avoids_value_output():
     content = (ROOT / "scripts" / "setup_telegram_e2e.py").read_text("utf-8")
-    assert 'store_secret(repo, "TELEDRIVE_E2E_BOT_CHAT_ID"' in content
-    assert 'store_variable(repo, "TELEDRIVE_E2E_BOT_CHAT_ID"' not in content
-    assert "def secure_existing_bot_chat_id(" in content
+    assert 'store_secret(repo, "TELEDRIVE_E2E_TARGET"' in content
+    assert 'store_variable(repo, "TELEDRIVE_E2E_TARGET"' not in content
+    assert "def secure_existing_user_target(" in content
     assert '["gh", "variable", "delete"' in content
-    assert "--secure-bot-chat-id" in content
+    assert "--secure-user-target" in content
+    assert "configure-bot" not in content
 
 
 def test_telethon_optional_numeric_target_uses_secret_not_public_variable():
@@ -395,13 +357,13 @@ def test_e2e_chat_bootstrap_migration_hides_value_and_removes_old_variable(
         ),
     )
     monkeypatch.setattr(
-        setup, "remove_public_bot_chat_variable",
+        setup, "remove_public_user_target_variable",
         lambda repo: observed.update({"removed_variable_from": repo}),
     )
-    setup.secure_existing_bot_chat_id("some-owner/some-repo")
+    setup.secure_existing_user_target("some-owner/some-repo")
     assert observed == {
         "repository": "some-owner/some-repo",
-        "name": "TELEDRIVE_E2E_BOT_CHAT_ID",
+        "name": "TELEDRIVE_E2E_TARGET",
         "private_value": example_private_peer,
         "removed_variable_from": "some-owner/some-repo",
     }
@@ -409,7 +371,7 @@ def test_e2e_chat_bootstrap_migration_hides_value_and_removes_old_variable(
     assert example_private_peer not in captured.out + captured.err
     assert "Saved GitHub Actions secret" in captured.out
     assert subprocess_calls == [(
-        ["gh", "variable", "get", "TELEDRIVE_E2E_BOT_CHAT_ID",
+        ["gh", "variable", "get", "TELEDRIVE_E2E_TARGET",
          "--repo", "some-owner/some-repo"],
         {"capture_output": True, "check": False},
     )]
@@ -440,7 +402,7 @@ def test_e2e_chat_bootstrap_rejects_invalid_private_channel_before_write(
         lambda *args: writes.append(args),
     )
     with pytest.raises(ValueError, match="numeric private channel"):
-        setup.secure_existing_bot_chat_id("some-owner/some-repo")
+        setup.secure_existing_user_target("some-owner/some-repo")
     assert not writes
 
 
@@ -456,7 +418,7 @@ def test_e2e_chat_variable_cleanup_never_logs_unmasked_value(
 
     calls = []
     sample_id = "-100" + "987654321012"
-    names = ([{"name": "TELEDRIVE_E2E_BOT_CHAT_ID"}] if present
+    names = ([{"name": "TELEDRIVE_E2E_TARGET"}] if present
              else [{"name": "AN_UNRELATED_VARIABLE"}])
 
     def mock_run(cmd, **kwargs):
@@ -473,9 +435,9 @@ def test_e2e_chat_variable_cleanup_never_logs_unmasked_value(
     monkeypatch.setattr(setup.subprocess, "run", mock_run)
     if present and not delete_success:
         with pytest.raises(RuntimeError, match="could not be deleted"):
-            setup.remove_public_bot_chat_variable("some-owner/some-repo")
+            setup.remove_public_user_target_variable("some-owner/some-repo")
     else:
-        setup.remove_public_bot_chat_variable("some-owner/some-repo")
+        setup.remove_public_user_target_variable("some-owner/some-repo")
     assert calls[0][0] == [
         "gh", "variable", "list", "--repo", "some-owner/some-repo",
         "--json", "name",
@@ -504,7 +466,7 @@ def test_e2e_chat_variable_cleanup_fails_closed_on_unverifiable_state(
     monkeypatch.setattr(setup.subprocess, "run",
                         lambda cmd, **kw: result)
     with pytest.raises(RuntimeError, match="Actions variable"):
-        setup.remove_public_bot_chat_variable("some-owner/some-repo")
+        setup.remove_public_user_target_variable("some-owner/some-repo")
 
 
 def test_e2e_chat_migration_rejects_untrusted_existing_variable_without_writing(
@@ -529,7 +491,7 @@ def test_e2e_chat_migration_rejects_untrusted_existing_variable_without_writing(
         lambda *args: pytest.fail("Unvalidated channel ID must never be stored"),
     )
     with pytest.raises(ValueError, match="numeric private channel"):
-        setup.secure_existing_bot_chat_id("some-owner/some-repo")
+        setup.secure_existing_user_target("some-owner/some-repo")
 
 
 def test_e2e_chat_migration_unreadable_existing_variable_fails_closed(
@@ -550,7 +512,7 @@ def test_e2e_chat_migration_unreadable_existing_variable_fails_closed(
         assert cmd[:3] == ["gh", "variable", "list"]
         return CompletedProcess(
             cmd, 0,
-            stdout=b'[{"name":"TELEDRIVE_E2E_BOT_CHAT_ID"}]',
+            stdout=b'[{"name":"TELEDRIVE_E2E_TARGET"}]',
             stderr=b"",
         )
 
@@ -564,7 +526,7 @@ def test_e2e_chat_migration_unreadable_existing_variable_fails_closed(
         lambda *args: pytest.fail("Do not overwrite secrets after a read error"),
     )
     with pytest.raises(RuntimeError, match="cannot be securely read"):
-        setup.secure_existing_bot_chat_id("some-owner/some-repo")
+        setup.secure_existing_user_target("some-owner/some-repo")
     assert commands == [
         ["gh", "variable", "get"], ["gh", "variable", "list"],
     ]
@@ -595,10 +557,10 @@ def test_e2e_chat_migration_missing_variable_uses_hidden_input(
         setup, "store_secret",
         lambda repo, key, value: saved.append((repo, key, value)),
     )
-    monkeypatch.setattr(setup, "remove_public_bot_chat_variable", lambda _: None)
-    setup.secure_existing_bot_chat_id("some-owner/some-repo")
+    monkeypatch.setattr(setup, "remove_public_user_target_variable", lambda _: None)
+    setup.secure_existing_user_target("some-owner/some-repo")
     assert saved == [(
-        "some-owner/some-repo", "TELEDRIVE_E2E_BOT_CHAT_ID", private_peer,
+        "some-owner/some-repo", "TELEDRIVE_E2E_TARGET", private_peer,
     )]
     assert commands == [
         ["gh", "variable", "get"], ["gh", "variable", "list"],
@@ -623,7 +585,7 @@ def test_e2e_chat_variable_cleanup_detects_racy_recreation(
         if cmd[:3] == ["gh", "variable", "list"]:
             return CompletedProcess(
                 cmd, 0,
-                stdout=b'[{"name":"TELEDRIVE_E2E_BOT_CHAT_ID"}]',
+                stdout=b'[{"name":"TELEDRIVE_E2E_TARGET"}]',
                 stderr=private_peer.encode(),
             )
         assert cmd[:3] == ["gh", "variable", "delete"]
@@ -631,7 +593,7 @@ def test_e2e_chat_variable_cleanup_detects_racy_recreation(
 
     monkeypatch.setattr(setup.subprocess, "run", variable_reappears)
     with pytest.raises(RuntimeError, match="still present"):
-        setup.remove_public_bot_chat_variable("some-owner/some-repo")
+        setup.remove_public_user_target_variable("some-owner/some-repo")
     assert commands == [
         ["gh", "variable", "list"], ["gh", "variable", "delete"],
         ["gh", "variable", "list"],
@@ -640,7 +602,7 @@ def test_e2e_chat_variable_cleanup_detects_racy_recreation(
     assert private_peer not in printed.out + printed.err
 
 
-def test_secure_bot_id_cli_help_requires_no_telethon_install():
+def test_secure_user_target_cli_help_requires_no_telethon_install():
     """The GitHub-only secret migration must be usable without Telegram SDK."""
     import subprocess
     import sys
@@ -654,17 +616,17 @@ def test_secure_bot_id_cli_help_requires_no_telethon_install():
         command, capture_output=True, text=True, check=False, timeout=15,
     )
     assert finished.returncode == 0, finished.stderr
-    assert "--secure-bot-chat-id" in finished.stdout
+    assert "--secure-user-target" in finished.stdout
     assert "ModuleNotFoundError" not in finished.stderr
 
 
-def test_bot_variable_discovery_parses_full_name_listing(monkeypatch):
+def test_user_target_variable_discovery_parses_full_name_listing(monkeypatch):
     """The names-only JSON parser must not truncate a long variable list."""
     from subprocess import CompletedProcess
     import json
     from scripts import setup_telegram_e2e as setup
 
-    legacy_name = "TELEDRIVE_E2E_BOT_CHAT_ID"
+    legacy_name = "TELEDRIVE_E2E_TARGET"
     entries = [{"name": f"OTHER_{n}"} for n in range(40)]
     entries.append({"name": legacy_name})
     calls = []
@@ -676,26 +638,23 @@ def test_bot_variable_discovery_parses_full_name_listing(monkeypatch):
         return CompletedProcess(cmd, 0, stdout=json.dumps(entries).encode())
 
     monkeypatch.setattr(setup.subprocess, "run", all_variable_names)
-    names = setup.legacy_bot_chat_variable_names("some-owner/some-repo")
+    names = setup.legacy_user_target_variable_names("some-owner/some-repo")
     assert legacy_name in names
     assert len(names) == 41
     assert len(calls) == 1
 
 
 def test_live_workers_use_independent_queues_without_cancelling_user_e2e():
-    """Keep the Bot, multiworker, and user pending queues distinct."""
-    bot_group = "teledrive-live-bot-${{ github.repository }}"
+    """Keep the multiworker and user pending queues distinct."""
     user_group = "teledrive-live-user-${{ github.repository }}"
-    bot = workflow("live-telegram-bot.yml")
     user = workflow("live-telegram-user.yml")
     workers = workflow("live-telegram-multiworker.yml")
-    assert bot["concurrency"]["group"] == bot_group
     assert user["concurrency"]["group"] == user_group
     worker_group = workers["jobs"]["three-process-telegram"]["concurrency"]["group"]
     assert worker_group == "teledrive-live-multiworker-${{ github.repository }}"
-    assert len({user_group, bot_group, worker_group}) == 3
+    assert len({user_group, worker_group}) == 2
     for value in (
-        bot["concurrency"], user["concurrency"],
+        user["concurrency"],
         workers["jobs"]["three-process-telegram"]["concurrency"],
     ):
         assert value["cancel-in-progress"] == "false"
@@ -734,18 +693,11 @@ def test_mainline_only_push_triggers_after_p1_merge(name):
     assert "feature/docker-webui-multiaccount" not in branches, name
 
 
-def test_live_multiworker_runs_on_main_without_regular_bot_collision():
-    """Multiworker runs on every main push and shares the Bot writer lock."""
-    bot = workflow("live-telegram-bot.yml")
+def test_live_multiworker_runs_on_main_every_push():
+    """Multiworker runs on every main push without any opt-in marker."""
     worker = workflow("live-telegram-multiworker.yml")
-    regular = bot["jobs"]["telegram-bot-roundtrip"]
     triple = worker["jobs"]["three-process-telegram"]
-    assert "[live-multiworker]" in regular["if"]
-    assert "github.event_name != 'push'" in regular["if"]
-    assert "!contains" in regular["if"]
     assert "if" not in triple  # no opt-in marker required for P1 acceptance
-    assert triple["concurrency"]["group"] != bot["concurrency"]["group"]
-    assert bot["concurrency"]["cancel-in-progress"] == "false"
     assert triple["concurrency"]["cancel-in-progress"] == "false"
 
 
@@ -822,10 +774,10 @@ def test_disposable_dev_acceptance_does_not_require_live_telegram_credentials():
     runner = (ROOT / "scripts" / "run_docker_fault_injection.sh").read_text(
         encoding="utf-8",
     )
-    for private in ("TELEDRIVE_E2E_SESSION", "TELEDRIVE_BOT_TOKEN",
-                    "TELEDRIVE_STORAGE_BOT_CHAT_ID"):
+    for private in ("TELEDRIVE_E2E_SESSION", "TELEDRIVE_E2E_API_HASH",
+                    "TELEDRIVE_STORAGE_MTPROTO_API_HASH"):
         assert private not in compose
-    assert 'if [[ -n "${TELEDRIVE_BOT_TOKEN:-}"' in runner
+    assert 'if [[ -n "${TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE:-}"' in runner
     assert 'down -v --remove-orphans' in runner
     assert 'production_acceptance_signed_off": False' in runner
 

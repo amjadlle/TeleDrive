@@ -26,7 +26,7 @@ TeleDrive stores object payloads in Telegram and keeps object metadata, upload s
 
 ## 1. Quick start: Docker
 
-Prerequisites: Docker Engine and Docker Compose v2. For modern REST/S3/local-job storage, use an authorized Telethon USER session with posting rights in a dedicated private broadcast channel. The unified engine does not support Bot API writes or Saved Messages.
+Prerequisites: Docker Engine and Docker Compose v2. For modern REST/S3/local-job storage, use an authorized Telethon USER session with posting rights in a dedicated private broadcast channel. There is no Bot API transport; the unified engine is Telethon USER MTProto only and never uses Saved Messages.
 
 ~~~bash
 git clone https://github.com/babico/TeleDrive.git
@@ -90,7 +90,7 @@ The original uploader accepts Telegram user accounts through MTProto/Telethon; a
 
 **Unified storage never uses Saved Messages or Bot API**: select a private broadcast channel that the authorized user can post to. The old standalone uploader still has historical `me` settings; they are not enabled in REST/S3. Respect Telegram rate limits, and never reuse a writable session among independent uploader processes.
 
-The **REST/S3/local-job engine requires USER MTProto**. `TELEDRIVE_STORAGE_TRANSPORT=telethon` is the default; setting `bot` fails closed, and stale Bot environment variables are ignored. The same SQL catalog and bounded chunk engine are retained. Existing `api-bot` objects are readable using the authorized USER session only when the original **same channel** is accessible and the immutable SQL manifest retains real message IDs; full checksums are still verified. Old objects in inaccessible channels require a separately verified migration and backup. No existing media is automatically deleted.
+The **REST/S3/local-job engine requires USER MTProto**. `TELEDRIVE_STORAGE_TRANSPORT=telethon` is the default and the only accepted value; anything else fails closed. No Bot credentials exist in the runtime. The same SQL catalog and bounded chunk engine are retained. Existing `api-bot` objects are readable using the authorized USER session only when the original **same channel** is accessible and the immutable SQL manifest retains real message IDs; full checksums are still verified. Old objects in inaccessible channels require a separately verified migration and backup. No existing media is automatically deleted.
 
 ## 3. REST API
 
@@ -131,7 +131,7 @@ For the **116-operation AWS S3 API compatibility matrix**, parameter-level limit
 
 The S3 endpoint is **part of the default container**, not a separate Compose profile. It implements a tested **subset** of S3 over the shared Telegram-backed catalog. It is **not AWS S3 feature parity**.
 
-A connected user-MTProto server also exposes **admin-only, read-only** `GET /api/v1/admin/storage/channel-history?limit=100&include_external_markers=true`. Use `before_message_id=<next_before_message_id>` to enumerate older pages. Other authors' marker captions are reported only as **unverified clues**: do not use them to restore a bucket/key or authorize physical deletion without independent manifests and checksum evidence. A Bot-only session cannot run the unified service or enumerate arbitrary channel history.
+A connected user-MTProto server also exposes **admin-only, read-only** `GET /api/v1/admin/storage/channel-history?limit=100&include_external_markers=true`. Use `before_message_id=<next_before_message_id>` to enumerate older pages. Other authors' marker captions are reported only as **unverified clues**: do not use them to restore a bucket/key or authorize physical deletion without independent manifests and checksum evidence. Only an authorized USER session can run the unified service or enumerate channel history.
 
 ### Provision the S3 master key and credentials
 
@@ -146,7 +146,7 @@ chmod 600 config/mtproto-user.session
 
 Run this interactively on a trusted host with Python dependencies installed, before the first Docker startup. Ensure the resulting `0600` file is readable by the configured container `PUID`/`PGID`. The API ID/hash are from [my.telegram.org](https://my.telegram.org/apps). The script prompts for the real user's Telegram sign-in code and optional 2FA and refuses to overwrite an existing session. Its MTProto application/device metadata identifies the TeleDrive client accurately; it does **not** masquerade as an official Telegram Desktop/Android app. Choose a channel username or a numeric channel ID present in this user's dialogs. If selecting a numeric private channel, it must be visible among the user's first 5,000 dialogs. No user account => no user-only history access.
 
-1. Set `TELEDRIVE_STORAGE_TRANSPORT=telethon` and `TELEDRIVE_STORAGE_MTPROTO_API_ID`, `TELEDRIVE_STORAGE_MTPROTO_API_HASH`, `TELEDRIVE_STORAGE_MTPROTO_CHANNEL` in the private `.env`. Save an authorized user StringSession in `./config/mtproto-user.session` (mode 0600) using the interactive command below. The user needs posting rights in that private **broadcast channel**, not Saved Messages. Existing Bot-only installations must configure a user session before further uploads; **do not delete original media or SQL backups**.
+1. Set `TELEDRIVE_STORAGE_TRANSPORT=telethon` and `TELEDRIVE_STORAGE_MTPROTO_API_ID`, `TELEDRIVE_STORAGE_MTPROTO_API_HASH`, `TELEDRIVE_STORAGE_MTPROTO_CHANNEL` in the private `.env`. Save an authorized user StringSession in `./config/mtproto-user.session` (mode 0600) using the interactive command below. The user needs posting rights in that private **broadcast channel**, not Saved Messages. Existing installations from the pre-switch era must configure a user session before further uploads; **do not delete original media or SQL backups**.
 2. Generate a persistent master encryption key once, on the trusted host:
 
 ~~~bash
@@ -301,7 +301,7 @@ For additional reviewed packages, set `TELEDRIVE_DB_EXTRA_PACKAGES` in `.env` an
 ## 8. Security and operational limits
 
 - Keep WebUI/REST/S3 on loopback unless protected by an HTTPS reverse proxy or VPN.
-- Treat session files, `.env`, Bot tokens, `config.yaml`, the S3 master key and SQL backups as secrets.
+- Treat session files, `.env`, historical Bot tokens, `config.yaml`, the S3 master key and SQL backups as secrets.
 - Docker defaults include non-root execution, a read-only filesystem, capability drops and a read-only source mount.
 - Never assume a successful database-only restore is proof of original Telegram media recovery.
 - Never enable automatic physical Telegram deletion or bypass unresolved ACK/reference fences.
@@ -341,7 +341,7 @@ docker compose config --quiet
 bash scripts/run_docker_fault_injection.sh
 ~~~
 
-Nine mandatory GitHub Actions workflows validate a given commit. The delivery workflow also includes a guarded housekeeping job that deletes only merged, unchanged, unprotected branches with no open PR, after its release gate passes. Real User MTProto and multiworker tests, plus **historical Bot compatibility fixtures**, use private **test-only** Telegram credentials. The Bot fixture can be configured using `python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot` on a trusted local machine. Production unified storage **never uses this Bot token**. Never upload live credentials to GitHub issues or the repository. See [CI and Test Guide](docs/CI_WORKFLOWS.md) for workflow names, command details, evidence and acceptance boundaries.
+Eight mandatory GitHub Actions workflows validate a given commit. The delivery workflow also includes a guarded housekeeping job that deletes only merged, unchanged, unprotected branches with no open PR, after its release gate passes. Real User MTProto and multiworker tests use private **test-only** Telegram credentials. The test secrets can be configured using `python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing` on a trusted local machine. Never upload live credentials to GitHub issues or the repository. See [CI and Test Guide](docs/CI_WORKFLOWS.md) for workflow names, command details, evidence and acceptance boundaries.
 
 ## Credits and license
 

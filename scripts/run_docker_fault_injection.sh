@@ -6,8 +6,8 @@ cd "$REPO"
 command -v docker >/dev/null
 docker compose version >/dev/null
 command -v python3 >/dev/null
-if [[ -n "${TELEDRIVE_BOT_TOKEN:-}" || -n "${TELEDRIVE_STORAGE_BOT_TOKEN:-}" ]]; then
-  echo "Üretim Bot token içeren shell'de DEV fault injection çalıştırma." >&2; exit 2
+if [[ -n "${TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE:-}" || -n "${TELEDRIVE_STORAGE_MTPROTO_API_HASH:-}" ]]; then
+  echo "Üretim MTProto session içeren shell'de DEV fault injection çalıştırma." >&2; exit 2
 fi
 ID="$(python3 -c 'import secrets;print(secrets.token_hex(6))')"
 PROJECT="tdfault$ID"

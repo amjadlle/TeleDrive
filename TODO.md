@@ -2,20 +2,30 @@
 
 > **Purpose:** short, actionable development and release tasks. For decisions and evidence limits, see [Project Status](docs/IMPLEMENTATION_STATUS.md). For commands and CI contracts, see [CI and Test Guide](docs/CI_WORKFLOWS.md).
 
-## 0. In progress — Telethon-only purge (owner directive)
+## 0. In progress — Telethon-only purge (owner directive, executed carefully)
 
-> Owner: Bot work is discarded completely; everything becomes Telethon USER MTProto only. Tracked until merged.
+> Owner: Bot work is discarded completely; every live transport becomes Telethon USER MTProto only. Run carefully: keep every batch committing, pushing and CI-verified.
 
 - [x] Delete Bot adapter/receipt modules, Bot tests and the Bot E2E workflow.
-- [x] GC inventory/reference graph and physical-cleanup fences: MTProto send intents/receipts + active durable jobs only (Bot ACK/file-ID accounting removed).
-- [x] Web/S3 services: `storage_transport` factory, Telethon `RECOMMENDED_CHUNK_SIZE`, MTProto health alerts, `mtproto-unresolved` admin endpoint (replaces `bot-unresolved`).
-- [x] `scripts/rehearse_telegram_dr.py`: USER-only read path, reusable `open_read_only_user`, no Bot fallback; tests rewritten (29 pass locally).
-- [ ] Convert `scripts/acceptance.py`, `docker_fault_scenarios.py`, `rehearse_native_database_restore.py`, `setup_telegram_e2e.py`, `verify_legacy_cutover.py` to USER-only.
-- [ ] Convert multiworker E2E test and its workflow to USER MTProto; drop Bot secrets.
-- [ ] Purge Bot references from remaining tests, `test_ci_workflows.py` (9 → 8 workflows) and all docs.
+- [x] GC inventory/reference graph and physical-cleanup fences: MTProto send intents/receipts + active durable jobs only.
+- [x] Web/S3 services: `storage_transport` factory, Telethon `RECOMMENDED_CHUNK_SIZE`, MTProto health alerts, `mtproto-unresolved` admin endpoint.
+- [x] `rehearse_telegram_dr.py`: USER-only read path, reusable `open_read_only_user`, no Bot fallback.
+- [x] MTProto rate guard: shared send slots, flood-wait cooldowns, durable flood observations; wired into `UnifiedUserTransport`.
+- [x] Fault-injection scenarios + converted S3/REST/GC/recovery/health/sigkill/metadata test fakes to USER MTProto.
+- [x] Multiworker PostgreSQL E2E converted to USER MTProto (`tests/test_telegram_multiworker_e2e.py`, workflow uses USER secrets).
+- [ ] Convert `scripts/acceptance.py`, `rehearse_native_database_restore.py`, `setup_telegram_e2e.py`, `verify_legacy_cutover.py` to USER-only.
+- [ ] Purge Bot references from remaining workflows, `test_ci_workflows.py` (9 → 8 workflow matrix) and all docs.
 - [ ] Full local suite green; CI green on the exact PR head SHA; merge; clean up only proven-merged branches.
 
-## 1. Verified milestones
+## 1. Owner directives (new)
+
+- [ ] **Desktop app cancelled completely.** Only the Docker/baremetal WebUI service remains. Remove `app/` (PySide6), `installer/`, `requirements/desktop.txt`, `examples/config.desktop.yaml`, desktop build scripts, desktop tests and the desktop CI workflow. Keep the shared config parser the Web service still uses.
+- [ ] **Single requirements + single config.** One `requirements.txt` and one config style for the service; no desktop/server split.
+- [ ] **Website not maintained here.** `website/` belongs to the original author; remove it from this fork.
+- [ ] **Multiple api_id/api_hash pairs.** Support more than one Telegram API credential set with round-robin/failover strategies across the unified USER transport.
+- [ ] **Regroup and reorganize `scripts/`, `teledrive/`, `web/`, `tests/`.** Analyze each file's role and reorganize cleanly; update every import, CI path and doc reference.
+
+## 2. Verified milestones
 
 - [x] Publish [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7) from `747747652cd1ca36878453d49daf627d8c0a60ad` with Linux and Windows release assets.
 - [x] Validate the bounded REST/S3/desktop storage feature set and 13-gate disposable Docker fault-injection acceptance.
@@ -24,22 +34,22 @@
 - [x] Implement guarded metadata recovery, owner-verified isolated Telegram rebuild (atomic bounded multi-object batches), and the offline two-person production-evidence verifier.
 - [x] Verify all nine standard GitHub Actions workflows successfully on development commit `c2b76880b4ada3d61d47a7926ea819244047fa33`, including User MTProto, isolated historical Bot, and PostgreSQL multiworker workflows. This does **not** change the contents of v1.0.7.
 
-## 2. Engineering backlog
+## 3. Engineering backlog
 
-- [ ] Implement and CI-validate an isolated, read-only **Telethon USER MTProto original-media restore rehearsal** using an independently sealed SQL snapshot, original channel/message references and whole-body/range SHA-256 verification. The existing `scripts/rehearse_telegram_dr.py` accepts only a historical Bot token and cannot satisfy this owner gate.
+- [x] Implement and CI-validate an isolated, read-only **Telethon USER MTProto original-media restore rehearsal** using an independently sealed SQL snapshot, original channel/message references and whole-body/range SHA-256 verification. Owner-authorized production-equivalent execution remains an operator acceptance task.
 - [x] Require Telethon USER MTProto for every unified REST/S3/local-job upload; reject Bot mode and do not read stale Bot secrets, while retaining hash-verified read access to original Bot objects from the same channel.
 - [x] Add mainline release-gated cleanup of only merged, unchanged, unprotected PR branches; keep open/unmerged/advanced branches untouched.
 - [x] Add bounded, admin-authenticated, read-only history enumeration for the live Telethon storage session, with exclusive cursor pagination and visibly unverified other-sender marker candidates; prohibit guessed bucket/key mapping and Telegram mutations.
-- [x] Implement an authenticated USER-MTProto transport for the unified REST/S3/local-job SQL catalog, private-channel-only operation, durable uncertain-send evidence, signed S3 synthetic regression and backward-compatible Bot object read fallback. Development live Telegram USER fixture passed, but production-equivalent owner-controlled REST/S3 deployment and original-channel recovery remain operator acceptance tasks.
+- [x] Implement an authenticated USER-MTProto transport for the unified REST/S3/local-job SQL catalog, private-channel-only operation, durable uncertain-send evidence, signed S3 synthetic regression and backward-compatible Bot object read fallback.
 - [x] Write a complete [owner-local Docker, independent media backup, restore and GC acceptance mission](docs/LOCAL_AGENT_ACCEPTANCE.md). This checks off the **runbook delivery only**, not operator execution or production authorization.
 - [x] Complete bounded ListParts and ListMultipartUploads with SQL-keyset pagination, genuine metadata fields, delimiter/URL encoding, ownership isolation, boto3 and adversarial tests; promote both documented private S3 contracts after CI.
-- [x] Test non-destructive GC SQL graph guards (including removed versions and writer fences) and real test-channel history inventory automatically in CI.
+- [x] Test non-destructive GC SQL graph guards (including removed versions, writer fences and active durable jobs) and real test-channel history inventory automatically in CI.
 - [ ] Implement full version-aware, writer-fenced physical garbage collection **only after** sealed independent payload backup, ownership/alias/retention checks, an actual restore drill and explicit two-person approval.
 - [x] Add a bounded, read-only marker inventory for one owner-authorized Telegram channel, with private output and synthetic regression coverage; candidate hints are not recovery proofs.
 - [x] Compare history candidates against independently supplied bucket/key, full SHA and message identity; real CI performs isolated byte-verified restore of its own Telegram test fixture.
 - [ ] Extend trustworthy recovery of unknown original Telegram history beyond candidate markers without inventing bucket/key, full SHA-256 or missing version metadata.
 - [x] Align S3 documentation with CRC64NVME integration-test coverage; retain explicit limits for other checksum modes.
-- [x] Count Bot file IDs without journal/receipt evidence in non-destructive GC audits.
+- [x] Count unresolved MTProto send intents without journal/receipt evidence in non-destructive GC audits.
 - [x] Implement signed Get/PutBucketVersioning with strictly Enabled semantics, scoped permissions and real boto3 compatibility tests.
 - [x] Add signed Get/PutPublicAccessBlock for the enforced all-private configuration; reject any weakening attempts.
 - [x] Support signed lifecycle XML GET/PUT/DELETE and hourly bounded incomplete-MPU abort without physical Telegram deletion.
@@ -53,7 +63,7 @@
 - [x] Expose opt-in lease-fenced legacy folder ingestion in default single-container Compose and verify cross-interface REST/S3 readback from the shared catalog.
 - [ ] Establish longer-duration real-environment capacity benchmarks on owner-controlled infrastructure.
 
-## 3. Operator-only production sign-off
+## 4. Operator-only production sign-off
 
 **Assigned to on-device agent:** [Owner-local acceptance mission](docs/LOCAL_AGENT_ACCEPTANCE.md). Its safe synthetic and test-channel work can run on one Docker host. Original-media recovery, physically distinct hosts, authorized soak, real legacy cutover and independent approvals must remain unchecked until documented original-owner evidence exists.
 - [ ] Collect independently verified identities from physically distinct deployment hosts sharing the intended SQL database.
@@ -62,7 +72,7 @@
 - [ ] Perform legacy cutover only when a real legacy source exists, otherwise obtain the explicit signed no-legacy exemption.
 - [ ] Validate independent owner/operator approvals with `scripts/verify_production_bundle.py`; never infer sign-off from a synthetic CI fixture.
 
-## 4. Release decision rules
+## 5. Release decision rules
 
 - [ ] For any **new** release candidate, require all mandatory checks to pass on **that exact SHA**; previous green commits cannot be reused as proof.
 - [ ] Review binaries, tag, release metadata and supported-feature limits before publication; do not silently publish unreleased `main` features as v1.0.7.

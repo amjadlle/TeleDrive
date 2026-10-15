@@ -6,7 +6,7 @@
 
 ## 1. What a backup contains
 
-TeleDrive stores **payload bytes in Telegram** and **object references/versions, job state, Bot file IDs, and encrypted S3 credential metadata in SQL**. An SQL backup is **not** an independent copy of the Telegram objects.
+TeleDrive stores **payload bytes in Telegram** and **object references/versions, job state, MTProto message coordinates, and encrypted S3 credential metadata in SQL**. An SQL backup is **not** an independent copy of the Telegram objects.
 
 Protect these as separate, coordinated recovery inputs:
 
@@ -14,7 +14,7 @@ Protect these as separate, coordinated recovery inputs:
 | --- | --- | --- |
 | Metadata database | Object heads, history, chunk identities, durable jobs | Encrypted backup; recorded independent SHA-256 |
 | Telegram USER StringSession / API credentials | Required for current REST/S3/local-job access and same-channel message history | Protected `0600` private file/secret manager, independent of SQL archive |
-| Historical Bot credentials (if any) | Old-channel recovery/testing only, **not** current unified writes | Separately protected migration archive |
+| Historical Bot credentials (if any) | No longer usable by the Telethon-only runtime; retain only as a migration audit trail | Separately protected archive |
 | S3 encryption master key | Decrypts issued S3 access secrets | Separate secret backup; never silently rotate/replace |
 | Deployment configuration | DB URL, channel target, source mounts and allowlists | Protected copy; no credentials in source control |
 
@@ -46,7 +46,7 @@ The verifier checks SQLite consistency, foreign keys, current HEAD hashes and pu
 
 1. Create a **separate disposable installation** with workers initially stopped.
 2. Copy the verified snapshot to the staging installation's database path with owner-only permissions.
-3. Verify schema, SQL HEAD pointers, version history, references, upload intents, Bot file IDs and credential decryptability with the staged secrets.
+3. Verify schema, SQL HEAD pointers, version history, references, MTProto send intents and credential decryptability with the staged secrets.
 4. Reconnect only to approved **test/original owner-authorized** Telegram media, verify full SHA-256 and at least one cross-chunk range.
 5. Record the results privately. **Never overwrite a running production database.**
 
@@ -56,7 +56,7 @@ The verifier checks SQLite consistency, foreign keys, current HEAD hashes and pu
 
 Use a consistent native logical backup, for example `pg_dump -Fc`, under a dedicated and appropriately scoped backup role. Retrieve credentials through a secret store; **do not put a password in a shell command or committed script**.
 
-Rehearse a native `pg_restore` into a **new, empty, isolated** database. Compare schema, object heads and generations, published/deleted versions, chunk references and SHA-256 hashes, Bot receipts, durable jobs and S3 credential decryptability.
+Rehearse a native `pg_restore` into a **new, empty, isolated** database. Compare schema, object heads and generations, published/deleted versions, chunk references and SHA-256 hashes, MTProto send receipts, durable jobs and S3 credential decryptability.
 
 ### MySQL / MariaDB
 
@@ -68,23 +68,23 @@ Choose an engine-aware, transactionally consistent backup method such as `mysqld
 
 The [Database Integration workflow](../.github/workflows/integration-databases.yml) exercises PostgreSQL 17 `pg_dump -Fc`/`pg_restore` and MySQL 8.4 `mysqldump --single-transaction`/restore using **new disposable databases**.
 
-It seeds multiple published versions, chunk-boundary SHA metadata, delete markers/version removal, tags, Bot upload receipt records, queued jobs and independently encrypted **test** S3 credentials. Fresh SQL connections check exact heads/generations, chunk identities, retention semantics, job state and decryptability.
+It seeds multiple published versions, chunk-boundary SHA metadata, delete markers/version removal, tags, MTProto send intent/receipt records, queued jobs and independently encrypted **test** S3 credentials. Fresh SQL connections check exact heads/generations, chunk identities, retention semantics, job state and decryptability.
 
 **Limit:** this checks actual SQL backup and restore machinery, **not** original Telegram media or a production secret-recovery drill.
 
-### Dedicated historical Bot-compatibility recovery CI
+### Dedicated USER-MTProto recovery CI
 
-`scripts/rehearse_telegram_dr.py` remains **Bot API-only** (`TELEDRIVE_BOT_TOKEN`) for a historical/isolated original Bot source. It is **not** evidence for a production Telethon USER restore; that independent verifier and owner-authorized test remain open.
+`scripts/rehearse_telegram_dr.py` verifies original-media readback through an authorized **read-only USER MTProto** session (`TELEDRIVE_STORAGE_MTPROTO_API_ID` / `TELEDRIVE_STORAGE_MTPROTO_API_HASH` / `TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE`, plus `--target` for the original channel). Old `api-bot` chunks in the **same** authorized channel remain readable by message ID without any Bot token. The drill checks archive identity, published SQL metadata, original Telegram bytes, object SHA/length and cross-chunk ranges from a sealed snapshot; it is a single named-object check, **not** proof of a complete independent payload backup or full archive recovery.
 
-The [Bot API E2E workflow](../.github/workflows/live-telegram-bot.yml) takes a disposable SQLite snapshot from a dedicated **test** Bot/channel transfer, verifies its SHA-256, opens it independently, and retrieves real Bot message bytes using the persisted file IDs. Full checksums and ranges are rechecked. Cleanup is scoped to messages created by that test run.
+The [User MTProto E2E workflow](../.github/workflows/live-telegram-user.yml) exercises a real Telethon user session with checksum and range readback, and the [Multiworker PostgreSQL E2E workflow](../.github/workflows/live-telegram-multiworker.yml) runs three independent SQL workers against a real test channel. Cleanup is scoped to messages created by each test run.
 
-**Limit:** this test exercises the historical Bot adapter in isolation, not the live unified writer. It cannot prove that the owner's original Bot token, channel history or production media remain recoverable.
+**Limit:** these tests exercise the live USER writer and isolated recovery, not the owner's original production channel or media.
 
 ## 5. Production disaster-recovery acceptance
 
 For actual owner-controlled original Telegram data, follow [Project Status: original-media DR](IMPLEMENTATION_STATUS.md#32-recovery-of-original-telegram-media). The evidence must link a sealed SQL archive and its SHA-256 to the **original** channel/account and verify real Telegram payloads and byte ranges without deleting or reuploading them.
 
-A successful SQL restore does **not** mean production recovery passed. Owner credentials, independently backed-up encryption keys, source-root mounts, versioned GET/HEAD, Bot ACK records, credential revocation and queued-job behavior must also be checked.
+A successful SQL restore does **not** mean production recovery passed. Owner credentials, independently backed-up encryption keys, source-root mounts, versioned GET/HEAD, MTProto send receipts, credential revocation and queued-job behavior must also be checked.
 
 ## 6. Failure modes and prohibited actions
 

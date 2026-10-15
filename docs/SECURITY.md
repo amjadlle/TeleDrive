@@ -23,8 +23,7 @@ Treat all of the following as secrets:
 
 | Secret | Consequence if exposed |
 | --- | --- |
-| Telethon `*.session`, Telegram API hash, login codes and 2FA | User-account and channel access |
-| Historical Bot token and private channel identifiers | Isolated historical recovery/test access; never used by the live unified runtime |
+| Telethon `*.session`, Telegram API ID/hash, login codes and 2FA | User-account and channel access |
 | `config.yaml`, `.env`, Web password | Administrative control and deployment information |
 | SQL URL and SQL backups | Object manifests, references, jobs and potentially encrypted credential metadata |
 | `config/s3-master.key` and S3 access keys | S3 key decryption and object API access |
