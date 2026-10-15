@@ -55,7 +55,7 @@ Create a private evidence directory *outside* the Git checkout: `$HOME/teledrive
 
 ## 2. Seed real bytes, not just metadata
 
-Issue a test-only scoped S3 key via **WebUI → API Management → S3-compatible gateway**. Configure boto3 with the explicit `http://127.0.0.1:9000` path-style endpoint and SigV4; never record its secret. Implement a repeatable `scripts/local_owner_storage_matrix.py` (or tests), keeping random seed + SHA-256 manifest private. Create a unique bucket and deterministic test file paths. At minimum:
+Issue a test-only scoped S3 key via **WebUI → API Management → S3-compatible gateway**. Configure boto3 with the explicit `http://127.0.0.1:9000` path-style endpoint and SigV4; never record its secret. Implement a repeatable `scripts/ops/local_owner_storage_matrix.py` (or tests), keeping random seed + SHA-256 manifest private. Create a unique bucket and deterministic test file paths. At minimum:
 
 - Upload **0 B, 1 B, 4,097 B, 65,537 B, 5 MiB + 7 B, 16 MiB + 101 B** and at least one multi-chunk 32 MiB+ object if the user's dedicated test channel limits allow. Mix incompressible random, repetitive and Unicode-named payloads. Avoid unbounded uploads or rate-limit floods.
 - For each: PUT via S3; GET and HEAD via both S3 and REST; verify exact bytes, full SHA-256, stored object size, ETag consistency where applicable and cross-chunk `Range` (first/middle/boundary/last).
