@@ -24,13 +24,7 @@ Run the dedicated [Docker fault-injection acceptance](docs/CI_WORKFLOWS.md) when
 bash scripts/run_docker_fault_injection.sh
 ~~~
 
-For website work:
-
-~~~bash
-cd website
-npm ci
-npm run build
-~~~
+For the command-line uploader, use the existing test suite and the [Docker fault-injection acceptance](docs/CI_WORKFLOWS.md) above.
 
 Live Telegram tests require the private test channel and secrets described in the [CI and Test Guide](docs/CI_WORKFLOWS.md); never point the test workflow at production media.
 

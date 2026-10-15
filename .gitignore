@@ -14,18 +14,10 @@ config.yaml
 *.session-journal
 *.log
 
-# Website build and dependencies
-website/node_modules/
-website/dist/
-website/.astro/
-
 .env
 config/
 uploads/
 .opencode/
-
-# Local website settings (formerly website/.gitignore)
-website/.env*
 .DS_Store
 .idea/
 .vscode/

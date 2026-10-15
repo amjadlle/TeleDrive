@@ -871,7 +871,6 @@ def test_public_markdown_is_english_structured_and_locally_linked():
         "docs/IMPLEMENTATION_STATUS.md",
         "docs/BACKUP_RESTORE.md",
         "docs/SECURITY.md",
-        "website/public/knowledge.md",
     )
     turkish_glyphs = re.compile(r"[ğĞıİşŞçÇöÖüÜ]")
     for name in guides:
@@ -909,9 +908,7 @@ def test_public_markdown_is_english_structured_and_locally_linked():
     assert "docker compose up -d --build" in readme
     assert "one container" in readme.lower()
     assert "a separate Docker Compose profile" not in readme
-    knowledge = (ROOT / "website/public/knowledge.md").read_text("utf-8")
-    assert "github.com/babico/TeleDrive" in knowledge
-    assert "TeleDrive-Setup-1.0.6" not in knowledge
+    assert not (ROOT / "website").exists()
 
 def test_gc_references_and_live_inventory_are_ci_gates():
     for name in ("quality-security.yml", "integration-storage.yml"):
