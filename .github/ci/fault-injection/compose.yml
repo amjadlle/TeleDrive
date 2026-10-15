@@ -86,7 +86,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=128m
-    entrypoint: ["python", "scripts/docker_fault_scenarios.py"]
+    entrypoint: ["python", "scripts/dev/docker_fault_scenarios.py"]
 networks:
   dev-isolated:
     internal: true

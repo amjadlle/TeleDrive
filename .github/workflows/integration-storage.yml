@@ -49,65 +49,65 @@ jobs:
       - name: Actual AWS CLI and rclone process integration
         env:
           TELEDRIVE_REQUIRE_CLI_CLIENTS: "1"
-        run: python -m pytest -vv tests/test_s3_cli_compat.py
+        run: python -m pytest -vv tests/s3/test_s3_cli_compat.py
       - name: Real SQL and HTTP contract tests with fake Telegram I/O
         run: |
           python -m pytest -q \
-            tests/test_api_keys.py \
-            tests/test_rest_api.py \
-            tests/test_rest_transfer.py tests/test_unified_service.py \
-            tests/test_storage_engine.py \
-            tests/test_storage_user_mode.py \
-            tests/test_storage_recovery.py tests/test_storage_rebuild.py tests/test_telegram_inventory_reconcile.py \
-            tests/test_storage_pending_admin.py \
-            tests/test_storage_jobs.py \
-            tests/test_legacy_bridge.py \
-            tests/test_legacy_import_admin.py \
-            tests/test_metadata_backup.py \
-            tests/test_storage_sigkill.py \
-            tests/test_storage_multiworker.py \
-            tests/test_metadata_snapshot_rehearsal.py \
-            tests/test_storage_versions.py \
-            tests/test_storage_ops_health.py tests/test_host_soak.py tests/test_acceptance_cli.py \
-            tests/test_storage_gc_retention.py tests/test_gc_reference_planner.py \
-            tests/test_s3_version_reads.py tests/test_s3_bucket_versioning.py tests/test_s3_public_access_block.py tests/test_s3_lifecycle.py \
-            tests/test_s3_delete_markers.py \
-            tests/test_s3_version_listing.py \
-            tests/test_s3_version_tagging.py \
-            tests/test_s3_version_copy.py \
-            tests/test_s3_vhost.py \
-            tests/test_s3_additional_checksums.py \
-            tests/test_s3_presigned_complete.py \
-            tests/test_s3_post_policy.py \
-            tests/test_storage_catalog.py \
-            tests/test_storage_user_mode.py \
-            tests/test_mtproto_rate_guard.py \
-            tests/test_mtproto_multi_credentials.py \
-            tests/test_telegram_dr_rehearsal.py \
-            tests/test_legacy_cutover_acceptance.py \
-            tests/test_s3_gateway.py tests/test_s3_bucket_listing.py \
-            tests/test_s3_credentials.py \
-            tests/test_s3_admin.py \
-            tests/test_s3_multipart.py \
-            tests/test_s3_multipart_preconditions.py \
-            tests/test_s3_recovery.py \
-            tests/test_s3_presigned.py \
-            tests/test_s3_copy.py \
-            tests/test_s3_tagging.py \
-            tests/test_s3_batch_delete.py \
-            tests/test_s3_metadata.py \
-            tests/test_s3_bucket_location.py \
-            tests/test_s3_listing_v1.py \
-            tests/test_s3_conditions.py \
-            tests/test_s3_conditional_writes.py \
-            tests/test_s3_cors.py \
-            tests/test_s3_object_attributes.py \
-            tests/test_s3_sigv4_defense.py \
-            tests/test_s3_fail_closed.py tests/test_s3_route_guard.py tests/test_s3_policy_status.py \
-            tests/test_s3_contract.py \
-            tests/test_s3_permissions.py \
-            tests/test_storage_gc_audit.py \
-            tests/test_storage_gc_admin.py
+            tests/web/test_api_keys.py \
+            tests/web/test_rest_api.py \
+            tests/web/test_rest_transfer.py tests/web/test_unified_service.py \
+            tests/storage/test_storage_engine.py \
+            tests/storage/test_storage_user_mode.py \
+            tests/storage/test_storage_recovery.py tests/storage/test_storage_rebuild.py tests/storage/test_telegram_inventory_reconcile.py \
+            tests/storage/test_storage_pending_admin.py \
+            tests/storage/test_storage_jobs.py \
+            tests/storage/test_legacy_bridge.py \
+            tests/storage/test_legacy_import_admin.py \
+            tests/storage/test_metadata_backup.py \
+            tests/storage/test_storage_sigkill.py \
+            tests/storage/test_storage_multiworker.py \
+            tests/storage/test_metadata_snapshot_rehearsal.py \
+            tests/storage/test_storage_versions.py \
+            tests/storage/test_storage_ops_health.py tests/meta/test_host_soak.py tests/meta/test_acceptance_cli.py \
+            tests/storage/test_storage_gc_retention.py tests/storage/test_gc_reference_planner.py \
+            tests/s3/test_s3_version_reads.py tests/s3/test_s3_bucket_versioning.py tests/s3/test_s3_public_access_block.py tests/s3/test_s3_lifecycle.py \
+            tests/s3/test_s3_delete_markers.py \
+            tests/s3/test_s3_version_listing.py \
+            tests/s3/test_s3_version_tagging.py \
+            tests/s3/test_s3_version_copy.py \
+            tests/s3/test_s3_vhost.py \
+            tests/s3/test_s3_additional_checksums.py \
+            tests/s3/test_s3_presigned_complete.py \
+            tests/s3/test_s3_post_policy.py \
+            tests/storage/test_storage_catalog.py \
+            tests/storage/test_storage_user_mode.py \
+            tests/storage/test_mtproto_rate_guard.py tests/storage/test_mtproto_multi_credentials.py \
+            tests/storage/test_telegram_dr_rehearsal.py \
+            tests/storage/test_legacy_cutover_acceptance.py \
+            tests/s3/test_s3_gateway.py tests/s3/test_s3_bucket_listing.py \
+            tests/s3/test_s3_credentials.py \
+            tests/s3/test_s3_admin.py \
+            tests/s3/test_s3_multipart.py \
+            tests/s3/test_s3_multipart_preconditions.py \
+            tests/s3/test_s3_recovery.py \
+            tests/s3/test_s3_presigned.py \
+            tests/s3/test_s3_copy.py \
+            tests/s3/test_s3_tagging.py \
+            tests/s3/test_s3_batch_delete.py \
+            tests/s3/test_s3_metadata.py \
+            tests/s3/test_s3_bucket_location.py \
+            tests/s3/test_s3_listing_v1.py \
+            tests/s3/test_s3_conditions.py \
+            tests/s3/test_s3_conditional_writes.py \
+            tests/s3/test_s3_cors.py \
+            tests/s3/test_s3_object_attributes.py \
+            tests/s3/test_s3_sigv4_defense.py \
+            tests/s3/test_s3_fail_closed.py tests/s3/test_s3_route_guard.py tests/s3/test_s3_policy_status.py \
+            tests/s3/test_s3_contract.py \
+            tests/s3/test_s3_permissions.py \
+            tests/storage/test_storage_gc_audit.py \
+            tests/storage/test_storage_gc_admin.py
+>>>>>>> f951dec (refactor(layout): regroup tests into s3/storage/web/e2e/meta and scripts into ops/dev)
       - name: Publish CI run summary
         if: always()
         shell: bash

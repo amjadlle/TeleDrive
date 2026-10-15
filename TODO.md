@@ -13,7 +13,7 @@
 - [x] MTProto rate guard: shared send slots, flood-wait cooldowns, durable flood observations; wired into `UnifiedUserTransport`.
 - [x] Fault-injection scenarios + converted S3/REST/GC/recovery/health/sigkill/metadata test fakes to USER MTProto.
 - [x] Multiworker PostgreSQL E2E converted to USER MTProto (`tests/test_telegram_multiworker_e2e.py`, workflow uses USER secrets).
-- [ ] Convert `scripts/acceptance.py`, `rehearse_native_database_restore.py`, `setup_telegram_e2e.py`, `verify_legacy_cutover.py` to USER-only.
+- [ ] Convert `scripts/ops/acceptance.py`, `rehearse_native_database_restore.py`, `setup_telegram_e2e.py`, `verify_legacy_cutover.py` to USER-only.
 - [ ] Purge Bot references from remaining workflows, `test_ci_workflows.py` (9 → 8 workflow matrix) and all docs.
 - [ ] Full local suite green; CI green on the exact PR head SHA; merge; clean up only proven-merged branches.
 
@@ -70,7 +70,7 @@
 - [ ] Rehearse original-media recovery using the owner's sealed SQL archive, Telegram credentials and real channel without overwriting production data.
 - [ ] Conduct the authorized physical soak; capture genuine telemetry without deliberately flooding Telegram.
 - [ ] Perform legacy cutover only when a real legacy source exists, otherwise obtain the explicit signed no-legacy exemption.
-- [ ] Validate independent owner/operator approvals with `scripts/verify_production_bundle.py`; never infer sign-off from a synthetic CI fixture.
+- [ ] Validate independent owner/operator approvals with `scripts/ops/verify_production_bundle.py`; never infer sign-off from a synthetic CI fixture.
 
 ## 5. Release decision rules
 

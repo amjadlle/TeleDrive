@@ -25,7 +25,7 @@ Never store these assets in Git, GitHub Actions logs or public test artifacts. R
 Run on the TeleDrive host with a destination on encrypted, access-controlled storage:
 
 ~~~bash
-python scripts/backup_metadata.py \
+python scripts/ops/backup_metadata.py \
   --database /data/teledrive.db \
   --output /secure-backups/teledrive-YYYY-MM-DD.db
 ~~~
@@ -35,7 +35,7 @@ The command uses SQLite's online backup API, checks `PRAGMA integrity_check`, re
 Validate the saved copy without touching the live database:
 
 ~~~bash
-python scripts/verify_metadata_backup.py \
+python scripts/ops/verify_metadata_backup.py \
   --database /secure-backups/teledrive-YYYY-MM-DD.db \
   --sha256 EXPECTED_ARCHIVE_SHA256
 ~~~
@@ -74,7 +74,7 @@ It seeds multiple published versions, chunk-boundary SHA metadata, delete marker
 
 ### Dedicated USER-MTProto recovery CI
 
-`scripts/rehearse_telegram_dr.py` verifies original-media readback through an authorized **read-only USER MTProto** session (`TELEDRIVE_STORAGE_MTPROTO_API_ID` / `TELEDRIVE_STORAGE_MTPROTO_API_HASH` / `TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE`, plus `--target` for the original channel). Old `api-bot` chunks in the **same** authorized channel remain readable by message ID without any Bot token. The drill checks archive identity, published SQL metadata, original Telegram bytes, object SHA/length and cross-chunk ranges from a sealed snapshot; it is a single named-object check, **not** proof of a complete independent payload backup or full archive recovery.
+`scripts/ops/rehearse_telegram_dr.py` verifies original-media readback through an authorized **read-only USER MTProto** session (`TELEDRIVE_STORAGE_MTPROTO_API_ID` / `TELEDRIVE_STORAGE_MTPROTO_API_HASH` / `TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE`, plus `--target` for the original channel). Old `api-bot` chunks in the **same** authorized channel remain readable by message ID without any Bot token. The drill checks archive identity, published SQL metadata, original Telegram bytes, object SHA/length and cross-chunk ranges from a sealed snapshot; it is a single named-object check, **not** proof of a complete independent payload backup or full archive recovery.
 
 The [User MTProto E2E workflow](../.github/workflows/live-telegram-user.yml) exercises a real Telethon user session with checksum and range readback, and the [Multiworker PostgreSQL E2E workflow](../.github/workflows/live-telegram-multiworker.yml) runs three independent SQL workers against a real test channel. Cleanup is scoped to messages created by each test run.
 

@@ -74,7 +74,7 @@ jobs:
           python -m pip install pytest "psycopg[binary]>=3.2,<4"
           python -m pip check
       - name: Three independent SQL workers and real Telegram byte restoration
-        run: python -m pytest -vv tests/test_telegram_multiworker_e2e.py
+        run: python -m pytest -vv tests/e2e/test_telegram_multiworker_e2e.py
       - name: Publish CI run summary
         if: always()
         shell: bash

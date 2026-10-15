@@ -140,7 +140,7 @@ An account holder creates the user StringSession **once** on a trusted interacti
 ~~~bash
 # Set TELEDRIVE_STORAGE_MTPROTO_API_ID and TELEDRIVE_STORAGE_MTPROTO_API_HASH
 # privately in the shell before running this command.
-python scripts/create_storage_user_session.py --output config/mtproto-user.session
+python scripts/dev/create_storage_user_session.py --output config/mtproto-user.session
 chmod 600 config/mtproto-user.session
 ~~~
 
@@ -299,10 +299,10 @@ python -m pytest -q
 python -m compileall -q teledrive web app tests
 docker compose config --quiet
 # Isolated fault-injection acceptance:
-bash scripts/run_docker_fault_injection.sh
+bash scripts/dev/run_docker_fault_injection.sh
 ~~~
 
-Eight mandatory GitHub Actions workflows validate a given commit. The delivery workflow also includes a guarded housekeeping job that deletes only merged, unchanged, unprotected branches with no open PR, after its release gate passes. Real User MTProto and multiworker tests use private **test-only** Telegram credentials. The test secrets can be configured using `python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing` on a trusted local machine. Never upload live credentials to GitHub issues or the repository. See [CI and Test Guide](docs/CI_WORKFLOWS.md) for workflow names, command details, evidence and acceptance boundaries.
+Eight mandatory GitHub Actions workflows validate a given commit. The delivery workflow also includes a guarded housekeeping job that deletes only merged, unchanged, unprotected branches with no open PR, after its release gate passes. Real User MTProto and multiworker tests use private **test-only** Telegram credentials. The test secrets can be configured using `python scripts/dev/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing` on a trusted local machine. Never upload live credentials to GitHub issues or the repository. See [CI and Test Guide](docs/CI_WORKFLOWS.md) for workflow names, command details, evidence and acceptance boundaries.
 
 ## Credits and license
 

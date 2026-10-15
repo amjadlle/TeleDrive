@@ -71,7 +71,7 @@ Provide at least two **physically independent** application hosts sharing an exp
 Configure `TELEDRIVE_P1_HEALTH_HOSTS` with two to eight unique `label`/`url` HTTPS entries, alongside `TELEDRIVE_P1_BASIC_USERNAME` and `TELEDRIVE_P1_BASIC_PASSWORD` in a protected environment. Then:
 
 ~~~bash
-python scripts/monitor_host_soak.py \
+python scripts/ops/monitor_host_soak.py \
   --output /secure/acceptance/soak.json \
   --duration-seconds 3600 \
   --interval-seconds 60
@@ -83,10 +83,10 @@ The evidence must demonstrate a run of at least one hour, `telemetry_gate_passed
 
 Keep the original SQL snapshot, expected archive SHA-256, Telegram account credentials and destination/channel identifiers in separate protected storage. Restore into an **isolated staging database**, never over the live production DB.
 
-SQLite backup validation is described in [Backup and Restore](BACKUP_RESTORE.md). **Current script scope:** `scripts/rehearse_telegram_dr.py` is a read-only USER-MTProto verifier. It authenticates an authorized user session, resolves the exact original broadcast channel, reads the sealed snapshot from a temporary clone and verifies whole-body SHA-256, size and a cross-chunk range for one named object. It never uploads or deletes Telegram media and never modifies the source database. Set `TELEDRIVE_STORAGE_MTPROTO_API_ID`, `TELEDRIVE_STORAGE_MTPROTO_API_HASH` and (optionally) `TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE` in the protected staging environment:
+SQLite backup validation is described in [Backup and Restore](BACKUP_RESTORE.md). **Current script scope:** `scripts/ops/rehearse_telegram_dr.py` is a read-only USER-MTProto verifier. It authenticates an authorized user session, resolves the exact original broadcast channel, reads the sealed snapshot from a temporary clone and verifies whole-body SHA-256, size and a cross-chunk range for one named object. It never uploads or deletes Telegram media and never modifies the source database. Set `TELEDRIVE_STORAGE_MTPROTO_API_ID`, `TELEDRIVE_STORAGE_MTPROTO_API_HASH` and (optionally) `TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE` in the protected staging environment:
 
 ~~~bash
-python scripts/rehearse_telegram_dr.py \
+python scripts/ops/rehearse_telegram_dr.py \
   --snapshot /secure/backups/sealed.db \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --bucket ORIGINAL_BUCKET \
@@ -103,7 +103,7 @@ Old `api-bot` chunks in the same authorized channel are read through the USER se
 If real legacy files exist, stop the legacy uploader, make its source directory read-only, fence concurrent writes, constrain paths to approved roots and verify original Telegram bytes and the current SQL heads. This is a **controlled operator action**, not an automated development acceptance step.
 
 ~~~bash
-python scripts/verify_legacy_cutover.py \
+python scripts/ops/verify_legacy_cutover.py \
   --database /secure/isolated.db \
   --source-root /approved/legacy \
   --allowed-root /approved \
@@ -118,12 +118,12 @@ Require `verified=true`, a complete scan, zero inconsistent/queued items, and ex
 
 ### 3.4 Two-person evidence review
 
-The offline verifier `scripts/verify_production_bundle.py` consumes `release_sha`, `topology`, `soak`, `dr`, `cutover`, `original_telegram_data_attested` and two independent approvals. Each host's topology entry includes `label`, `machine_id_sha256` and `shared_database_sha256`, with `independent_hosts_owner_attested=true`.
+The offline verifier `scripts/ops/verify_production_bundle.py` consumes `release_sha`, `topology`, `soak`, `dr`, `cutover`, `original_telegram_data_attested` and two independent approvals. Each host's topology entry includes `label`, `machine_id_sha256` and `shared_database_sha256`, with `independent_hosts_owner_attested=true`.
 
 The same canonical JSON (excluding `approvals`) must be signed by **two different people** using separate Ed25519 private keys. Provide independently obtained 32-byte public keys:
 
 ~~~bash
-python scripts/verify_production_bundle.py \
+python scripts/ops/verify_production_bundle.py \
   --bundle /secure/acceptance/production-bundle.json \
   --release-sha REVIEWED_40_HEX_COMMIT_SHA \
   --owner-public-key /secure/keys/owner.pub \
@@ -144,33 +144,33 @@ Do not enable physical deletion merely because offline integrity tests pass. Req
 
 ### 4.2 Rebuild metadata from verified original Telegram messages
 
-`teledrive.storage.rebuild.restore_isolated_catalog_batch` and `scripts/rebuild_from_telegram.py` verify original Telethon message identifiers, stable UUID/ordinal/SHA-prefix markers, account/channel/message identity, full per-chunk checksums and an **independently supplied** whole-object SHA-256. They create a **new isolated SQLite database**, not a replacement for the live database.
+`teledrive.storage.rebuild.restore_isolated_catalog_batch` and `scripts/ops/rebuild_from_telegram.py` verify original Telethon message identifiers, stable UUID/ordinal/SHA-prefix markers, account/channel/message identity, full per-chunk checksums and an **independently supplied** whole-object SHA-256. They create a **new isolated SQLite database**, not a replacement for the live database.
 
 Each plan requires `object_id`, `bucket`, `key`, `sha256`, `size` and `chunks`. Each chunk requires `ordinal`, `account`, `chat_id`, `message_id`, `size` and `sha256`. Multiple plans use `{"objects":[...]}`. The bounded batch accepts 1–128 objects, up to 4,096 chunks and 1 GiB total; the staging database is privately validated (`PRAGMA integrity_check`) and atomically published with mode `0600` only after **all** source bytes verify. A failed object never exposes a partial destination catalog.
 
 ~~~bash
 # Supply TELEDRIVE_REBUILD_API_ID, TELEDRIVE_REBUILD_API_HASH,
 # and TELEDRIVE_REBUILD_SESSION through a secure environment.
-python scripts/rebuild_from_telegram.py \
+python scripts/ops/rebuild_from_telegram.py \
   --plan /secure/verified-plan.json \
   --new-database /secure/isolated-rebuilt.db \
   --account original-user \
   --target ORIGINAL_TELEGRAM_CHANNEL
 ~~~
 
-**Bounded history candidate inventory:** `scripts/inventory_telegram_history.py` scans at most 10,000 readable messages from **one explicitly authorized original Telegram channel**, checks canonical TeleDrive UUID/ordinal/SHA-prefix markers and outgoing/channel/media hints, and creates a new private JSON report (mode `0600`). It downloads no media and writes no SQL. Missing and repeated ordinals are flagged; the report never claims that the channel scan represents all historical sources.
+**Bounded history candidate inventory:** `scripts/ops/inventory_telegram_history.py` scans at most 10,000 readable messages from **one explicitly authorized original Telegram channel**, checks canonical TeleDrive UUID/ordinal/SHA-prefix markers and outgoing/channel/media hints, and creates a new private JSON report (mode `0600`). It downloads no media and writes no SQL. Missing and repeated ordinals are flagged; the report never claims that the channel scan represents all historical sources.
 
 ~~~bash
 # Use the same protected TELEDRIVE_REBUILD_API_ID, _API_HASH and _SESSION
 # environment variables as the isolated rebuild command.
-python scripts/inventory_telegram_history.py \
+python scripts/ops/inventory_telegram_history.py \
   --account original-user \
   --target ORIGINAL_TELEGRAM_CHANNEL \
   --limit 1000 \
   --output /secure/isolated-history-candidates.json
 ~~~
 
-**Independent manifest reconciliation:** `teledrive.storage.reconcile_inventory.reconcile_inventory` compares bounded marker candidates with separately provided, already independently verified recovery plans. Wrong object IDs, ordinals, Telegram account/chat/message coordinates and SHA-prefixes fail closed. `scripts/rebuild_from_telegram.py --inventory /secure/candidates.json` optionally makes this check a prerequisite to full payload byte verification. CI also tests a real channel-marker upload, read-only discovery, independent manifest reconciliation and a new isolated SQLite restore with original Telegram bytes. A match is **not** by itself a verified restore.
+**Independent manifest reconciliation:** `teledrive.storage.reconcile_inventory.reconcile_inventory` compares bounded marker candidates with separately provided, already independently verified recovery plans. Wrong object IDs, ordinals, Telegram account/chat/message coordinates and SHA-prefixes fail closed. `scripts/ops/rebuild_from_telegram.py --inventory /secure/candidates.json` optionally makes this check a prerequisite to full payload byte verification. CI also tests a real channel-marker upload, read-only discovery, independent manifest reconciliation and a new isolated SQLite restore with original Telegram bytes. A match is **not** by itself a verified restore.
 
 **Limits:** inventory markers are **unverified candidates**, not an importable rebuild plan. They do not prove the original bucket/key mapping, complete chunk SHA-256 or sizes, whole-object hash, historical versions, or the existence of messages outside the scanned window/channel. Actual isolated reconstruction still requires independent metadata and byte-level verification. Automated discovery without trustworthy independent metadata is still open work. Inaccessible original channels require a separately verified migration and preserved backups. This reconstruction does **not** upload or delete Telegram media.
 

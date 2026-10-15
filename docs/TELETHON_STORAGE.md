@@ -43,7 +43,7 @@ python -m pip install -r requirements.txt
 # Set these privately in the current shell; the program prompts for sign-in.
 export TELEDRIVE_STORAGE_MTPROTO_API_ID=YOUR_TELEGRAM_API_ID
 export TELEDRIVE_STORAGE_MTPROTO_API_HASH=YOUR_TELEGRAM_API_HASH
-python scripts/create_storage_user_session.py --output config/mtproto-user.session
+python scripts/dev/create_storage_user_session.py --output config/mtproto-user.session
 chmod 600 config/mtproto-user.session
 ```
 
@@ -117,7 +117,7 @@ production writer active on the same session:
 # TELEDRIVE_STORAGE_MTPROTO_API_HASH, and point the following variable to
 # a protected owner-authorized copy of the original USER StringSession.
 export TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE=/secure/staging/owner-user.session
-python scripts/rehearse_telegram_dr.py \
+python scripts/ops/rehearse_telegram_dr.py \
   --snapshot /secure/staging/sealed-original.db \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --bucket ORIGINAL_BUCKET --key ORIGINAL_KEY \
@@ -135,8 +135,8 @@ recovery. PostgreSQL/MySQL owners must rehearse their native SQL restores
 separately.
 
 For objects with no reliable SQL map, use
-`scripts/inventory_telegram_history.py` (private candidate inventory)
-and `scripts/rebuild_from_telegram.py` (separately proven plan, new isolated
+`scripts/ops/inventory_telegram_history.py` (private candidate inventory)
+and `scripts/ops/rebuild_from_telegram.py` (separately proven plan, new isolated
 catalog); see [Backup and Restore](BACKUP_RESTORE.md).
 
 ## 5. Status, CI and unfinished safety gates

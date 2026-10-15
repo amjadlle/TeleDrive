@@ -44,16 +44,17 @@ jobs:
           python -m pip install pytest httpx bandit pip-audit boto3
           python -m pip check
       - name: Compile application
-        run: python -m compileall -q teledrive web app tests
+        run: python -m compileall -q teledrive web tests
       - name: Offline storage, API, recovery and security regression tests
         run: |
           python -m pytest -q \
-            tests/test_security.py tests/test_openapi.py \
-            tests/test_storage_engine.py \
-            tests/test_storage_recovery.py tests/test_storage_rebuild.py tests/test_storage_pending_admin.py tests/test_storage_jobs.py tests/test_storage_versions.py tests/test_storage_ops_health.py tests/test_host_soak.py tests/test_acceptance_cli.py tests/test_storage_gc_retention.py tests/test_s3_version_reads.py tests/test_storage_catalog.py \
-            tests/test_storage_user_mode.py tests/test_mtproto_rate_guard.py tests/test_mtproto_multi_credentials.py tests/test_telegram_dr_rehearsal.py tests/test_production_bundle.py tests/test_capacity_probe.py tests/test_legacy_cutover_acceptance.py tests/test_telegram_target_resolution.py tests/test_ci_workflows.py tests/test_release_matrix.py \
-            tests/test_api_keys.py tests/test_rest_api.py tests/test_rest_transfer.py tests/test_unified_service.py \
-            tests/test_s3_fail_closed.py tests/test_s3_contract.py tests/test_metadata_backup.py tests/test_storage_sigkill.py tests/test_metadata_snapshot_rehearsal.py tests/test_s3_multipart_preconditions.py
+            tests/web/test_security.py tests/web/test_openapi.py \
+            tests/storage/test_storage_engine.py \
+            tests/storage/test_storage_recovery.py tests/storage/test_storage_rebuild.py tests/storage/test_storage_pending_admin.py tests/storage/test_storage_jobs.py tests/storage/test_storage_versions.py tests/storage/test_storage_ops_health.py tests/meta/test_host_soak.py tests/meta/test_acceptance_cli.py tests/storage/test_storage_gc_retention.py tests/s3/test_s3_version_reads.py tests/storage/test_storage_catalog.py \
+            tests/storage/test_storage_user_mode.py tests/storage/test_mtproto_rate_guard.py tests/storage/test_mtproto_multi_credentials.py tests/storage/test_telegram_dr_rehearsal.py tests/meta/test_production_bundle.py tests/meta/test_capacity_probe.py tests/storage/test_legacy_cutover_acceptance.py tests/storage/test_telegram_target_resolution.py tests/meta/test_ci_workflows.py tests/meta/test_release_matrix.py \
+            tests/web/test_api_keys.py tests/web/test_rest_api.py tests/web/test_rest_transfer.py tests/web/test_unified_service.py \
+            tests/s3/test_s3_fail_closed.py tests/s3/test_s3_contract.py tests/storage/test_metadata_backup.py tests/storage/test_storage_sigkill.py tests/storage/test_metadata_snapshot_rehearsal.py tests/s3/test_s3_multipart_preconditions.py
+>>>>>>> f951dec (refactor(layout): regroup tests into s3/storage/web/e2e/meta and scripts into ops/dev)
       - name: Security checks
         run: |
           bandit -q -r teledrive web -ll
@@ -88,7 +89,7 @@ jobs:
       - name: Remove only closed and merged same-head PR branches
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/cleanup_merged_branches.py --execute
+        run: python scripts/ops/cleanup_merged_branches.py --execute
       - name: Publish CI run summary
         if: always()
         shell: bash
@@ -102,54 +103,28 @@ jobs:
           printf '| Commit | %s |\\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
 
   build:
-    name: Package · ${{ matrix.os }}
+    name: Package · single-container Docker image
     needs: verify
     if: github.ref_type == 'tag' || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish-release]'))
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact_name: TeleDrive-linux-x86_64
-            asset_path: dist-installer/TeleDrive-linux-x86_64.tar.gz
-          - os: windows-latest
-            artifact_name: TeleDrive-windows
-            asset_path: dist-installer/*.exe
-
+    runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: "3.13"
-
-      - name: Build Linux package
-        if: runner.os == 'Linux'
+      - name: Build the single teledrive service image
         shell: bash
-        run: bash scripts/build-linux.sh
-
-      - name: Build Windows installer
-        if: runner.os == 'Windows'
-        shell: pwsh
         run: |
-          $version = (& python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])').Trim()
-          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") { throw "Release tag and package version disagree" }
-          $iss = Get-Content installer\TelegramAutoUpload.iss -Raw
-          $iss = [regex]::Replace($iss, '#define MyAppVersion ".*?"', ('#define MyAppVersion "' + $version + '"'))
-          Set-Content installer\TelegramAutoUpload.iss $iss -NoNewline
-          .\scripts\build.ps1
-          .\scripts\build-installer.ps1
+          mkdir -p dist
+          docker build -t teledrive:service .
+          docker save -o dist/teledrive-service-image.tar teledrive:service
 
       - name: Upload package artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.asset_path }}
+          name: TeleDrive-docker-image
+          path: dist/teledrive-service-image.tar
           if-no-files-found: error
 
       - name: Publish CI run summary
@@ -159,7 +134,7 @@ jobs:
           echo '### 05 · Delivery | Release Gate & Packages' >> "$GITHUB_STEP_SUMMARY"
           echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
           echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
-          echo '| Scope | Linux and Windows tagged packages |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Single-container Docker image package |' >> "$GITHUB_STEP_SUMMARY"
           echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
           printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
           printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
@@ -190,7 +165,7 @@ jobs:
           for attempt in $(seq 1 30); do
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&per_page=100" > "$RUNNER_TEMP/release-runs.json"
             set +e
-            python scripts/check_release_matrix.py --input "$RUNNER_TEMP/release-runs.json" --sha "$GITHUB_SHA"
+            python scripts/ops/check_release_matrix.py --input "$RUNNER_TEMP/release-runs.json" --sha "$GITHUB_SHA"
             result=$?
             set -e
             if [[ "$result" -eq 0 ]]; then ready=1; break; fi
