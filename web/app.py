@@ -36,9 +36,7 @@ from teledrive.storage.jobs import StorageUploadJobs, UploadJobError, jobs as st
 from teledrive.storage.catalog import BucketCatalog
 from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
-from teledrive.storage.bot_api_adapter import (
-    BotApiClient, BotApiChunkTransport, BotFileIndex, BOT_RECOMMENDED_CHUNK_SIZE,
-)
+from teledrive.storage.bot_api_adapter import BOT_RECOMMENDED_CHUNK_SIZE
 from teledrive.storage.user_mode import (
     UserSessionRuntime, UserSendJournal, UnifiedUserTransport, transport_mode,
 )
@@ -526,7 +524,15 @@ async def lifespan(_: FastAPI):
     if WEB_PASSWORD and len(WEB_PASSWORD) < 16:
         raise RuntimeError("TELEDRIVE_WEB_PASSWORD must be at least 16 characters")
     ensure_config()
-    if transport_mode() == "telethon":
+    transport_mode()  # Reject retired Bot mode at startup.
+    mtproto_settings = (
+        "TELEDRIVE_STORAGE_MTPROTO_API_ID",
+        "TELEDRIVE_STORAGE_MTPROTO_API_HASH",
+        "TELEDRIVE_STORAGE_MTPROTO_CHANNEL",
+    )
+    # Permit a new unconfigured installation to serve health/configuration
+    # without silently allowing Bot uploads. Writes fail closed until login.
+    if any(os.environ.get(field, "").strip() for field in mtproto_settings):
         await mtproto_storage_runtime.start()
     try:
         conn = db_connect()
@@ -686,29 +692,19 @@ class BucketCreateRequest(BaseModel):
     name: str = Field(min_length=3, max_length=63)
 
 def storage_bot_transport(conn):
-    """Shared REST/S3/job transport; keep this name for existing integrations."""
-    token = os.environ.get("TELEDRIVE_STORAGE_BOT_TOKEN", "").strip()
-    chat_raw = os.environ.get("TELEDRIVE_STORAGE_BOT_CHAT_ID", "").strip()
-    bot = None
-    if token and chat_raw:
-        try:
-            bot = BotApiChunkTransport(
-                BotApiClient(token), BotFileIndex(conn), chat_id=int(chat_raw),
-                account="api-bot",
-            )
-        except (ValueError, TypeError) as exc:
-            raise HTTPException(503, "Telegram Bot storage configuration invalid") from exc
-    if transport_mode() == "telethon":
-        try:
-            mtproto_storage_runtime.require()
-            return UnifiedUserTransport(
-                mtproto_storage_runtime, UserSendJournal(conn), bot,
-            )
-        except RuntimeError as exc:
-            raise HTTPException(503, "Telegram user storage session not ready") from exc
-    if bot is None:
-        raise HTTPException(503, "REST object transfer requires Telegram Bot credentials")
-    return bot
+    """Legacy internal factory name; live transport is USER MTProto ONLY.
+
+    Stale Bot token/chat environment variables are deliberately ignored.
+    Historical same-channel Bot objects are fetched by MTProto message ID.
+    """
+    try:
+        transport_mode()
+        mtproto_storage_runtime.require()
+        return UnifiedUserTransport(
+            mtproto_storage_runtime, UserSendJournal(conn),
+        )
+    except RuntimeError:
+        raise HTTPException(503, "Authorized Telethon USER session is required") from None
 
 
 def _byte_range(value: str | None, size: int) -> tuple[int, int, bool]:
@@ -1459,7 +1455,7 @@ async def inspect_user_channel_history(
     The endpoint deliberately only runs with the already-connected USER
     transport; a Bot token cannot enumerate arbitrary history.
     """
-    if transport_mode() != "telethon":
+    if os.environ.get("TELEDRIVE_STORAGE_TRANSPORT", "telethon").strip().lower() != "telethon":
         raise HTTPException(503, "User MTProto history requires telethon storage mode")
     try:
         runtime = mtproto_storage_runtime

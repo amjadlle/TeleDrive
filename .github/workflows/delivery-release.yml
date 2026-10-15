@@ -71,6 +71,36 @@ jobs:
           printf '| Ref | %s |\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
           printf '| Commit | %s |\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
 
+  cleanup-merged-branches:
+    name: Housekeeping · delete merged PR branches
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Checkout reviewed cleanup script
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Remove only closed and merged same-head PR branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/cleanup_merged_branches.py --execute
+      - name: Publish CI run summary
+        if: always()
+        shell: bash
+        run: |
+          echo '### 05 · Housekeeping | Merged PR branches' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Detail | Value |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Scope | Deleted only verified merged, unchanged and unprotected branches |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Result | ${{ job.status }} |' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Ref | %s |\\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Commit | %s |\\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
   build:
     name: Package · ${{ matrix.os }}
     needs: verify

@@ -13,6 +13,8 @@
 
 ## 2. Engineering backlog
 
+- [x] Require Telethon USER MTProto for every unified REST/S3/local-job upload; reject Bot mode and do not read stale Bot secrets, while retaining hash-verified read access to original Bot objects from the same channel.
+- [x] Add mainline release-gated cleanup of only merged, unchanged, unprotected PR branches; keep open/unmerged/advanced branches untouched.
 - [x] Add bounded, admin-authenticated, read-only history enumeration for the live Telethon storage session, with exclusive cursor pagination and visibly unverified other-sender marker candidates; prohibit guessed bucket/key mapping and Telegram mutations.
 - [x] Add an optional authenticated USER-MTProto transport for the unified REST/S3/local-job SQL catalog, private-channel-only operation, durable uncertain-send evidence, signed S3 synthetic regression and backward-compatible Bot object read fallback. A live user-mode REST/S3 deployment and original-channel recovery remain operator acceptance tasks.
 - [x] Write a complete [owner-local Docker, independent media backup, restore and GC acceptance mission](docs/LOCAL_AGENT_ACCEPTANCE.md). This checks off the **runbook delivery only**, not operator execution or production authorization.

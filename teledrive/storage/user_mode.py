@@ -18,7 +18,6 @@ from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, ins
 from sqlalchemy.exc import IntegrityError
 
 from .telethon_adapter import TelethonChunkTransport
-from .bot_api_adapter import BotApiChunkTransport
 
 _meta = MetaData()
 mtproto_send_intents = Table(
@@ -34,9 +33,9 @@ mtproto_send_intents = Table(
 
 
 def transport_mode() -> str:
-    value = os.environ.get("TELEDRIVE_STORAGE_TRANSPORT", "bot").strip().lower()
-    if value not in ("bot", "telethon"):
-        raise RuntimeError("TELEDRIVE_STORAGE_TRANSPORT must be bot or telethon")
+    value = os.environ.get("TELEDRIVE_STORAGE_TRANSPORT", "telethon").strip().lower()
+    if value != "telethon":
+        raise RuntimeError("Bot storage mode retired; Telethon USER session required")
     return value
 
 
@@ -172,13 +171,11 @@ class UserSendJournal:
 
 
 class UnifiedUserTransport:
-    """Write new chunks by user MTProto; read old Bot chunks when configured."""
+    """All live I/O uses USER MTProto; old same-channel Bot messages remain readable."""
 
-    def __init__(self, runtime: UserSessionRuntime, journal: UserSendJournal,
-                 bot_fallback: BotApiChunkTransport | None = None):
+    def __init__(self, runtime: UserSessionRuntime, journal: UserSendJournal):
         self.runtime = runtime
         self.journal = journal
-        self.bot_fallback = bot_fallback
 
     async def verify_target(self):
         self.runtime.require()
@@ -208,19 +205,12 @@ class UnifiedUserTransport:
     async def download(self, reference, destination):
         if reference.account == self.runtime.account:
             return await self.runtime.require().download(reference, destination)
-        if reference.account == "api-bot":
-            # Historic Bot API objects already persist their real Telegram
-            # channel/message coordinates in the immutable SQL manifest.
-            # An authorized USER of that *same channel* can independently
-            # read those messages, without the Bot token or old file_id.
-            # Never attempt another account's channel or mutate SQL refs.
-            if reference.chat_id == self.runtime.chat_id:
-                try:
-                    rebound = replace(reference, account=self.runtime.account)
-                    return await self.runtime.require().download(rebound, destination)
-                except FileNotFoundError:
-                    if self.bot_fallback is None:
-                        raise
-            if self.bot_fallback is not None:
-                return await self.bot_fallback.download(reference, destination)
-        raise FileNotFoundError("Storage source unavailable: original transport required")
+        if reference.account == "api-bot" and reference.chat_id == self.runtime.chat_id:
+            # Only the ORIGINAL verified channel/message coordinates may be
+            # rebound to a user session; immutable checksums still apply.
+            rebound = replace(reference, account=self.runtime.account)
+            return await self.runtime.require().download(rebound, destination)
+        raise FileNotFoundError(
+            "Historical source inaccessible to authorized Telethon user; "
+            "do not delete or remap remote media"
+        )

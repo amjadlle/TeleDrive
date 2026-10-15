@@ -15,7 +15,6 @@ from teledrive.storage.user_mode import (
     UserSessionRuntime, UserSendJournal, UnifiedUserTransport,
     mtproto_send_intents, transport_mode,
 )
-from teledrive.storage.bot_api_adapter import BotApiChunkTransport, BotFileIndex
 
 
 class FakeUser:
@@ -65,14 +64,15 @@ def configured_runtime():
     return runtime, user
 
 
-def test_bot_is_default_and_bad_mode_fails_closed(monkeypatch):
+def test_telethon_is_default_and_bot_mode_fails_closed(monkeypatch):
     monkeypatch.delenv("TELEDRIVE_STORAGE_TRANSPORT", raising=False)
-    assert transport_mode() == "bot"
+    assert transport_mode() == "telethon"
     monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
     assert transport_mode() == "telethon"
-    monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "auto-fallback")
-    with pytest.raises(RuntimeError):
-        transport_mode()
+    for unsupported in ("bot", "auto-fallback", "", "telethon,bot"):
+        monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", unsupported)
+        with pytest.raises(RuntimeError, match="retired"):
+            transport_mode()
 
 
 def test_user_session_requires_file_and_disallows_saved_messages(monkeypatch, tmp_path):
@@ -96,13 +96,13 @@ def test_mtp_user_upload_and_s3_readback_with_bot_fallback(service, monkeypatch)
     # A real Telegram channel assigns message IDs across ALL senders.
     # The fake Bot and fake user must not independently reuse message ID 1.
     user.next_id = service[2].uploads
-    def transport(db):
-        fallback = BotApiChunkTransport(
-            service[2], BotFileIndex(db),
-            chat_id=-1001234567890, account="api-bot", min_upload_interval=0,
-        )
-        return UnifiedUserTransport(runtime, UserSendJournal(db), fallback)
-    monkeypatch.setattr(gateway, "storage_bot_transport", transport)
+    # Both senders share the same real channel/message sequence. The owner
+    # USER session can read an old Bot document directly by its message ID.
+    user.posts[1] = (b"original-bot-data", "old-bot-document")
+    monkeypatch.setattr(
+        gateway, "storage_bot_transport",
+        lambda db: UnifiedUserTransport(runtime, UserSendJournal(db)),
+    )
     data = b"new-user-mtproto-bytes" * 19
     response = signed(service, "PUT", "/backup-bucket/user.bin", data)
     assert response.status_code == 200, response.text
@@ -292,3 +292,30 @@ def test_authenticated_admin_can_scan_user_channel_history_without_mutation(monk
     )
     assert disabled.status_code == 503
     assert list(scannable.posts) == [9]
+
+
+def test_production_storage_uses_only_user_mtproto_even_with_stale_bot_secrets(service, monkeypatch):
+    from fastapi import HTTPException
+    import web.app as web
+
+    conn = service[3]()
+    runtime, _ = configured_runtime()
+    monkeypatch.setattr(web, "mtproto_storage_runtime", runtime)
+    monkeypatch.setenv("TELEDRIVE_STORAGE_BOT_TOKEN", "unused-old-credential")
+    monkeypatch.setenv("TELEDRIVE_STORAGE_BOT_CHAT_ID", "-1001234567890")
+    try:
+        monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
+        transport = web.storage_bot_transport(conn)
+        assert isinstance(transport, UnifiedUserTransport)
+        assert not hasattr(transport, "bot_fallback")
+        monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "bot")
+        with pytest.raises(HTTPException) as invalid:
+            web.storage_bot_transport(conn)
+        assert invalid.value.status_code == 503
+        monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
+        runtime.client = None
+        with pytest.raises(HTTPException) as unavailable:
+            web.storage_bot_transport(conn)
+        assert unavailable.value.status_code == 503
+    finally:
+        conn.close()

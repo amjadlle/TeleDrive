@@ -1139,3 +1139,23 @@ def test_s3_specs_markdown_tables_render_as_complete_gfm_tables():
         "](https://docs.aws.amazon.com/AmazonS3/latest/API/" in line
         for line in lines
     ) == 116
+
+
+def test_merged_branch_cleanup_requires_exact_pr_merge_and_nonprotected_ref():
+    delivery = workflow("delivery-release.yml")
+    cleanup = delivery["jobs"]["cleanup-merged-branches"]
+    assert cleanup["needs"] == "verify"
+    assert cleanup["permissions"]["contents"] == "write"
+    assert cleanup["permissions"]["pull-requests"] == "read"
+    assert "refs/heads/main" in cleanup["if"]
+    assert "pull_request" not in cleanup["if"]
+    commands = "\n".join(step.get("run", "") for step in cleanup["steps"])
+    assert "scripts/cleanup_merged_branches.py --execute" in commands
+    script = (ROOT / "scripts" / "cleanup_merged_branches.py").read_text(encoding="utf-8")
+    for required in (
+        "merged_at", "base", "main", "protected", "state=open",
+        "head", "sha", "--execute", "GITHUB_REPOSITORY",
+        "git/ref/heads/", "git/refs/heads/",
+    ):
+        assert required in script
+    assert "branch -D" not in script and "git push --delete" not in script
