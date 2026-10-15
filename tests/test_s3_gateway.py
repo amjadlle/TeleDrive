@@ -1,7 +1,7 @@
 """S3 SigV4 and Telegram-backed HTTP behavior tests.
 
-Botocore signs real HTTP wire requests; Telegram transport holds real bytes
-in a deterministic fake while SQLite stores only metadata and encrypted keys.
+Botocore signs real HTTP wire requests; a deterministic fake USER MTProto
+transport holds real bytes while SQLite stores only metadata and encrypted keys.
 """
 from __future__ import annotations
 
@@ -20,36 +20,28 @@ import web.app as admin
 import web.s3 as gateway
 from teledrive.db import connect_database
 from teledrive.s3.credentials import S3CredentialStore, DEFAULT_PERMISSIONS
-from teledrive.storage.bot_api_adapter import BotApiChunkTransport, BotFileIndex
 
 
 class FakeTelegram:
+    """Disk-backed USER MTProto stand-in with the engine transport contract."""
+
     def __init__(self):
         self.parts = {}
         self.uploads = 0
         self.downloads = 0
 
-    async def call(self, method, fields, source=None):
-        if method == "getMe":
-            return {"id": 5}
-        if method == "getChat":
-            return {"id": -1001234567890, "type": "channel"}
-        if method == "getChatMember":
-            return {"status": "administrator", "can_post_messages": True}
-        if method == "sendDocument":
-            self.uploads += 1
-            fid = f"file-{self.uploads}"
-            self.parts[fid] = source.read_bytes()
-            return {"message_id": self.uploads, "chat": {"id": -1001234567890},
-                    "document": {"file_id": fid}}
-        if method == "getFile":
-            fid = fields["file_id"]
-            return {"file_path": fid, "file_size": len(self.parts[fid])}
-        raise AssertionError(method)
+    async def upload(self, path, *, object_id, ordinal, checksum):
+        self.uploads += 1
+        fid = f"file-{self.uploads}"
+        self.parts[fid] = path.read_bytes()
+        return "mtproto-user", -1001234567890, self.uploads
 
-    async def download_file(self, file_path, destination):
+    async def verify_target(self):
+        pass
+
+    async def download(self, reference, destination):
         self.downloads += 1
-        destination.write_bytes(self.parts[file_path])
+        destination.write_bytes(self.parts[f"file-{reference.message_id}"])
 
 
 @pytest.fixture
@@ -62,12 +54,9 @@ def service(monkeypatch, tmp_path):
     db.close()
     telegram = FakeTelegram()
     connection = lambda: connect_database(str(database_path))
-    factory = lambda db: BotApiChunkTransport(
-        telegram, BotFileIndex(db), chat_id=-1001234567890,
-        account="api-bot", min_upload_interval=0,
-    )
+    factory = lambda db: telegram
     monkeypatch.setattr(gateway, "db_connect", connection)
-    monkeypatch.setattr(gateway, "storage_bot_transport", factory)
+    monkeypatch.setattr(gateway, "storage_transport", factory)
     monkeypatch.setattr(gateway, "load_master_key", lambda: key)
     monkeypatch.setenv("TELEDRIVE_STORAGE_SCRATCH_DIR", str(tmp_path / "staging"))
     monkeypatch.setenv("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))

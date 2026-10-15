@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from sqlalchemy import inspect, or_, select
+from sqlalchemy import func, inspect, or_, select
 from teledrive.storage.catalog import heads, published_versions, removed_versions
 from teledrive.storage.manifest import chunks, object_aliases, objects, writer_fences
 
@@ -125,6 +125,16 @@ class GCReferenceGuard:
             "id": identifier, "graph": graph, "journal": chunk_journal,
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         blockers = sorted(k for k, refs_found in graph.items() if refs_found)
+        # Unresolved = pre-send intents without any remote message ID yet.
+        # Acknowledged receipts still block via the graph entry above.
+        unresolved_intents = 0
+        if "storage_mtproto_send_intents" in names:
+            unresolved_intents = int(db.execute(
+                select(func.count()).select_from(mtproto_send_intents).where(
+                    mtproto_send_intents.c.object_id.in_(linked),
+                    mtproto_send_intents.c.message_id.is_(None),
+                )
+            ).scalar_one())
         return {
             "reference_blocked": bool(blockers),
             "reference_blockers": blockers,
@@ -134,7 +144,7 @@ class GCReferenceGuard:
             "historical_version_retained": bool(
                 graph["published_version"] or graph["removed_version"]
             ),
-            "unresolved_mtproto_intents": len(graph["mtproto_send_intent_or_receipt"]),
+            "unresolved_mtproto_intents": unresolved_intents,
             "writer_barrier_verified": False,
             "independent_payload_backup_verified": False,
             "restore_drill_verified": False,

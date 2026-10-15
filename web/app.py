@@ -41,6 +41,7 @@ from teledrive.storage.user_mode import (
     UserSessionRuntime, UserSendJournal, UnifiedUserTransport, transport_mode,
 )
 from teledrive.storage.history_inventory import inventory_channel
+from teledrive.storage.mtproto_rate_guard import MtprotoRateGuard
 mtproto_storage_runtime = UserSessionRuntime()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -1184,6 +1185,9 @@ def storage_operations_health(_: None = Depends(require_auth)):
             "stale_multipart_sample_count": len(completing),
             "unjournaled_mtproto_receipt_count": gc.unjournaled_mtproto_receipts,
             "unresolved_mtproto_send_count": gc.unresolved_mtproto_intents,
+            "mtproto_explicit_flood_total": MtprotoRateGuard(
+                conn
+            ).total_explicit_flood_observations(),
             "samples_truncated": truncated,
             "telegram_messages_retained": gc.total_telegram_messages,
             "live_object_heads": gc.live_object_heads,
@@ -1203,6 +1207,7 @@ def list_unresolved_mtproto_sends(
     # Operator-only diagnostic: return immutable source identity for
     # independent channel proof. Never accept unverified receipt IDs or
     # perform a retry/deletion as a side effect of inspecting this list.
+    from sqlalchemy import func, select
     from teledrive.storage.user_mode import mtproto_send_intents
 
     conn = db_connect()

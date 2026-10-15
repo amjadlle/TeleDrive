@@ -10,7 +10,6 @@ from teledrive.db import connect_database
 from teledrive.storage.catalog import BucketCatalog, heads, published_versions, removed_versions
 from teledrive.storage.gc import StorageGCInventory
 from teledrive.storage.manifest import ManifestStore, object_aliases
-from teledrive.storage.bot_api_adapter import BotFileIndex
 
 
 @pytest.fixture
@@ -51,7 +50,7 @@ def test_even_unreferenced_manifest_has_no_deletion_permission(cat):
 
 @pytest.mark.parametrize("source", [
     "head", "published_version", "removed_version", "writer_fence",
-    "copy_alias", "multipart_part", "bot_send_intent", "bot_receipt",
+    "copy_alias", "multipart_part", "mtproto_send_intent_or_receipt",
 ])
 def test_reference_classes_always_block_gc(cat, source):
     ident = old_failure(cat, source)
@@ -88,13 +87,10 @@ def test_reference_classes_always_block_gc(cat, source):
             object_id=child, source_object_id=ident,
         ))
     else:
-        bot = BotFileIndex(db)
+        from teledrive.storage.user_mode import UserSendJournal
         digest = sha256(b"payload").hexdigest()
-        bot.start_send("test", -100123, ident, 0, digest, 7)
-        if source == "bot_receipt":
-            bot.put_receipt("test", -100123, 77, "fixture-file-id",
-                            object_id=ident, ordinal=0, checksum=digest,
-                            size=7, require_intent=True)
+        journal = UserSendJournal(db)
+        journal.start("test", -100123, ident, 0, digest, 7)
     db.commit()
     result = one(cat, ident)
     assert result["reference_blocked"] is True

@@ -1,4 +1,4 @@
-"""HTTP binary transfer contract: actual SQLite metadata and fake Telegram Bot bytes."""
+"""HTTP binary transfer contract: actual SQLite metadata and fake USER MTProto bytes."""
 from __future__ import annotations
 
 import hashlib
@@ -8,47 +8,38 @@ import pytest
 from fastapi.testclient import TestClient
 
 import web.app as webapp
-PRODUCTION_BOT_TRANSPORT = webapp.storage_bot_transport
+PRODUCTION_TRANSPORT = webapp.storage_transport
 from teledrive.db import connect_database
-from teledrive.storage.bot_api_adapter import BotApiChunkTransport, BotFileIndex
 
 
-class FakeTelegramBot:
+class FakeUserTransport:
+    """Disk-backed USER MTProto stand-in: same upload/download contract."""
+
     def __init__(self):
         self.parts = {}
         self.counter = 0
+        self.deletions = 0
 
-    async def call(self, method, fields, source=None):
-        if method == "getMe":
-            return {"id": 99}
-        if method == "getChat":
-            return {"id": -1001234567890, "type": "channel"}
-        if method == "getChatMember":
-            return {"status": "administrator", "can_post_messages": True}
-        if method == "sendDocument":
-            self.counter += 1
-            identifier = f"test-part-{self.counter}"
-            self.parts[identifier] = source.read_bytes()
-            return {"message_id": self.counter, "chat": {"id": -1001234567890},
-                    "document": {"file_id": identifier}}
-        if method == "getFile":
-            identifier = fields["file_id"]
-            return {"file_path": identifier, "file_size": len(self.parts[identifier])}
-        raise AssertionError(method)
+    async def upload(self, path, *, object_id, ordinal, checksum):
+        self.counter += 1
+        identifier = f"test-part-{self.counter}"
+        self.parts[identifier] = path.read_bytes()
+        return "mtproto-user", -1001234567890, self.counter
 
-    async def download_file(self, path, destination):
-        destination.write_bytes(self.parts[path])
+    async def verify_target(self):
+        pass
+
+    async def download(self, reference, destination):
+        destination.write_bytes(self.parts[f"test-part-{reference.message_id}"])
 
 
 @pytest.fixture
 def service(tmp_path, monkeypatch):
     path = tmp_path / "state.db"
-    bot = FakeTelegramBot()
+    bot = FakeUserTransport()
     monkeypatch.setattr(webapp, "db_connect", lambda: connect_database(str(path)))
     monkeypatch.setattr(
-        webapp, "storage_bot_transport",
-        lambda db: BotApiChunkTransport(bot, BotFileIndex(db),
-                                         chat_id=-1001234567890, account="api-bot"),
+        webapp, "storage_transport", lambda db: bot,
     )
     monkeypatch.setenv("TELEDRIVE_STORAGE_SCRATCH_DIR", str(tmp_path / "scratch"))
     monkeypatch.setenv("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(4 * 1024**2))
@@ -155,13 +146,15 @@ def test_missing_key_is_404_and_overwrite_is_versioned(service):
     assert bot.counter == uploads_before_conflict  # zero Telegram writes for a stale generation
 
 
-def test_missing_bot_credentials_returns_503_before_upload(service, monkeypatch):
+def test_missing_user_session_returns_503_before_upload(service, monkeypatch):
     client, headers, bot, _ = service
     # The service fixture temporarily patches the transport. Restore the
     # production factory and remove its required Telegram configuration.
-    monkeypatch.setattr(webapp, "storage_bot_transport", PRODUCTION_BOT_TRANSPORT)
-    monkeypatch.delenv("TELEDRIVE_STORAGE_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("TELEDRIVE_STORAGE_BOT_CHAT_ID", raising=False)
+    monkeypatch.setattr(webapp, "storage_transport", PRODUCTION_TRANSPORT)
+    monkeypatch.delenv("TELEDRIVE_STORAGE_MTPROTO_API_ID", raising=False)
+    monkeypatch.delenv("TELEDRIVE_STORAGE_MTPROTO_API_HASH", raising=False)
+    monkeypatch.delenv("TELEDRIVE_STORAGE_MTPROTO_CHANNEL", raising=False)
+    monkeypatch.delenv("TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE", raising=False)
     result = put(client, headers, b"secret", key="unconfigured")
     assert result.status_code == 503
     assert bot.counter == 0

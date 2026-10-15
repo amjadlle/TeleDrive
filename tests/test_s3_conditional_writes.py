@@ -98,11 +98,11 @@ def test_competing_writer_during_telegram_upload_cannot_steal_conditional_head(
     first = put(service, b"old")
     assert first.status_code == 200
     remote = service[2]
-    original = remote.call
+    original = remote.upload
     intrusions = []
 
-    async def concurrent_winner(method, fields, source=None):
-        if method == "sendDocument" and not intrusions:
+    async def concurrent_winner(path, *, object_id, ordinal, checksum):
+        if not intrusions:
             # Separate transaction commits while first writer is awaiting Telegram.
             connection = service[3]()
             try:
@@ -114,9 +114,10 @@ def test_competing_writer_during_telegram_upload_cannot_steal_conditional_head(
                 intrusions.append(winner_id)
             finally:
                 connection.close()
-        return await original(method, fields, source=source)
+        return await original(path, object_id=object_id,
+                              ordinal=ordinal, checksum=checksum)
 
-    monkeypatch.setattr(remote, "call", concurrent_winner)
+    monkeypatch.setattr(remote, "upload", concurrent_winner)
     stale = put(service, b"stale-write-must-not-win", If_Match=first.headers["etag"])
     assert intrusions
     assert stale.status_code == 412, stale.text
@@ -127,11 +128,11 @@ def test_competing_writer_during_telegram_upload_cannot_steal_conditional_head(
 def test_competing_create_during_upload_rejects_if_none_match(service, monkeypatch):
     assert signed(service, "PUT", "/conditional").status_code == 200
     remote = service[2]
-    original = remote.call
+    original = remote.upload
     injected = []
 
-    async def concurrent_create(method, fields, source=None):
-        if method == "sendDocument" and not injected:
+    async def concurrent_create(path, *, object_id, ordinal, checksum):
+        if not injected:
             db = service[3]()
             try:
                 catalog = BucketCatalog(ManifestStore(db))
@@ -142,9 +143,10 @@ def test_competing_create_during_upload_rejects_if_none_match(service, monkeypat
                 injected.append(winner)
             finally:
                 db.close()
-        return await original(method, fields, source=source)
+        return await original(path, object_id=object_id,
+                              ordinal=ordinal, checksum=checksum)
 
-    monkeypatch.setattr(remote, "call", concurrent_create)
+    monkeypatch.setattr(remote, "upload", concurrent_create)
     result = put(service, b"should-not-win", If_None_Match="*")
     assert injected
     assert result.status_code == 412, result.text
