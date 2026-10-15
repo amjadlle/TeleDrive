@@ -10,7 +10,7 @@
 
 | Area | State | Evidence and limitations |
 | --- | --- | --- |
-| P0 — basic upload and supported REST/S3 subset | **Development-validated** | Transfer, authentication, integrity and tested client subset; not complete AWS S3 parity |
+| P0 — basic upload and supported REST/S3 subset | **Development-validated** | Transfer, authentication, integrity and tested client subset; not complete AWS S3 parity. The desktop application and the Bot API layer have been removed; only the Telethon USER MTProto WebUI service remains. |
 | P1 — disposable Docker acceptance | **Development-validated** | Two Web processes, real PostgreSQL, 13 resilience and cleanup gates; Telegram I/O is synthetic |
 | P1 — real test-channel transfers | **Development-validated** | Telethon user and three-worker PostgreSQL integration (historical Bot exercises retired with the Bot layer); not the owner's original production media |
 | P1 — physical production operation | **Not signed off** | Independent host identity, owner data recovery and authorized change control not established |
@@ -18,7 +18,7 @@
 
 **Published release:** [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7), source SHA `747747652cd1ca36878453d49daf627d8c0a60ad`. Published release contents are not automatically updated when new development commits reach `main`. Release notes and binaries belong on [GitHub Releases](https://github.com/babico/TeleDrive/releases), not in a separate per-version Markdown file.
 
-**Verified newer development baseline:** `c2b76880b4ada3d61d47a7926ea819244047fa33`; all nine normal CI workflows completed successfully on that exact SHA. Its guarded delivery job also removed seven merged PR branches; only `main` remained. For any *later* source SHA, read its own [Actions runs](https://github.com/babico/TeleDrive/actions) before making a CI claim. A cancelled, pending or fully skipped required workflow is not evidence of successful live acceptance.
+**Verified newer development baseline:** `c2b76880b4ada3d61d47a7926ea819244047fa33`; all nine normal CI workflows completed successfully on that exact SHA. Its guarded delivery job also removed seven merged PR branches; only `main` remained. Since then the matrix has become **seven workflows** (the Bot E2E and Desktop workflows were removed with their features). For any *later* source SHA, read its own [Actions runs](https://github.com/babico/TeleDrive/actions) before making a CI claim. A cancelled, pending or fully skipped required workflow is not evidence of successful live acceptance.
 
 ### P0: implementation boundaries
 
@@ -39,7 +39,7 @@ A production installation, original legacy files, signed operator approval, an h
 
 ### A single service deployment
 
-The default [`docker-compose.yml`](../docker-compose.yml) creates **one `teledrive` container** and one Python process with two local listeners:
+The default [`docker-compose.yml`](../docker-compose.yml) creates **one `teledrive` container** and one Python process with two local listeners. There is no desktop application, no Bot API transport and no separate S3 container. One or more Telegram API credential sets (`TELEDRIVE_STORAGE_MTPROTO_API_ID`/`_API_HASH`/`_SESSION_FILE` lists) may share the same dedicated channel under `round_robin` (default) or `failover` flood-rejection strategy.
 
 | Interface | Local endpoint | Auth model | Storage |
 | --- | --- | --- | --- |
@@ -189,7 +189,7 @@ Only SQL-only incomplete-multipart lifecycle abort is now supported, applied by 
 - [x] Publish bounded v1.0.7 development milestone with separate release artifacts and evidence.
 - [x] Implement disposable 13-gate Docker validation and distinct live test-channel User/Multiworker workflows (historical Bot exercises retired with the Bot layer).
 - [x] Implement fail-closed recovery guards, owner-proofed isolated one/multi-object rebuild and an offline dual-approval evidence verifier.
-- [x] Verify nine normal workflows on the newer `aa44bd6` development baseline (not the published v1.0.7 SHA). The Desktop workflow was later removed together with the desktop application; the current matrix has seven workflows.
+- [x] Verify nine normal workflows on the newer `aa44bd6` development baseline (not the published v1.0.7 SHA). The current matrix has **seven workflows**: Security, REST & S3, Databases, Docker Fault Injection, User MTProto E2E, Multiworker PostgreSQL E2E and the Release Gate. Release packaging now ships the single-container Docker image instead of desktop installers.
 - [ ] Verify **every required workflow on the exact SHA** of any subsequent release candidate.
 - [ ] Obtain owner-supplied physical-host identities, original-media disaster-recovery evidence and legacy cutover/no-legacy attestation.
 - [ ] Implement and independently rehearse the complete physical GC safety/rollback alternative before authorizing deletion.
