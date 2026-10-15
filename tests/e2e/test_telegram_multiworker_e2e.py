@@ -193,46 +193,59 @@ def test_live_three_worker_user_mtproto_soak_with_remote_checksum_cleanup():
             assert all(row["state"] == "done" and row["attempts"] == 1 for row in jobs)
             # Readback phase runs after all workers disconnected their
             # clients, so only this process holds the USER session now.
-            client = TelegramClient(
-                StringSession(session), int(api_id), api_hash,
-                device_model="TeleDrive Storage Client",
-                app_version="TeleDrive 2.1",
-                receive_updates=False, flood_sleep_threshold=60,
-            )
-            asyncio.run(client.connect())
-            try:
-                resolved = asyncio.run(resolve_telegram_target(
-                    client, target or None, channel_name or None,
-                ))
-                chat = int(asyncio.run(client.get_peer_id(resolved)))
-                transport = TelethonChunkTransport({account: (client, resolved)})
-                engine = TelegramObjectStorage(
-                    catalog.manifests, transport, scratch_directory=root,
-                )
-                for key, body in expected.items():
-                    item = catalog.get(bucket, key).item
-                    assert item.sha256 == hashlib.sha256(body).hexdigest()
-                    destination = root / f"restored-{uuid4().hex}.bin"
-                    asyncio.run(engine.download_to_path(item.id, destination))
-                    assert destination.read_bytes() == body
-                    received = asyncio.run(_collect_range(
-                        engine, item.id, len(body), len(body)//2,
-                    ))
-                    assert received == body[len(body)//2:min(len(body), len(body)//2+37)]
-                assert UserSendJournal(database).unresolved_count() == 0
-                # Only the globally unique account alias created by this run.
-                owned = database.connection.execute(
-                    select(chunks.c.message_id).where(
-                        chunks.c.account == account,
-                        chunks.c.chat_id == chat,
+            # One asyncio.run scope: a connected Telethon client is bound
+            # to its event loop and cannot move between them.
+            def readback_scenario():
+                async def scenario():
+                    client = TelegramClient(
+                        StringSession(session), int(api_id), api_hash,
+                        device_model="TeleDrive Storage Client",
+                        app_version="TeleDrive 2.1",
+                        receive_updates=False, flood_sleep_threshold=60,
                     )
-                ).scalars().all()
-                if owned:
-                    asyncio.run(client.delete_messages(
-                        resolved, sorted(set(int(mid) for mid in owned)),
-                    ))
-            finally:
-                asyncio.run(client.disconnect())
+                    await client.connect()
+                    try:
+                        resolved = await resolve_telegram_target(
+                            client, target or None, channel_name or None,
+                        )
+                        chat = int(await client.get_peer_id(resolved))
+                        transport = TelethonChunkTransport({
+                            account: (client, resolved),
+                        })
+                        engine = TelegramObjectStorage(
+                            catalog.manifests, transport,
+                            scratch_directory=root,
+                        )
+                        for key, body in expected.items():
+                            item = catalog.get(bucket, key).item
+                            assert item.sha256 == hashlib.sha256(body).hexdigest()
+                            destination = root / f"restored-{uuid4().hex}.bin"
+                            await engine.download_to_path(item.id, destination)
+                            assert destination.read_bytes() == body
+                            received = await _collect_range(
+                                engine, item.id, len(body), len(body)//2,
+                            )
+                            assert received == body[len(body)//2:min(len(body), len(body)//2+37)]
+                        assert UserSendJournal(database).unresolved_count() == 0
+                        # Only the globally unique account alias created by
+                        # this run.
+                        owned = database.connection.execute(
+                            select(chunks.c.message_id).where(
+                                chunks.c.account == account,
+                                chunks.c.chat_id == chat,
+                            )
+                        ).scalars().all()
+                        if owned:
+                            await client.delete_messages(
+                                resolved,
+                                sorted(set(int(mid) for mid in owned)),
+                            )
+                    finally:
+                        await client.disconnect()
+
+                return asyncio.run(scenario())
+
+            readback_scenario()
         finally:
             for proc, _ in processes:
                 if proc.poll() is None:
