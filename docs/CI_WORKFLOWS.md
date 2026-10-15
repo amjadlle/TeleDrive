@@ -15,7 +15,7 @@ GitHub Actions does not support workflow folders in its sidebar. The numeric pre
 | 02 · Integration | [REST & S3](../.github/workflows/integration-storage.yml) | API contracts, signed always-Enabled versioning and all-private Public Access Block (real boto3), SigV4, AWS CLI, rclone and shared storage catalog |
 | 02 · Integration | [Desktop](../.github/workflows/integration-desktop.yml) | Windows/Linux desktop, CLI and packaging |
 | 03 · Resilience | [Docker Fault Injection](../.github/workflows/resilience-docker.yml) | Disposable PostgreSQL, two Web instances, crash/restart, corruption and recovery |
-| 04 · Live Telegram | [Bot API E2E](../.github/workflows/live-telegram-bot.yml) | Real test-channel Bot uploads, readback, hashes, ranges and cleanup |
+| 04 · Live Telegram | [Historical Bot compatibility E2E](../.github/workflows/live-telegram-bot.yml) | Isolated legacy-media Bot test: file-ID recovery, integrity, ranges and cleanup; **not** current unified uploads |
 | 04 · Live Telegram | [User MTProto E2E](../.github/workflows/live-telegram-user.yml) | Real Telethon user session, checksum and range recovery |
 | 04 · Live Telegram | [Multiworker PostgreSQL E2E](../.github/workflows/live-telegram-multiworker.yml) | Three independent workers sharing PostgreSQL and a real Telegram test target |
 | 05 · Delivery | [Release Gate & Packages](../.github/workflows/delivery-release.yml) | Release regression, gated Linux/Windows packages and publishing |
@@ -112,7 +112,7 @@ An actual PASS requires the complete four-stage evidence and `stages.acceptance.
 - The Bot API's shared cooldown must be preceded by `reserve_send_slot`; tests cannot bypass send fencing to manufacture a passing 429.
 - The Web `/api/health` endpoint alone does not validate full configuration; fault tests use the actual `load_config` parser, including `sleep_min_seconds`, `sleep_max_seconds`, `max_files_per_run` and `max_files_per_day`.
 - `tests/test_unified_service.py` verifies REST-to-S3, S3-to-REST, local-job-to-S3 data visibility and the shared generation/catalog. The Security workflow checks both listeners **inside one container**.
-- Live Bot, User and Multiworker E2E are distinct from synthetic fault tests. A generated 429 is not a measured production rate limit.
+- Live historical-Bot-compatibility, User and Multiworker E2E are distinct from synthetic fault tests. A generated 429 is not a measured production rate limit.
 - Normal Security and Storage CI run adversarial GC reference-graph tests. The live User MTProto E2E job creates one owned Telegram marker fixture, validates bounded read-only history inventory, reconciles independently known marker coordinates, creates a fresh isolated catalog after full byte/SHA verification, then cleans up only its own fixture. This does not exercise production garbage collection.
 - Offline marker inventory and independent-plan reconciliation tests cover bounded Telegram history reads, forged/non-media messages, scan truncation, duplicate ordinals and private non-overwriting reports; discovery is not a recovery plan or full historic inventory.
 - Offline capacity soak tests real SQLite operations, durable synthetic media, SQL restarts and historical readback. It does not exercise original Telegram media, independent physical hosts or real-world long-term Telegram behavior.

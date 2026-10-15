@@ -13,7 +13,8 @@ Protect these as separate, coordinated recovery inputs:
 | Asset | Why it matters | Handling |
 | --- | --- | --- |
 | Metadata database | Object heads, history, chunk identities, durable jobs | Encrypted backup; recorded independent SHA-256 |
-| Telegram user sessions and/or Bot credentials | Access to the original Telegram account/channel and stored files | Protected secrets manager, independent of SQL archive |
+| Telegram USER StringSession / API credentials | Required for current REST/S3/local-job access and same-channel message history | Protected `0600` private file/secret manager, independent of SQL archive |
+| Historical Bot credentials (if any) | Old-channel recovery/testing only, **not** current unified writes | Separately protected migration archive |
 | S3 encryption master key | Decrypts issued S3 access secrets | Separate secret backup; never silently rotate/replace |
 | Deployment configuration | DB URL, channel target, source mounts and allowlists | Protected copy; no credentials in source control |
 
@@ -71,11 +72,13 @@ It seeds multiple published versions, chunk-boundary SHA metadata, delete marker
 
 **Limit:** this checks actual SQL backup and restore machinery, **not** original Telegram media or a production secret-recovery drill.
 
-### Dedicated live Bot recovery CI
+### Dedicated historical Bot-compatibility recovery CI
+
+`scripts/rehearse_telegram_dr.py` remains **Bot API-only** (`TELEDRIVE_BOT_TOKEN`) for a historical/isolated original Bot source. It is **not** evidence for a production Telethon USER restore; that independent verifier and owner-authorized test remain open.
 
 The [Bot API E2E workflow](../.github/workflows/live-telegram-bot.yml) takes a disposable SQLite snapshot from a dedicated **test** Bot/channel transfer, verifies its SHA-256, opens it independently, and retrieves real Bot message bytes using the persisted file IDs. Full checksums and ranges are rechecked. Cleanup is scoped to messages created by that test run.
 
-**Limit:** it cannot prove that the owner's original Bot token/account, private channel history or production media remain recoverable.
+**Limit:** this test exercises the historical Bot adapter in isolation, not the live unified writer. It cannot prove that the owner's original Bot token, channel history or production media remain recoverable.
 
 ## 5. Production disaster-recovery acceptance
 

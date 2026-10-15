@@ -18,7 +18,7 @@
 
 **Published release:** [v1.0.7](https://github.com/babico/TeleDrive/releases/tag/v1.0.7), source SHA `747747652cd1ca36878453d49daf627d8c0a60ad`. Published release contents are not automatically updated when new development commits reach `main`. Release notes and binaries belong on [GitHub Releases](https://github.com/babico/TeleDrive/releases), not in a separate per-version Markdown file.
 
-**Verified newer development baseline:** `aa44bd67e01495ad590af4460350cab1da8c28ac`; all nine normal CI workflows completed successfully on that SHA. For any *later* source SHA, read its own [Actions runs](https://github.com/babico/TeleDrive/actions) before making a CI claim. A cancelled, pending or fully skipped required workflow is not evidence of successful live acceptance.
+**Verified newer development baseline:** `c2b76880b4ada3d61d47a7926ea819244047fa33`; all nine normal CI workflows completed successfully on that exact SHA. Its guarded delivery job also removed seven merged PR branches; only `main` remained. For any *later* source SHA, read its own [Actions runs](https://github.com/babico/TeleDrive/actions) before making a CI claim. A cancelled, pending or fully skipped required workflow is not evidence of successful live acceptance.
 
 ### P0: implementation boundaries
 
@@ -83,7 +83,7 @@ The evidence must demonstrate a run of at least one hour, `telemetry_gate_passed
 
 Keep the original SQL snapshot, expected archive SHA-256, Telegram account credentials and destination/channel identifiers in separate protected storage. Restore into an **isolated staging database**, never over the live production DB.
 
-SQLite backup validation is described in [Backup and Restore](BACKUP_RESTORE.md). With an original, owner-authorized Bot account and channel:
+SQLite backup validation is described in [Backup and Restore](BACKUP_RESTORE.md). **Current script limitation:** `scripts/rehearse_telegram_dr.py` currently requires `TELEDRIVE_BOT_TOKEN` and uses a historical Bot API adapter. It is **not** a Telethon USER restore verifier. The following command is suitable **only for an isolated original Bot-backed source** with retained original Bot credentials; do not use it to certify a Telethon-only original-media recovery:
 
 ~~~bash
 python scripts/rehearse_telegram_dr.py \
@@ -95,7 +95,7 @@ python scripts/rehearse_telegram_dr.py \
   --chat-id ORIGINAL_CHAT_ID
 ~~~
 
-The drill checks archive identity, published SQL metadata, original Telegram bytes, object SHA/length and cross-chunk ranges without reuploading or deleting media. PostgreSQL/MySQL installations must use their appropriate native backups and independent restore databases. A consistent SQL dump **alone** is insufficient original-data disaster-recovery proof.
+For the historical Bot-backed fixture, this drill checks archive identity, published SQL metadata, original Telegram bytes, object SHA/length and cross-chunk ranges without reuploading or deleting media. **Telethon-only production recovery remains blocked** until an independent USER MTProto restore verifier can attest those same checks from a sealed SQL snapshot and original channel in an isolated environment. PostgreSQL/MySQL installations must use their appropriate native backups and independent restore databases. A consistent SQL dump **alone** is insufficient original-data disaster-recovery proof.
 
 ### 3.3 Legacy cutover only if original legacy sources exist
 
@@ -134,7 +134,7 @@ An incorrect SHA, incomplete drill, duplicate host identity, invalid media proof
 
 ### 4.1 Physical Telegram garbage collection: disabled
 
-**Implemented safeguards:** An optional MTProto user-SQL send journal now persists pre-send ambiguous intents and acknowledged remote message coordinates, which block non-destructive GC candidate approval; actual independent media backup and owner approval are still required. `StorageGCInventory` performs retention/reference previews with a fail-closed, fingerprinted SQL graph covering HEADs, published/removed versions, transitive copy aliases, multipart parts, writer fences and Bot intents/receipts; `RecoveryManager.cleanup` checks SQL heads, published and removed history, copy aliases, multipart references, send intents and Bot receipts. The Telethon ownership probe also checks account/channel/marker identity. Non-destructive GC audits separately count Bot file IDs without any chunk or acknowledged send record, without exposing opaque file IDs in the admin API.
+**Implemented safeguards:** The mandatory USER MTProto transport uses a durable SQL send journal to persist pre-send ambiguous intents and acknowledged remote message coordinates, which block non-destructive GC candidate approval; actual independent media backup and owner approval are still required. `StorageGCInventory` performs retention/reference previews with a fail-closed, fingerprinted SQL graph covering HEADs, published/removed versions, transitive copy aliases, multipart parts, writer fences and Bot intents/receipts; `RecoveryManager.cleanup` checks SQL heads, published and removed history, copy aliases, multipart references, send intents and Bot receipts. The Telethon ownership probe also checks account/channel/marker identity. Non-destructive GC audits separately count Bot file IDs without any chunk or acknowledged send record, without exposing opaque file IDs in the admin API.
 
 **Not yet authorized/complete:** transactional version-aware mark/sweep across concurrent writers, a complete writer barrier, independently verified media backups, complete ownership audit, explicit two-person deletion approval and a tested disaster-recovery alternative. Deleted Telegram **message IDs cannot simply be restored from SQL**. Automatic physical GC in WebUI/API remains disabled. Unknown Bot ACKs and ambiguous ownership must stay protected.
 
@@ -170,7 +170,7 @@ python scripts/inventory_telegram_history.py \
 
 **Independent manifest reconciliation:** `teledrive.storage.reconcile_inventory.reconcile_inventory` compares bounded marker candidates with separately provided, already independently verified recovery plans. Wrong object IDs, ordinals, Telegram account/chat/message coordinates and SHA-prefixes fail closed. `scripts/rebuild_from_telegram.py --inventory /secure/candidates.json` optionally makes this check a prerequisite to full payload byte verification. CI also tests a real channel-marker upload, read-only discovery, independent manifest reconciliation and a new isolated SQLite restore with original Telegram bytes. A match is **not** by itself a verified restore.
 
-**Limits:** inventory markers are **unverified candidates**, not an importable rebuild plan. They do not prove the original bucket/key mapping, complete chunk SHA-256 or sizes, whole-object hash, historical versions, or the existence of messages outside the scanned window/channel. Actual isolated reconstruction still requires independent metadata and byte-level verification. Automated discovery without trustworthy independent metadata is still open work. Bot unknown-ACK recovery needs an independently reliable `file_id`. This reconstruction does **not** upload or delete Telegram media.
+**Limits:** inventory markers are **unverified candidates**, not an importable rebuild plan. They do not prove the original bucket/key mapping, complete chunk SHA-256 or sizes, whole-object hash, historical versions, or the existence of messages outside the scanned window/channel. Actual isolated reconstruction still requires independent metadata and byte-level verification. Automated discovery without trustworthy independent metadata is still open work. Historical Bot-only unknown-ACK recovery might require an independently retained `file_id` when the original channel is inaccessible to the USER; this is not a live Bot writer path. This reconstruction does **not** upload or delete Telegram media.
 
 ### 4.3 Capacity and recovery endurance
 

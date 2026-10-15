@@ -37,7 +37,7 @@ cp examples/config.docker.yaml config/config.yaml
 chmod 600 .env config/config.yaml
 ~~~
 
-In `.env` set a unique `TELEDRIVE_WEB_PASSWORD` of at least 16 characters; adjust `PUID` and `PGID` to match the owner of the mounted directories. In `config/config.yaml` set the Telegram API ID/hash and account configuration as appropriate.
+In `.env` set a unique `TELEDRIVE_WEB_PASSWORD` of at least 16 characters; adjust `PUID` and `PGID` to match the owner of the mounted directories. The unified REST/S3 service gets its USER MTProto credentials from `TELEDRIVE_STORAGE_MTPROTO_*` in `.env` and `/config/mtproto-user.session`; the separate `config/config.yaml` account settings concern the original scanner. Create the private session with the instructions in [Section 4](#4-s3-compatible-api) **before** starting Docker. Without an authorized session, initial health/admin endpoints may run, but binary uploads fail closed.
 
 ~~~bash
 docker compose up -d --build
@@ -144,7 +144,7 @@ python scripts/create_storage_user_session.py --output config/mtproto-user.sessi
 chmod 600 config/mtproto-user.session
 ~~~
 
-The API ID/hash are from [my.telegram.org](https://my.telegram.org/apps). The script prompts for the real user's Telegram sign-in code and optional 2FA and refuses to overwrite an existing session. Its MTProto application/device metadata identifies the TeleDrive client accurately; it does **not** masquerade as an official Telegram Desktop/Android app. Choose a channel username or a numeric channel ID present in this user's dialogs. If selecting a numeric private channel, it must be visible among the user's first 5,000 dialogs. No user account => no user-only history access.
+Run this interactively on a trusted host with Python dependencies installed, before the first Docker startup. Ensure the resulting `0600` file is readable by the configured container `PUID`/`PGID`. The API ID/hash are from [my.telegram.org](https://my.telegram.org/apps). The script prompts for the real user's Telegram sign-in code and optional 2FA and refuses to overwrite an existing session. Its MTProto application/device metadata identifies the TeleDrive client accurately; it does **not** masquerade as an official Telegram Desktop/Android app. Choose a channel username or a numeric channel ID present in this user's dialogs. If selecting a numeric private channel, it must be visible among the user's first 5,000 dialogs. No user account => no user-only history access.
 
 1. Set `TELEDRIVE_STORAGE_TRANSPORT=telethon` and `TELEDRIVE_STORAGE_MTPROTO_API_ID`, `TELEDRIVE_STORAGE_MTPROTO_API_HASH`, `TELEDRIVE_STORAGE_MTPROTO_CHANNEL` in the private `.env`. Save an authorized user StringSession in `./config/mtproto-user.session` (mode 0600) using the interactive command below. The user needs posting rights in that private **broadcast channel**, not Saved Messages. Existing Bot-only installations must configure a user session before further uploads; **do not delete original media or SQL backups**.
 2. Generate a persistent master encryption key once, on the trusted host:
@@ -341,7 +341,7 @@ docker compose config --quiet
 bash scripts/run_docker_fault_injection.sh
 ~~~
 
-Nine mandatory GitHub Actions workflows validate a given commit. The delivery workflow also includes a guarded housekeeping job that deletes only merged, unchanged, unprotected branches with no open PR, after its release gate passes. Real Bot, user and multiworker tests use dedicated, private **test-only** Telegram credentials. For setup, run `python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot` from a trusted local machine; the bot must be an admin of that channel. Never upload live credentials to GitHub issues or the repository. See [CI and Test Guide](docs/CI_WORKFLOWS.md) for workflow names, command details, evidence and acceptance boundaries.
+Nine mandatory GitHub Actions workflows validate a given commit. The delivery workflow also includes a guarded housekeeping job that deletes only merged, unchanged, unprotected branches with no open PR, after its release gate passes. Real User MTProto and multiworker tests, plus **historical Bot compatibility fixtures**, use private **test-only** Telegram credentials. The Bot fixture can be configured using `python scripts/setup_telegram_e2e.py --channel "TeleDrive E2E Storage" --create-if-missing --configure-bot` on a trusted local machine. Production unified storage **never uses this Bot token**. Never upload live credentials to GitHub issues or the repository. See [CI and Test Guide](docs/CI_WORKFLOWS.md) for workflow names, command details, evidence and acceptance boundaries.
 
 ## Credits and license
 

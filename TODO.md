@@ -9,14 +9,15 @@
 - [x] Exercise real Bot API, user MTProto and multiworker PostgreSQL transfer scenarios against dedicated test Telegram targets.
 - [x] Provide shared REST/S3/local-job object catalog and a single WebUI/REST/S3 Docker container.
 - [x] Implement guarded metadata recovery, owner-verified isolated Telegram rebuild (atomic bounded multi-object batches), and the offline two-person production-evidence verifier.
-- [x] Verify all nine standard GitHub Actions workflows successfully on development commit `aa44bd67e01495ad590af4460350cab1da8c28ac`. This does **not** change the contents of v1.0.7.
+- [x] Verify all nine standard GitHub Actions workflows successfully on development commit `c2b76880b4ada3d61d47a7926ea819244047fa33`, including User MTProto, isolated historical Bot, and PostgreSQL multiworker workflows. This does **not** change the contents of v1.0.7.
 
 ## 2. Engineering backlog
 
+- [ ] Implement and CI-validate an isolated, read-only **Telethon USER MTProto original-media restore rehearsal** using an independently sealed SQL snapshot, original channel/message references and whole-body/range SHA-256 verification. The existing `scripts/rehearse_telegram_dr.py` accepts only a historical Bot token and cannot satisfy this owner gate.
 - [x] Require Telethon USER MTProto for every unified REST/S3/local-job upload; reject Bot mode and do not read stale Bot secrets, while retaining hash-verified read access to original Bot objects from the same channel.
 - [x] Add mainline release-gated cleanup of only merged, unchanged, unprotected PR branches; keep open/unmerged/advanced branches untouched.
 - [x] Add bounded, admin-authenticated, read-only history enumeration for the live Telethon storage session, with exclusive cursor pagination and visibly unverified other-sender marker candidates; prohibit guessed bucket/key mapping and Telegram mutations.
-- [x] Add an optional authenticated USER-MTProto transport for the unified REST/S3/local-job SQL catalog, private-channel-only operation, durable uncertain-send evidence, signed S3 synthetic regression and backward-compatible Bot object read fallback. A live user-mode REST/S3 deployment and original-channel recovery remain operator acceptance tasks.
+- [x] Implement an authenticated USER-MTProto transport for the unified REST/S3/local-job SQL catalog, private-channel-only operation, durable uncertain-send evidence, signed S3 synthetic regression and backward-compatible Bot object read fallback. Development live Telegram USER fixture passed, but production-equivalent owner-controlled REST/S3 deployment and original-channel recovery remain operator acceptance tasks.
 - [x] Write a complete [owner-local Docker, independent media backup, restore and GC acceptance mission](docs/LOCAL_AGENT_ACCEPTANCE.md). This checks off the **runbook delivery only**, not operator execution or production authorization.
 - [x] Complete bounded ListParts and ListMultipartUploads with SQL-keyset pagination, genuine metadata fields, delimiter/URL encoding, ownership isolation, boto3 and adversarial tests; promote both documented private S3 contracts after CI.
 - [x] Test non-destructive GC SQL graph guards (including removed versions and writer fences) and real test-channel history inventory automatically in CI.
