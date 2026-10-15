@@ -32,7 +32,7 @@ from teledrive.storage.user_mode import UserSendJournal
 
 
 WORKER = r"""
-import asyncio, os, sys
+import asyncio, os, sys, traceback
 from pathlib import Path
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -46,55 +46,72 @@ from teledrive.storage.user_mode import UnifiedUserTransport, UserSendJournal
 
 async def run():
     db_url, source, ready, go, target, account = sys.argv[1:]
+    Path(ready).write_text("ready", encoding="ascii")
+    for _ in range(500):
+        if Path(go).exists():
+            break
+        await asyncio.sleep(0.03)
+    else:
+        raise RuntimeError("Worker synchronization expired")
     db = connect_database(db_url)
-    client = TelegramClient(
-        StringSession(os.environ["TELEDRIVE_E2E_SESSION"]),
-        int(os.environ["TELEDRIVE_E2E_API_ID"]),
-        os.environ["TELEDRIVE_E2E_API_HASH"],
-        device_model="TeleDrive Storage Client",
-        app_version="TeleDrive 2.1",
-        receive_updates=False, flood_sleep_threshold=0,
-    )
-    await client.connect()
     try:
-        resolved = await resolve_telegram_target(
-            client, target or None,
-            os.getenv("TELEDRIVE_E2E_CHANNEL_NAME") or None,
-        )
-
-        class Runtime:
-            account = account
-            chat_id = int(await client.get_peer_id(resolved))
-
-            def require(self):
-                return TelethonChunkTransport({account: (client, resolved)})
-
-        transport = UnifiedUserTransport(
-            Runtime(), UserSendJournal(db), min_upload_interval=1.25,
-        )
-        Path(ready).write_text("ready", encoding="ascii")
-        for _ in range(500):
-            if Path(go).exists():
-                break
-            await asyncio.sleep(0.03)
-        else:
-            raise RuntimeError("Worker synchronization expired")
         manager = StorageUploadJobs(BucketCatalog(ManifestStore(db)))
+        channel_name = os.getenv("TELEDRIVE_E2E_CHANNEL_NAME") or None
+        # One USER StringSession must never hold concurrent connections:
+        # serialize the whole per-job connect/upload/disconnect window
+        # across workers with a file lock in the shared source tree.
+        import fcntl
+        lock = open(Path(source) / "mtproto-connect.lock", "w")
         for _ in range(12):
-            work = await manager.run_next(
-                transport, allowed_root=Path(source),
-                scratch_directory=Path(source), chunk_size=256 * 1024,
-            )
-            if work is None:
-                return
-            if work["state"] != "done":
-                raise RuntimeError("Live multiworker upload was not committed")
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                # Each job uses a fresh, short-lived client.
+                client = TelegramClient(
+                    StringSession(os.environ["TELEDRIVE_E2E_SESSION"]),
+                    int(os.environ["TELEDRIVE_E2E_API_ID"]),
+                    os.environ["TELEDRIVE_E2E_API_HASH"],
+                    device_model="TeleDrive Storage Client",
+                    app_version="TeleDrive 2.1",
+                    receive_updates=False, flood_sleep_threshold=0,
+                )
+                await client.connect()
+                try:
+                    resolved = await resolve_telegram_target(
+                        client, target or None, channel_name,
+                    )
+
+                    class Runtime:
+                        account = account
+                        chat_id = int(await client.get_peer_id(resolved))
+
+                        def require(self):
+                            return TelethonChunkTransport({account: (client, resolved)})
+
+                    transport = UnifiedUserTransport(
+                        Runtime(), UserSendJournal(db), min_upload_interval=1.25,
+                    )
+                    work = await manager.run_next(
+                        transport, allowed_root=Path(source),
+                        scratch_directory=Path(source), chunk_size=256 * 1024,
+                    )
+                    if work is None:
+                        return
+                    if work["state"] != "done":
+                        raise RuntimeError("Live multiworker upload was not committed")
+                finally:
+                    await client.disconnect()
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
         raise RuntimeError("Worker claimed too many jobs")
     finally:
-        await client.disconnect()
         db.close()
 
-asyncio.run(run())
+try:
+    asyncio.run(run())
+except BaseException as exc:
+    print(f"WORKER-FAILED {type(exc).__name__}: {exc}", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+    raise SystemExit(1)
 """
 
 
