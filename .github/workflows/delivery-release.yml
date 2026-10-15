@@ -54,7 +54,6 @@ jobs:
             tests/storage/test_storage_user_mode.py tests/storage/test_mtproto_rate_guard.py tests/storage/test_mtproto_multi_credentials.py tests/storage/test_telegram_dr_rehearsal.py tests/meta/test_production_bundle.py tests/meta/test_capacity_probe.py tests/storage/test_legacy_cutover_acceptance.py tests/storage/test_telegram_target_resolution.py tests/meta/test_ci_workflows.py tests/meta/test_release_matrix.py \
             tests/web/test_api_keys.py tests/web/test_rest_api.py tests/web/test_rest_transfer.py tests/web/test_unified_service.py \
             tests/s3/test_s3_fail_closed.py tests/s3/test_s3_contract.py tests/storage/test_metadata_backup.py tests/storage/test_storage_sigkill.py tests/storage/test_metadata_snapshot_rehearsal.py tests/s3/test_s3_multipart_preconditions.py
->>>>>>> f951dec (refactor(layout): regroup tests into s3/storage/web/e2e/meta and scripts into ops/dev)
       - name: Security checks
         run: |
           bandit -q -r teledrive web -ll

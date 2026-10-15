@@ -107,7 +107,6 @@ jobs:
             tests/s3/test_s3_permissions.py \
             tests/storage/test_storage_gc_audit.py \
             tests/storage/test_storage_gc_admin.py
->>>>>>> f951dec (refactor(layout): regroup tests into s3/storage/web/e2e/meta and scripts into ops/dev)
       - name: Publish CI run summary
         if: always()
         shell: bash
