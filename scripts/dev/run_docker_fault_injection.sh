@@ -93,6 +93,9 @@ with Path(sys.argv[1]).open("x", encoding="utf-8") as out:
               '  allowed_extensions: []\n  max_file_size_mb: 0\n'
               '  sleep_min_seconds: 60\n  sleep_max_seconds: 90\n'
               '  max_files_per_run: 12\n  max_files_per_day: 100\n'
+              '  retry_attempts: 5\n  backoff_base_seconds: 10\n'
+              '  floodwait_buffer_seconds: 5\n'
+              '  caption_template: "{name}"\n  send_mode: "document"\n'
               'state:\n  database_url: "postgresql+psycopg://teledrive:%s@postgres:5432/teledrive_dev"\n'
               'logging:\n  log_path: "/data/uploader.log"\n  level: "WARNING"\n'
               'app:\n  auto_run: false\n  run_interval_minutes: 60\n' % p)

@@ -209,8 +209,8 @@ def test_admin_job_endpoints_require_root_auth_csrf_and_do_not_expose_tokens(
     assert client.post(url, auth=auth, json=payload).status_code == 403
     assert client.post(url, auth=auth, json=payload,
                        headers={"x-teledrive-csrf": "1"}).status_code == 503
-    monkeypatch.setenv("TELEDRIVE_JOB_SOURCE_ROOT", str(root))
-    monkeypatch.setenv("TELEDRIVE_STORAGE_SCRATCH_DIR", str(tmp_path / "scratch"))
+    monkeypatch.setattr(webapp, "JOB_SOURCE_ROOT", str(root))
+    monkeypatch.setattr(webapp, "STORAGE_SCRATCH_DIR", str(tmp_path / "scratch"))
     start = client.post(url, auth=auth, json=payload,
                         headers={"x-teledrive-csrf": "1"})
     assert start.status_code == 201, start.text
@@ -242,7 +242,7 @@ def test_cancel_job_endpoint_requires_root_and_csrf_and_fences_active_jobs(
         BucketCatalog(ManifestStore(conn)).create_bucket("cancel-admin", int(time.time()))
     finally:
         conn.close()
-    monkeypatch.setenv("TELEDRIVE_JOB_SOURCE_ROOT", str(root))
+    monkeypatch.setattr(webapp, "JOB_SOURCE_ROOT", str(root))
     auth = ("testadmin", "secure-auth-password")
     response = client.post("/api/v1/admin/storage/jobs",
                            auth=auth, headers={"x-teledrive-csrf": "1"},

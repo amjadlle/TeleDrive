@@ -1,26 +1,51 @@
 # TeleDrive configuration example (copy to config/config.yaml and edit).
 #
-# The unified WebUI/REST/S3/local-job service reads this file. The service
-# creates config/config.yaml with safe defaults on first start when the file
-# is missing; use this example as the tidy starting point instead.
-#
-# Secrets belong ONLY in this file, the private .env and the session files.
-# Never commit real api_hash values, session paths or channel IDs.
+# The unified WebUI/REST/S3/local-job service reads this file as its ONLY
+# settings source. Except TZ, PUID/PGID and TELEDRIVE_CONFIG, nothing is
+# configured through environment variables. Secrets belong ONLY in this
+# file and the session files; never commit real values.
+
+# ---------------------------------------------------------------------------
+# Web service: authentication, listeners and request limits.
+# ---------------------------------------------------------------------------
+web:
+  user: "admin"
+  password: "CHANGE_ME_AT_LEAST_16_CHARACTERS"
+  allowed_hosts: "localhost,127.0.0.1,[::1]"
+  allow_insecure: false          # true only for explicitly trusted local setups
+  bind_address: "0.0.0.0"        # in-container bind; host mapping stays loopback
+  port: 8080
+  s3_port: 9000
+  rest_max_upload_bytes: 2147483648      # 2 GiB
+  auth_failure_limit: 5
+  auth_failure_window_seconds: 300
+  # Optional HTTPS: generate certs with scripts/ops/generate_ssl.py and set:
+  # ssl_certfile: "/config/tls/server.crt"
+  # ssl_keyfile: "/config/tls/server.key"
 
 # ---------------------------------------------------------------------------
 # Unified storage: Telethon USER MTProto (the only live transport).
-# Bot API uploads are retired; Saved Messages are not supported.
+# Sessions are pre-authorized files; phone numbers and 2FA codes are never
+# stored here (they are used once, interactively, by
+# scripts/dev/create_storage_user_session.py).
 # ---------------------------------------------------------------------------
 storage:
   # Dedicated private broadcast channel the authorized user can post to.
   # Numeric private channel IDs must be visible in the user's dialogs.
   channel: "YOUR_PRIVATE_CHANNEL_ID_OR_USERNAME"
 
-  # Credential rotation strategy across the apis: list below.
-  #   round_robin (default): distribute sends across the sets in turn.
-  #   failover: keep one set until a definite flood-wait rejection,
-  #             then switch to the next with a fresh send intent.
+  # Credential rotation across the apis: list below:
+  #   single       use only the first set
+  #   round_robin  distribute sends across the sets in turn (default)
+  #   failover     keep one set until a definite flood-wait rejection,
+  #                then switch to the next with a fresh send intent
+  #   parallel     upload chunks concurrently across all sets
   strategy: round_robin
+
+  scratch_dir: "/data/tmp"
+
+  # Persistent S3 credential-encryption master key file.
+  s3_master_key_file: "/config/s3-master.key"
 
   # One or more Telegram API credential sets. Every set must resolve the
   # SAME dedicated channel above. account labels are optional and default
@@ -37,17 +62,35 @@ storage:
       account: mtproto-user-2
 
 # ---------------------------------------------------------------------------
-# Legacy uploader configuration (used by the durable-job legacy bridge and
-# the optional lease-fenced source ingestion; the direct-send scanner is
-# never started by the unified service).
+# Durable local-file jobs and the opt-in lease-fenced legacy ingestion.
 # ---------------------------------------------------------------------------
-telegram:
-  strategy: single            # single | round_robin | failover | parallel
-  api_id: 0
-  api_hash: ""
-  target: "me"
-  accounts: []
+jobs:
+  source_root: "/uploads"
+  auto_run: true                 # process explicitly queued jobs
+  legacy_auto_bucket: ""         # opt-in bucket for fenced legacy scans
+  legacy_auto_prefix: ""
+  legacy_auto_limit: 100
 
+# ---------------------------------------------------------------------------
+# SQL state: the shared object catalog database.
+# ---------------------------------------------------------------------------
+state:
+  database_url: "sqlite:////data/state.db"
+  # Or any synchronous SQLAlchemy URL whose driver/dialect is installed:
+  # database_url: "postgresql+psycopg://user:pass@db/teledrive"
+  # database_url: "mysql+pymysql://user:pass@db/teledrive"
+
+  # Optional DB drivers NOT bundled with the image (e.g. oracledb) are pip
+  # installed into /data/site-packages at startup and added to sys.path:
+  # db_extra_packages: ["oracledb"]
+
+  allowed_sqlite_roots: "/data"
+
+# ---------------------------------------------------------------------------
+# Legacy uploader sections kept only for the durable-job legacy bridge and
+# the optional lease-fenced source ingestion. The direct-send scanner is
+# never started by the unified service.
+# ---------------------------------------------------------------------------
 upload:
   source_dir: "/uploads"
   allowed_extensions: []
@@ -57,11 +100,12 @@ upload:
   max_files_per_run: 12
   max_files_per_day: 100
 
-state:
-  database_url: "sqlite:////data/state.db"
-  # Or any synchronous SQLAlchemy URL whose driver/dialect is installed:
-  # database_url: "postgresql+psycopg://user:pass@db/teledrive"
-  # database_url: "mysql+pymysql://user:pass@db/teledrive"
+telegram:
+  strategy: single
+  api_id: 0
+  api_hash: ""
+  target: "me"
+  accounts: []
 
 logging:
   log_path: "/data/uploader.log"
@@ -70,3 +114,14 @@ logging:
 app:
   auto_run: false
   run_interval_minutes: 60
+
+# ---------------------------------------------------------------------------
+# Internal path allowlists for the legacy uploader validation.
+# ---------------------------------------------------------------------------
+paths:
+  source_roots: "/uploads"
+  session_roots: "/data/sessions"
+  log_roots: "/data"
+  split_dir: "/data/tmp"
+  split_min_free_bytes: 536870912
+  lock_dir: "/data/tmp"

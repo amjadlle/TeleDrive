@@ -37,7 +37,7 @@ cp config.example.yaml config/config.yaml   # optional tidy template
 chmod 600 .env config/config.yaml
 ~~~
 
-In `.env` set a unique `TELEDRIVE_WEB_PASSWORD` of at least 16 characters; adjust `PUID` and `PGID` to match the owner of the mounted directories. The service creates `config/config.yaml` with safe defaults on first start (or copy the tidy [`config.example.yaml`](config.example.yaml) template); add your authorized USER MTProto credentials there under the **`storage:`** section as an `apis:` list (see [Telethon USER Storage](docs/TELETHON_STORAGE.md)) — one or more `api_id`/`api_hash`/`session_file` sets sharing the same dedicated channel, with `round_robin` (default) or `failover` rotation. Create the private session with the instructions in [Section 4](#4-s3-compatible-api) **before** starting Docker. Without an authorized session, initial health/admin endpoints may run, but binary uploads fail closed.
+Set a unique `web.password` of at least 16 characters in `config/config.yaml` (the file keeps **all** service settings; `.env` only holds `PUID`/`PGID`/`TZ`/port mappings). Adjust `PUID` and `PGID` to match the owner of the mounted directories. The service creates `config/config.yaml` with safe defaults on first start (or copy the tidy [`config.example.yaml`](config.example.yaml) template); add your authorized USER MTProto credentials there under the **`storage:`** section as an `apis:` list (see [Telethon USER Storage](docs/TELETHON_STORAGE.md)) — one or more `api_id`/`api_hash`/`session_file` sets sharing the same dedicated channel, with `round_robin` (default) or `failover` rotation. Create the private session with the instructions in [Section 4](#4-s3-compatible-api) **before** starting Docker. Without an authorized session, initial health/admin endpoints may run, but binary uploads fail closed.
 
 ~~~bash
 docker compose up -d --build
@@ -52,7 +52,7 @@ docker compose logs -f teledrive
 
 **One service, one container, one Python process.** Both listeners use the **same SQL catalog and Telegram object engine**. You do not need `docker compose --profile s3` and there is no second S3 container.
 
-Ports bind to loopback by default (`TELEDRIVE_BIND_ADDRESS=127.0.0.1`). For remote access, use an SSH tunnel, private VPN, or an HTTPS reverse proxy; never expose Basic credentials or S3 secrets over untrusted plaintext HTTP.
+The service binds `0.0.0.0` inside the container; the Compose host mapping stays loopback by default. For remote access, use an SSH tunnel, private VPN, or an HTTPS reverse proxy (see `scripts/ops/generate_ssl.py` for TLS); never expose Basic credentials or S3 secrets over untrusted plaintext HTTP.
 
 | Host folder | Container path | Purpose |
 | --- | --- | --- |
@@ -123,7 +123,7 @@ curl -f -H "Authorization: Bearer $TELEDRIVE_API_KEY" \
   -o restored.bin
 ~~~
 
-The default REST upload ceiling is 2 GiB, configurable with `TELEDRIVE_REST_MAX_UPLOAD_BYTES`. Uploads require the configured authorized Telethon USER session with access to a dedicated private channel. Physical Telegram message deletion is **not** implied by an HTTP object delete.
+The default REST upload ceiling is 2 GiB, configurable with `web.rest_max_upload_bytes` in `config/config.yaml`. Uploads require the configured authorized Telethon USER session with access to a dedicated private channel. Physical Telegram message deletion is **not** implied by an HTTP object delete.
 
 ## 4. S3-compatible API
 
@@ -138,15 +138,15 @@ A connected user-MTProto server also exposes **admin-only, read-only** `GET /api
 An account holder creates the user StringSession **once** on a trusted interactive host (no credentials are written to Git). The server then reconnects automatically under that real user authorization:
 
 ~~~bash
-# Set TELEDRIVE_STORAGE_MTPROTO_API_ID and TELEDRIVE_STORAGE_MTPROTO_API_HASH
-# privately in the shell before running this command.
+# Set the Telegram API credentials privately in the shell; the program
+# prompts for sign-in once and writes an authorized session file.
 python scripts/dev/create_storage_user_session.py --output config/mtproto-user.session
 chmod 600 config/mtproto-user.session
 ~~~
 
 Run this interactively on a trusted host with Python dependencies installed, before the first Docker startup. Ensure the resulting `0600` file is readable by the configured container `PUID`/`PGID`. The API ID/hash are from [my.telegram.org](https://my.telegram.org/apps). The script prompts for the real user's Telegram sign-in code and optional 2FA and refuses to overwrite an existing session. Its MTProto application/device metadata identifies the TeleDrive client accurately; it does **not** masquerade as an official Telegram Desktop/Android app. Choose a channel username or a numeric channel ID present in this user's dialogs. If selecting a numeric private channel, it must be visible among the user's first 5,000 dialogs. No user account => no user-only history access.
 
-1. Set `TELEDRIVE_STORAGE_TRANSPORT=telethon` (default) and `TELEDRIVE_STORAGE_MTPROTO_CHANNEL` in the private `.env`. Save one or more authorized user StringSessions under `./config/` (mode 0600) using the interactive command below, then list them with their API credentials in the `storage.apis:` section of `config/config.yaml` ([Telethon USER Storage](docs/TELETHON_STORAGE.md)). The user needs posting rights in that private **broadcast channel**, not Saved Messages. Existing installations from the pre-switch era must configure a user session before further uploads; **do not delete original media or SQL backups**.
+1. Save one or more authorized user StringSessions under `./config/` (mode 0600) using the interactive command below, then list them with their API credentials and the shared channel in the `storage:` section of `config/config.yaml` ([Telethon USER Storage](docs/TELETHON_STORAGE.md)). The user needs posting rights in that private **broadcast channel**, not Saved Messages. Existing installations from the pre-switch era must configure a user session before further uploads; **do not delete original media or SQL backups**.
 2. Generate a persistent master encryption key once, on the trusted host:
 
 ~~~bash
@@ -217,14 +217,14 @@ The Docker mount `./uploads:/uploads:ro` gives the service read-only access to a
 
 ~~~bash
 # Ensure the bucket exists. Then enqueue an existing local file:
-curl -fsS -u "$TELEDRIVE_WEB_USER:$TELEDRIVE_WEB_PASSWORD" \
+curl -fsS -u "admin:$WEB_PASSWORD" \
   -H "X-TeleDrive-CSRF: 1" \
   -H "Content-Type: application/json" \
   -d '{"bucket":"backups","key":"local/example.bin","source_path":"/uploads/example.bin"}' \
   http://127.0.0.1:8080/api/v1/admin/storage/jobs
 ~~~
 
-In Docker Compose, `TELEDRIVE_JOB_AUTO_RUN=1` processes **explicitly queued** jobs automatically. Set it to `0` to disable background processing while retaining queue entries. **A copy into `/uploads` does not automatically trigger a scan or upload.**
+With `jobs.auto_run: true` in `config/config.yaml` (the default) the service processes **explicitly queued** jobs automatically. Set it to `false` to disable background processing while retaining queue entries. **A copy into `/uploads` does not automatically trigger a scan or upload.**
 
 Jobs are persisted in SQL and protect against source mutation, unexpected generation changes and interrupted uploads. Keep the source file until the job reaches `done`. The admin API also supports job inspection/retry, stale-pending previews, history restore and safe health checks. Failed/uncertain remote sends do not authorize physical cleanup.
 
@@ -241,7 +241,7 @@ python -m teledrive.uploader --config config/config.yaml --scan-only
 python -m teledrive.uploader --config config/config.yaml --run-once
 ~~~
 
-WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. The original direct-send legacy scanner uses a distinct upload path from the REST/S3 catalog. For **unified ingestion in the existing single container**, first create a bucket, disable legacy `app.auto_run`, place the configured `upload.source_dir` under the read-only `/uploads` mount, and opt in with `TELEDRIVE_JOB_LEGACY_AUTO_BUCKET=<bucket>` in `.env`. Optional `TELEDRIVE_JOB_LEGACY_AUTO_PREFIX` and `TELEDRIVE_JOB_LEGACY_AUTO_LIMIT` bound the queue. The scheduler uses the shared SQL catalog, fenced legacy scan, selected durable Telegram transport and existing WebUI/REST/S3 service; it never starts the old Telethon direct-send path. The bucket setting is **empty by default** to prevent unintended source scanning or live-data migration. Never run both upload modes on the same source concurrently.
+WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. The original direct-send legacy scanner uses a distinct upload path from the REST/S3 catalog. For **unified ingestion in the existing single container**, first create a bucket, disable legacy `app.auto_run`, place the configured `upload.source_dir` under the read-only `/uploads` mount, and opt in with `jobs.legacy_auto_bucket: <bucket>` in `config/config.yaml`. Optional `jobs.legacy_auto_prefix` and `jobs.legacy_auto_limit` bound the queue. The scheduler uses the shared SQL catalog, fenced legacy scan, selected durable Telegram transport and existing WebUI/REST/S3 service; it never starts the old Telethon direct-send path. The bucket setting is **empty by default** to prevent unintended source scanning or live-data migration. Never run both upload modes on the same source concurrently.
 
 ### Telegram account setup
 

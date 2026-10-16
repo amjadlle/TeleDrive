@@ -16,9 +16,9 @@
 - Choose a **dedicated private broadcast channel** where the authorized user
   has posting rights. The channel must be in the user's accessible dialogs;
   for numeric private IDs the runtime resolves within the first 5,000 dialogs.
-- `TELEDRIVE_STORAGE_TRANSPORT=telethon` is the only accepted mode; omitting
-  the variable also selects `telethon`. Explicit `bot` fails closed. Old
-  `TELEDRIVE_STORAGE_BOT_*` values are ignored by the unified server.
+- Telethon USER MTProto is the only transport; no transport selector
+  exists. Old `TELEDRIVE_STORAGE_BOT_*` values are ignored by the unified
+  server.
 - Telethon's `device_model` and `app_version` identify **TeleDrive Storage
   Client**. They are not an HTTP User-Agent and do not claim to be an official
   Telegram client. Respect Telegram flood waits and account usage limits.
@@ -40,9 +40,8 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
 
-# Set these privately in the current shell; the program prompts for sign-in.
-export TELEDRIVE_STORAGE_MTPROTO_API_ID=YOUR_TELEGRAM_API_ID
-export TELEDRIVE_STORAGE_MTPROTO_API_HASH=YOUR_TELEGRAM_API_HASH
+# The script asks for the API credentials interactively (never commit them);
+# it prompts for the Telegram sign-in code once and writes the session.
 python scripts/dev/create_storage_user_session.py --output config/mtproto-user.session
 chmod 600 config/mtproto-user.session
 ```
@@ -75,12 +74,11 @@ distributes sends across the sets; failover keeps one set until a definite
 flood-wait rejection, then switches to the next with a fresh send intent.
 Ambiguous send outcomes never trigger cross-set retries. Account labels
 default to `mtproto-user`, `mtproto-user-2`, … when omitted.
-`TELEDRIVE_STORAGE_MTPROTO_CHANNEL` / `_STRATEGY` env vars override nothing:
-the config section wins when present.
+There are no service settings in environment variables: the
+config section is the only source.
 
-A comma-separated env fallback (`TELEDRIVE_STORAGE_MTPROTO_API_ID` /
-`_API_HASH` / `_SESSION_FILE` lists of equal length) applies only when
-`config.yaml` has no `storage.apis:` section.
+The service never falls back to environment credentials; a missing or
+empty `storage.apis:` section fails closed at startup.
 
 `docker-compose.yml` mounts `./config` at `/config`; the session paths above
 must live under that mount. Ensure owner/group and mode permit the configured

@@ -37,10 +37,8 @@ mtproto_send_intents = Table(
 
 
 def transport_mode() -> str:
-    value = os.environ.get("TELEDRIVE_STORAGE_TRANSPORT", "telethon").strip().lower()
-    if value != "telethon":
-        raise RuntimeError("Bot storage mode retired; Telethon USER session required")
-    return value
+    """Only one live transport exists: Telethon USER MTProto."""
+    return "telethon"
 
 
 def _session_from_file() -> str:
@@ -154,34 +152,12 @@ def _credential_sets() -> list[tuple[str, int, str, str]]:
     """
     section = _config_storage_section()
     configured = _config_api_sets(section)
-    if configured is not None:
-        return configured
-    ids = _split_list(os.environ["TELEDRIVE_STORAGE_MTPROTO_API_ID"],
-                      "TELEDRIVE_STORAGE_MTPROTO_API_ID")
-    hashes = _split_list(os.environ["TELEDRIVE_STORAGE_MTPROTO_API_HASH"],
-                         "TELEDRIVE_STORAGE_MTPROTO_API_HASH")
-    sessions = _split_list(os.environ["TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE"],
-                           "TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE")
-    raw_accounts = os.environ.get("TELEDRIVE_STORAGE_MTPROTO_ACCOUNT", "").strip()
-    accounts = (
-        _split_list(raw_accounts, "TELEDRIVE_STORAGE_MTPROTO_ACCOUNT")
-        if raw_accounts else []
-    )
-    if len({len(ids), len(hashes), len(sessions)}) != 1:
-        raise RuntimeError("MTProto credential lists must have equal lengths")
-    if accounts and len(accounts) != len(ids):
-        raise RuntimeError("MTProto account list must match the credential list")
-    if not accounts:
-        accounts = [
-            "mtproto-user" if index == 0 else f"mtproto-user-{index + 1}"
-            for index in range(len(ids))
-        ]
-    sets = []
-    for raw_id, raw_hash, raw_session, label in zip(
-            ids, hashes, sessions, accounts):
-        api_id = int(raw_id)
-        sets.append(_validate_set(label, api_id, raw_hash, raw_session))
-    return sets
+    if configured is None:
+        raise RuntimeError(
+            "storage.apis in config.yaml must list at least one "
+            "{api_id, api_hash, session_file} credential set"
+        )
+    return configured
 
 
 class UserSessionRuntime:
@@ -215,17 +191,13 @@ class UserSessionRuntime:
         if self._sets:
             raise RuntimeError("User storage clients already started")
         storage_section = _config_storage_section()
-        strategy = str(
-            (storage_section or {}).get("strategy")
-            or os.environ.get("TELEDRIVE_STORAGE_MTPROTO_STRATEGY", "round_robin")
-        ).strip().lower()
-        if strategy not in ("round_robin", "failover"):
-            raise RuntimeError("MTProto strategy must be round_robin or failover")
+        strategy = str((storage_section or {}).get("strategy", "round_robin")).strip().lower()
+        if strategy not in ("single", "round_robin", "failover", "parallel"):
+            raise RuntimeError(
+                "MTProto strategy must be single, round_robin, failover or parallel"
+            )
         self.strategy = strategy
-        target_id = str(
-            (storage_section or {}).get("channel")
-            or os.environ.get("TELEDRIVE_STORAGE_MTPROTO_CHANNEL", "")
-        ).strip()
+        target_id = str((storage_section or {}).get("channel", "")).strip()
         if (not target_id or target_id.lower() in ("me", "self", "saved messages")):
             raise RuntimeError("Invalid dedicated channel configuration")
         sets = _credential_sets()
@@ -322,14 +294,15 @@ class UserSessionRuntime:
         self.client = self._sets[self.account][0]
         return self.account
 
-    def require(self):
+    def require(self, label: str | None = None):
         if self._sets and self._labels:
-            label = self._labels[self._index]
-            client, channel = self._sets[label]
+            selected = label or self._labels[self._index]
+            client, channel = self._sets[selected]
             if not client.is_connected():
                 raise RuntimeError("User Telegram session is not connected")
-            self.account = label
-            return TelethonChunkTransport({label: (client, channel)})
+            if label is None:
+                self.account = selected
+            return TelethonChunkTransport({selected: (client, channel)})
         # Legacy single-client wiring without start().
         if (self.client is None or self.transport is None
                 or not self.client.is_connected()):
@@ -419,19 +392,41 @@ class UnifiedUserTransport:
         self.rate = rate if rate is not None else MtprotoRateGuard(journal.db)
         self.min_upload_interval = min_upload_interval
         self._next_upload = 0.0
+        self._select_lock = asyncio.Lock()
 
     async def verify_target(self):
         self.runtime.require()
+
+    def parallel_degree(self) -> int:
+        """Concurrent send capacity: parallel strategy uses every set."""
+        transports = getattr(self.runtime, "transports", None)
+        labels = list(transports()) if callable(transports) else None
+        strategy = getattr(self.runtime, "strategy", "round_robin")
+        if strategy == "parallel" and labels:
+            return len(labels)
+        return 1
+
+    async def _select(self, *, strategy: str, labels: list[str],
+                      advance) -> str:
+        """Atomically pick the account label for this send.
+
+        round_robin and parallel pre-rotate so concurrent callers always
+        receive distinct sets; single and failover stay on the current set
+        (failover advances only after a definite rejection).
+        """
+        async with self._select_lock:
+            account = self.runtime.account
+            if (strategy in ("round_robin", "parallel")
+                    and len(labels) > 1 and callable(advance)):
+                advance()
+        return account
 
     async def upload(self, path: Path, *, object_id: str, ordinal: int,
                      checksum: str):
         from telethon.errors import FloodWaitError
 
         size = path.stat().st_size
-        account = self.runtime.account
         chat_id = self.runtime.chat_id
-        self.journal.start(account, chat_id, object_id, ordinal,
-                           checksum, size)
         # One or more authorized credential sets share the SAME channel.
         # A definite flood-wait proves the send was REJECTED, so the failed
         # set's intent is cleared and the next set retries with its own
@@ -439,12 +434,19 @@ class UnifiedUserTransport:
         # Single-set runtimes keep the original intent across the bounded
         # same-set retry (legacy behavior).
         transports = getattr(self.runtime, "transports", None)
-        labels = list(transports()) if callable(transports) else [account]
+        labels = list(transports()) if callable(transports) else None
         strategy = getattr(self.runtime, "strategy", "round_robin")
         advance = getattr(self.runtime, "advance", None)
-        total_attempts = max(len(labels) * 2, 2)
+        if labels:
+            account = await self._select(
+                strategy=strategy, labels=labels, advance=advance)
+        else:
+            account = self.runtime.account
+        self.journal.start(account, chat_id, object_id, ordinal,
+                           checksum, size)
+        total_attempts = max(len(labels) * 2, 2) if labels else 2
         for attempt in range(total_attempts):
-            if attempt and len(labels) > 1 and callable(advance):
+            if attempt and labels and len(labels) > 1 and callable(advance):
                 self.journal.clear_rejected_send(
                     account, chat_id, object_id, ordinal, checksum, size,
                 )
@@ -453,7 +455,10 @@ class UnifiedUserTransport:
                 self.journal.start(account, chat_id, object_id, ordinal,
                                    checksum, size)
             try:
-                delegate = self.runtime.require()
+                try:
+                    delegate = self.runtime.require(account)
+                except TypeError:
+                    delegate = self.runtime.require()
                 # The SQL slot is shared by every worker using this
                 # account/channel, not just this transport instance.
                 shared_wait = self.rate.reserve_send_slot(
@@ -477,9 +482,6 @@ class UnifiedUserTransport:
                     raise RuntimeError("MTProto send returned an unexpected account or channel")
                 self.journal.acknowledged(account, chat_id, object_id, ordinal, message_id)
                 self._next_upload = time.monotonic()
-                if (strategy == "round_robin" and attempt == 0
-                        and len(labels) > 1 and callable(advance)):
-                    advance()
                 return received_account, received_chat, message_id
             except FloodWaitError as exc:
                 # Publish the cooldown for every worker before sleeping.
@@ -499,6 +501,12 @@ class UnifiedUserTransport:
         )
 
     async def download(self, reference, destination):
+        transports = getattr(self.runtime, "transports", None)
+        if callable(transports) and reference.account in transports():
+            client, channel = transports()[reference.account]
+            return await TelethonChunkTransport({
+                reference.account: (client, channel),
+            }).download(reference, destination)
         if reference.account == self.runtime.account:
             return await self.runtime.require().download(reference, destination)
         if reference.account == "api-bot" and reference.chat_id == self.runtime.chat_id:
@@ -508,5 +516,5 @@ class UnifiedUserTransport:
             return await self.runtime.require().download(rebound, destination)
         raise FileNotFoundError(
             "Historical source inaccessible to authorized Telethon user; "
-            "do not delete or remap remote media"
+            "do not remap remote media"
         )

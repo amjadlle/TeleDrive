@@ -27,7 +27,7 @@ def test_admin_preview_and_execute_legacy_import_without_telegram(admin, tmp_pat
     folder.mkdir()
     (folder / "first.txt").write_bytes(b"first")
     (folder / "skip.dat").write_bytes(b"excluded")
-    monkeypatch.setenv("TELEDRIVE_JOB_SOURCE_ROOT", str(root))
+    monkeypatch.setattr(webapp, "JOB_SOURCE_ROOT", str(root))
     cfg = SimpleNamespace(source_dir=str(folder), allowed_extensions=[".txt"],
                           max_file_size_mb=1)
     monkeypatch.setattr(webapp, "effective_config", lambda: cfg)
@@ -75,7 +75,7 @@ def test_admin_legacy_import_refuses_external_source_and_active_legacy_uploader(
     external = tmp_path / "outside"
     external.mkdir()
     (external / "a.txt").write_bytes(b"no-read")
-    monkeypatch.setenv("TELEDRIVE_JOB_SOURCE_ROOT", str(approved))
+    monkeypatch.setattr(webapp, "JOB_SOURCE_ROOT", str(approved))
     monkeypatch.setattr(webapp, "effective_config", lambda: SimpleNamespace(
         source_dir=str(external), allowed_extensions=[], max_file_size_mb=0,
     ))
@@ -112,8 +112,8 @@ def test_manual_legacy_and_job_uploads_blocked_during_automatic_cutover(
     from fastapi import HTTPException
 
     client, _, _ = admin
-    monkeypatch.setenv("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "migration-ci")
-    monkeypatch.setenv("TELEDRIVE_JOB_AUTO_RUN", "1")
+    monkeypatch.setattr(webapp, "JOB_LEGACY_AUTO_BUCKET", "migration-ci")
+    monkeypatch.setattr(webapp, "JOB_AUTO_RUN", True)
     denied = client.post(
         "/api/v1/admin/storage/jobs/run-next", auth=AUTH, headers=CSRF,
     )
@@ -130,22 +130,22 @@ def test_manual_legacy_and_job_uploads_blocked_during_automatic_cutover(
 def test_automatic_cutover_flag_validates_legacy_config_and_scan_limit(monkeypatch):
     import pytest
 
-    monkeypatch.setenv("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "migration-ci")
-    monkeypatch.delenv("TELEDRIVE_JOB_AUTO_RUN", raising=False)
+    monkeypatch.setattr(webapp, "JOB_LEGACY_AUTO_BUCKET", "migration-ci")
+    monkeypatch.setattr(webapp, "JOB_AUTO_RUN", False)
     monkeypatch.setattr(webapp, "read_raw_config", lambda: {"app": {"auto_run": False}})
     with pytest.raises(RuntimeError, match="AUTO_RUN"):
         webapp._legacy_cutover_configuration()
-    monkeypatch.setenv("TELEDRIVE_JOB_AUTO_RUN", "1")
+    monkeypatch.setattr(webapp, "JOB_AUTO_RUN", True)
     monkeypatch.setattr(webapp, "read_raw_config", lambda: {"app": {"auto_run": True}})
     with pytest.raises(RuntimeError, match="Disable legacy"):
         webapp._legacy_cutover_configuration()
     monkeypatch.setattr(webapp, "read_raw_config", lambda: {"app": {"auto_run": False}})
     for limit in ("0", "1001", "not-an-integer"):
-        monkeypatch.setenv("TELEDRIVE_JOB_LEGACY_AUTO_LIMIT", limit)
+        monkeypatch.setattr(webapp, "JOB_LEGACY_AUTO_LIMIT", limit)
         with pytest.raises(RuntimeError):
             webapp._legacy_cutover_configuration()
-    monkeypatch.setenv("TELEDRIVE_JOB_LEGACY_AUTO_LIMIT", "17")
-    monkeypatch.setenv("TELEDRIVE_JOB_LEGACY_AUTO_PREFIX", "archive")
+    monkeypatch.setattr(webapp, "JOB_LEGACY_AUTO_LIMIT", "17")
+    monkeypatch.setattr(webapp, "JOB_LEGACY_AUTO_PREFIX", "archive")
     assert webapp._legacy_cutover_configuration() == (
         "migration-ci", "archive", 17,
     )

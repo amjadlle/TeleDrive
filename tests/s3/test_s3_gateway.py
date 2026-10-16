@@ -58,8 +58,8 @@ def service(monkeypatch, tmp_path):
     monkeypatch.setattr(gateway, "db_connect", connection)
     monkeypatch.setattr(gateway, "storage_transport", factory)
     monkeypatch.setattr(gateway, "load_master_key", lambda: key)
-    monkeypatch.setenv("TELEDRIVE_STORAGE_SCRATCH_DIR", str(tmp_path / "staging"))
-    monkeypatch.setenv("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))
+    monkeypatch.setattr(admin, "STORAGE_SCRATCH_DIR", str(tmp_path / "staging"))
+    monkeypatch.setattr(admin, "REST_MAX_UPLOAD_BYTES", 8 * 1024 * 1024)
     client = TestClient(gateway.app, base_url="http://localhost:9000")
     try:
         yield client, issued, telegram, connection, key

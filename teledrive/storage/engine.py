@@ -109,10 +109,13 @@ class TelegramObjectStorage:
             try:
                 if on_begin is not None:
                     on_begin(identifier)
+                degree_fn = getattr(self.transport, "parallel_degree", None)
+                concurrency = degree_fn() if callable(degree_fn) else 1
                 with tempfile.TemporaryDirectory(
                     prefix="teledrive-chunks-", dir=self.scratch_directory
                 ) as scratch:
                     root = Path(scratch)
+                    staged: list[tuple[int, int, int, str, Path]] = []
                     while data := handle.read(self.chunk_size):
                         full_sha.update(data)
                         digest = hashlib.sha256(data).hexdigest()
@@ -120,22 +123,44 @@ class TelegramObjectStorage:
                         with part.open("xb") as f:
                             f.write(data)
                         part.chmod(0o600)
-                        account, chat_id, message_id = await self.transport.upload(
-                            part, object_id=identifier, ordinal=ordinal, checksum=digest,
+                        staged.append(
+                            (ordinal, offset, len(data), digest, part)
                         )
-                        # The remote message may already exist if our SQL lease
-                        # expired: reject publication and leave the marker for GC.
-                        if lost.is_set() or not self.manifests.heartbeat_writer(
-                            identifier, token, int(time.time()), self.writer_ttl_seconds
-                        ):
-                            raise ManifestError("Writer ownership lost before chunk journal")
-                        self.manifests.append(identifier, ChunkReference(
-                            ordinal=ordinal, offset=offset, size=len(data), sha256=digest,
-                            account=account, chat_id=int(chat_id), message_id=int(message_id),
-                        ), int(time.time()), writer_token=token)
-                        part.unlink()
                         offset += len(data)
                         ordinal += 1
+                    # parallel strategy uploads up to one chunk per
+                    # credential set concurrently; every other transport
+                    # stays strictly sequential.
+                    for index in range(0, len(staged), max(concurrency, 1)):
+                        batch = staged[index:index + max(concurrency, 1)]
+                        results = await asyncio.gather(*[
+                            self.transport.upload(
+                                part_path, object_id=identifier,
+                                ordinal=ordinal_number, checksum=digest,
+                            )
+                            for (ordinal_number, _, _, digest,
+                                 part_path) in batch
+                        ])
+                        for (ordinal_number, part_offset, part_size, digest,
+                             part_path), (account, chat_id, message_id) in zip(
+                                batch, results):
+                            # The remote message may already exist if our SQL
+                            # lease expired: reject publication and leave the
+                            # marker for GC.
+                            if lost.is_set() or not self.manifests.heartbeat_writer(
+                                identifier, token, int(time.time()),
+                                self.writer_ttl_seconds,
+                            ):
+                                raise ManifestError(
+                                    "Writer ownership lost before chunk journal"
+                                )
+                            self.manifests.append(identifier, ChunkReference(
+                                ordinal=ordinal_number, offset=part_offset,
+                                size=part_size, sha256=digest,
+                                account=account, chat_id=int(chat_id),
+                                message_id=int(message_id),
+                            ), int(time.time()), writer_token=token)
+                            part_path.unlink()
                 after = os.fstat(handle.fileno())
                 if (offset != before.st_size or before.st_dev != after.st_dev
                     or before.st_ino != after.st_ino

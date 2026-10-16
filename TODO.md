@@ -20,14 +20,14 @@
 > Owner: everything Telethon-only and config-driven. Except TZ and the config-file path, NO env settings; the UI must edit the config; strategies must cover single/round_robin/failover/parallel; SSL script; compose healthcheck/logging; DB extra packages via config; all tracked here.
 
 - [x] `storage:` config section with `apis:` list + channel/strategy (merged PR #20); root `config.example.yaml`; examples/ folder removed.
-- [ ] Central settings loader: all service settings from `config/config.yaml` only (`web:`, `jobs:`, `state:`, `storage:` sections); no env except TZ + `TELEDRIVE_CONFIG`.
-- [ ] Remove `TELEDRIVE_STORAGE_TRANSPORT` (only Telethon exists).
-- [ ] Strategies: `single | round_robin | failover | parallel` all supported in `storage.strategy`; `parallel` uploads chunks concurrently across the apis sets.
-- [ ] Investigate the legacy config sections; keep only what the unified service truly uses (`state.database_url`, `upload.source_dir`, job ingestion options); drop the accounts/phone block from the example config (sessions are pre-authorized — no phone/2FA in config).
-- [ ] UI: config edit menu/page in the WebUI (if missing) writing back to config.yaml; config writes from UI persist to the file.
-- [ ] SSL: `scripts/ops/generate_ssl.py` (self-signed cert+key) + `web.ssl_certfile/keyfile` config + `--test` mode to verify the service over HTTPS.
-- [ ] docker-compose: review parameters; add healthcheck and log rotation; bind 0.0.0.0 directly (no `TELEDRIVE_BIND_ADDRESS`).
-- [ ] `state.db_extra_packages:` in config installs extra DB drivers at startup (e.g. `oracledb`); example in config.example.yaml; no env.
+- [x] Central settings loader (`teledrive/settings.py`): all service settings from `config/config.yaml` only (`web:`, `jobs:`, `state:`, `storage:`, `paths:` sections); no operator env except TZ + `TELEDRIVE_CONFIG`.
+- [x] Removed `TELEDRIVE_STORAGE_TRANSPORT` (only Telethon exists).
+- [x] Strategies `single | round_robin | failover | parallel` supported in `storage.strategy`; `parallel` uploads chunks concurrently across the apis sets (engine batches via `parallel_degree`).
+- [x] Legacy investigation: `state.database_url` and `upload.source_dir` are what the unified service/bridge use; accounts/phone dropped from the example config (sessions are pre-authorized; phone/2FA used once interactively by `scripts/dev/create_storage_user_session.py`).
+- [x] UI: Settings page gained a Storage card (channel, strategy, apis: list editor) writing back to config.yaml via the existing /api/config PUT.
+- [x] SSL: `scripts/ops/generate_ssl.py` (openssl self-signed cert+key, config snippet, `--test` HTTPS verification) + `web.ssl_certfile/keyfile` + unified.py TLS support.
+- [x] docker-compose: env stripped to TELEDRIVE_CONFIG + TZ; added healthcheck and json-file log rotation; service binds 0.0.0.0 (host mapping stays loopback).
+- [x] `state.db_extra_packages:` installs extra DB drivers into /data/site-packages at startup (oracledb example in config.example.yaml); no env.
 - [ ] Local skipped tests: install aws CLI so `tests/s3/test_s3_cli_compat.py` runs locally; document why live e2e skips stay credential-gated (they run green in CI).
 
 ## 1. Owner directives

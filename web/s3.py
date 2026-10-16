@@ -54,6 +54,7 @@ from teledrive.storage.copy import copy_object, CopyConflict
 from teledrive.storage.engine import TelegramObjectStorage
 from teledrive.storage.manifest import ManifestStore, objects
 from teledrive.storage.telethon_adapter import RECOMMENDED_CHUNK_SIZE
+import web.app as _webapp
 from web.app import db_connect, storage_transport, _secure_mkdir
 
 NAMESPACE = "http://s3.amazonaws.com/doc/2006-03-01/"
@@ -728,7 +729,7 @@ async def _handle(request: Request):
             if request.headers.get("authorization"):
                 raise SigV4Error("AccessDenied", "Ambiguous form and header authentication")
             _reject_unimplemented_write_options(request)
-            max_upload = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+            max_upload = _webapp.REST_MAX_UPLOAD_BYTES
             form_limit = min(FORM_LIMIT, max_upload)
             if form_limit < 1:
                 return _error("EntityTooLarge", "Form upload size is disabled", 413)
@@ -767,7 +768,7 @@ async def _handle(request: Request):
             post_catalog = BucketCatalog(ManifestStore(db))
             if bucket not in post_catalog.list_buckets():
                 return _error("NoSuchBucket", "Upload bucket does not exist", 404)
-            directory = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+            directory = Path(_webapp.STORAGE_SCRATCH_DIR)
             _secure_mkdir(directory)
             fd, temp_name = tempfile.mkstemp(prefix="s3-form-", dir=directory)
             staged = Path(temp_name)
@@ -1353,7 +1354,7 @@ async def _handle(request: Request):
                 except (ValueError, ET.ParseError) as exc:
                     raise MultipartError("MalformedXML", "Invalid CompleteMultipartUpload XML") from exc
                 transport = storage_transport(db)
-                scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+                scratch = Path(_webapp.STORAGE_SCRATCH_DIR)
                 _secure_mkdir(scratch)
                 engine = TelegramObjectStorage(
                     catalog.manifests, transport,
@@ -1381,9 +1382,9 @@ async def _handle(request: Request):
                 raise MultipartError("InvalidArgument", "Invalid part number")
             if not 1 <= number <= MAX_PARTS:
                 raise MultipartError("InvalidArgument", "Invalid part number")
-            scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+            scratch = Path(_webapp.STORAGE_SCRATCH_DIR)
             _secure_mkdir(scratch)
-            max_bytes = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+            max_bytes = _webapp.REST_MAX_UPLOAD_BYTES
             fd, name = tempfile.mkstemp(prefix="s3-part-", dir=scratch)
             stage = Path(name)
             try:
@@ -1614,9 +1615,9 @@ async def _handle(request: Request):
             })
 
         if request.method == "PUT":
-            root = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+            root = Path(_webapp.STORAGE_SCRATCH_DIR)
             _secure_mkdir(root)
-            max_bytes = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+            max_bytes = _webapp.REST_MAX_UPLOAD_BYTES
             transport = storage_transport(db)
             await transport.verify_target()
             fd, name = tempfile.mkstemp(prefix="s3-upload-", dir=root)
@@ -1827,7 +1828,7 @@ async def _handle(request: Request):
             ))
         start, end, partial = _range(request.headers.get("range"), item.size)
         transport = storage_transport(db)
-        scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+        scratch = Path(_webapp.STORAGE_SCRATCH_DIR)
         _secure_mkdir(scratch)
         engine = TelegramObjectStorage(
             catalog.manifests, transport,

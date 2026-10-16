@@ -10,6 +10,7 @@ from xml.etree import ElementTree as ET
 import pytest
 
 from tests.s3.test_s3_gateway import service, signed
+import web.app as admin
 from teledrive.s3.credentials import S3CredentialStore
 
 
@@ -1069,7 +1070,7 @@ def test_browser_post_rejects_unsigned_extra_and_duplicate_fields(service):
 
 def test_browser_post_mime_upload_limit_blocks_before_remote_send(service, monkeypatch):
     assert signed(service, "PUT", "/backup-bucket").status_code == 200
-    monkeypatch.setenv("TELEDRIVE_REST_MAX_UPLOAD_BYTES", "4096")
+    monkeypatch.setattr(admin, "REST_MAX_UPLOAD_BYTES", 4096)
     body = b"X" * 8192
     assert post(service, body, make_form(service, body)).status_code == 413
     assert service[2].uploads == 0

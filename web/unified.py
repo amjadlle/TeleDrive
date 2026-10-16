@@ -45,17 +45,26 @@ def _bind(host, port):
         raise
 
 def main():
+    import web.app as webapp
+
     parser=argparse.ArgumentParser()
-    parser.add_argument("--host",default="127.0.0.1")
-    parser.add_argument("--web-port",type=int,default=8080)
-    parser.add_argument("--s3-port",type=int,default=9000)
+    parser.add_argument("--host",default=None)
+    parser.add_argument("--web-port",type=int,default=None)
+    parser.add_argument("--s3-port",type=int,default=None)
     args=parser.parse_args()
-    service=UnifiedApplication(args.web_port,args.s3_port)
+    host = args.host or webapp.settings_bind_address()
+    web_port = args.web_port or webapp.settings_web_port()
+    s3_port = args.s3_port or webapp.settings_s3_port()
+    service=UnifiedApplication(web_port,s3_port)
     listeners=[]
     try:
-        listeners=[_bind(args.host,service.web_port),_bind(args.host,service.s3_port)]
-        uvicorn.Server(uvicorn.Config(service,host=args.host,port=args.web_port,
-                                     workers=1,lifespan="on",server_header=False)).run(sockets=listeners)
+        listeners=[_bind(host,service.web_port),_bind(host,service.s3_port)]
+        uvicorn.Server(uvicorn.Config(
+            service,host=host,port=service.web_port,
+            workers=1,lifespan="on",server_header=False,
+            ssl_certfile=webapp.SSL_CERTFILE or None,
+            ssl_keyfile=webapp.SSL_KEYFILE or None,
+        )).run(sockets=listeners)
     finally:
         for listener in listeners:
             listener.close()

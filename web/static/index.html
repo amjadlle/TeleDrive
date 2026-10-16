@@ -44,7 +44,18 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.input,s
 
 <section id="settings" class="page">
 <div class="card">
-<h3>Telegram</h3>
+<h3>Storage · Telethon USER MTProto</h3>
+<p class="muted">One or more API credential sets sharing the same dedicated channel. Sessions are pre-authorized files; phone/2FA never appears here.</p>
+<div class="form-grid">
+<div><label>Channel (ID or username)</label><input class="input" id="storageChannel"></div>
+<div><label>Strategy</label><select id="storageStrategy"><option>round_robin</option><option>single</option><option>failover</option><option>parallel</option></select></div>
+<div><label>Scratch directory</label><input class="input" id="storageScratch"></div>
+</div>
+<div class="section"><div class="row"><h3 style="margin:0">API credential sets</h3><button class="btn compact" id="addApi">Add API set</button></div><div id="apiEditors"></div></div>
+</div>
+
+<div class="card">
+<h3>Telegram (legacy uploader)</h3>
 <div class="form-grid">
 <div><label>Strategy</label><select id="strategy"><option>single</option><option>round_robin</option><option>failover</option><option>parallel</option></select></div>
 <div><label>Default API ID</label><input class="input" id="apiId" type="number"></div>

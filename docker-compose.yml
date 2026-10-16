@@ -1,4 +1,6 @@
 # One process/container serves WebUI 8080 and S3 9000; same SQL/Telegram metadata.
+# All service settings come from config/config.yaml (see config.example.yaml).
+# The only environment variables are TZ, PUID/PGID and TELEDRIVE_CONFIG.
 services:
   teledrive:
     build:
@@ -10,40 +12,12 @@ services:
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
     ports:
-      - "${TELEDRIVE_BIND_ADDRESS:-127.0.0.1}:${TELEDRIVE_WEB_PORT:-8080}:8080"
-      - "${TELEDRIVE_BIND_ADDRESS:-127.0.0.1}:${TELEDRIVE_S3_PORT:-9000}:9000"
+      # The service binds 0.0.0.0 inside the container; keep the host side
+      # loopback unless a reverse proxy/VPN explicitly publishes it.
+      - "127.0.0.1:${TELEDRIVE_WEB_PORT:-8080}:8080"
+      - "127.0.0.1:${TELEDRIVE_S3_PORT:-9000}:9000"
     environment:
       TELEDRIVE_CONFIG: /config/config.yaml
-      TELEDRIVE_AUTH_DIR: /data/auth
-      # Only an authorized USER MTProto transport is started for all uploads.
-      TELEDRIVE_STORAGE_TRANSPORT: telethon
-      TELEDRIVE_STORAGE_MTPROTO_API_ID: ${TELEDRIVE_STORAGE_MTPROTO_API_ID:-}
-      TELEDRIVE_STORAGE_MTPROTO_API_HASH: ${TELEDRIVE_STORAGE_MTPROTO_API_HASH:-}
-      TELEDRIVE_STORAGE_MTPROTO_CHANNEL: ${TELEDRIVE_STORAGE_MTPROTO_CHANNEL:-}
-      TELEDRIVE_STORAGE_MTPROTO_ACCOUNT: ${TELEDRIVE_STORAGE_MTPROTO_ACCOUNT:-mtproto-user}
-      TELEDRIVE_STORAGE_MTPROTO_STRATEGY: ${TELEDRIVE_STORAGE_MTPROTO_STRATEGY:-round_robin}
-      TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE: ${TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE:-/config/mtproto-user.session}
-      TELEDRIVE_S3_MASTER_KEY_FILE: /config/s3-master.key
-      TELEDRIVE_STORAGE_SCRATCH_DIR: /data/tmp
-      TELEDRIVE_JOB_SOURCE_ROOT: /uploads
-      TELEDRIVE_JOB_AUTO_RUN: ${TELEDRIVE_JOB_AUTO_RUN:-1}
-      # Disabled unless a destination bucket is explicitly configured.
-      # Uses this same container's WebUI/REST/S3 SQL catalog and USER MTProto transport.
-      TELEDRIVE_JOB_LEGACY_AUTO_BUCKET: ${TELEDRIVE_JOB_LEGACY_AUTO_BUCKET:-}
-      TELEDRIVE_JOB_LEGACY_AUTO_PREFIX: ${TELEDRIVE_JOB_LEGACY_AUTO_PREFIX:-}
-      TELEDRIVE_JOB_LEGACY_AUTO_LIMIT: ${TELEDRIVE_JOB_LEGACY_AUTO_LIMIT:-100}
-      TELEDRIVE_REST_MAX_UPLOAD_BYTES: ${TELEDRIVE_REST_MAX_UPLOAD_BYTES:-2147483648}
-      TELEDRIVE_WEB_USER: ${TELEDRIVE_WEB_USER:-admin}
-      TELEDRIVE_WEB_PASSWORD: ${TELEDRIVE_WEB_PASSWORD:-}
-      TELEDRIVE_ALLOW_INSECURE: ${TELEDRIVE_ALLOW_INSECURE:-0}
-      TELEDRIVE_ALLOWED_HOSTS: ${TELEDRIVE_ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]}
-      TELEDRIVE_ALLOWED_SOURCE_ROOTS: /uploads
-      TELEDRIVE_ALLOWED_SESSION_ROOTS: /data/sessions
-      TELEDRIVE_ALLOWED_LOG_ROOTS: /data
-      TELEDRIVE_ALLOWED_SQLITE_ROOTS: /data
-      TELEDRIVE_SPLIT_DIR: /data/tmp
-      TELEDRIVE_SPLIT_MIN_FREE_BYTES: ${TELEDRIVE_SPLIT_MIN_FREE_BYTES:-536870912}
-      TELEDRIVE_LOCK_DIR: /data/tmp
       TZ: ${TZ:-Europe/Istanbul}
     init: true
     read_only: true
@@ -56,3 +30,14 @@ services:
       - ./config:/config
       - ./data:/data
       - ./uploads:/uploads:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=5); urllib.request.urlopen('http://127.0.0.1:9000/__health', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      start_period: 20s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
