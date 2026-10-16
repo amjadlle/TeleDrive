@@ -23,7 +23,7 @@
   Client**. They are not an HTTP User-Agent and do not claim to be an official
   Telegram client. Respect Telegram flood waits and account usage limits.
 
-## 2. Provision one authorized user session
+## 2. Provision one or more authorized user sessions
 
 Work on the owner-controlled host; the same identity must be able to post to
 the dedicated channel. Never put phone codes, 2FA passwords or session bytes
@@ -34,7 +34,7 @@ git clone https://github.com/babico/TeleDrive.git
 cd TeleDrive
 mkdir -p config data uploads
 cp .env.example .env
-cp examples/config.yaml config/config.yaml
+cp ../config.example.yaml config/config.yaml   # optional tidy template
 chmod 600 .env config/config.yaml
 python3 -m venv .venv
 . .venv/bin/activate
@@ -49,23 +49,44 @@ chmod 600 config/mtproto-user.session
 
 Obtain API credentials from [my.telegram.org/apps](https://my.telegram.org/apps).
 Generate the session **before** starting a configured TeleDrive container;
-the script refuses to overwrite an existing session. Put these keys in the
-private `.env` (do not commit them):
+the script refuses to overwrite an existing session. The service creates
+`config/config.yaml` with safe defaults on first start; add your credentials
+under the **`storage:`** section as an `apis:` list there (do not commit it):
 
-```dotenv
-TELEDRIVE_STORAGE_TRANSPORT=telethon
-TELEDRIVE_STORAGE_MTPROTO_API_ID=YOUR_TELEGRAM_API_ID
-TELEDRIVE_STORAGE_MTPROTO_API_HASH=YOUR_TELEGRAM_API_HASH
-TELEDRIVE_STORAGE_MTPROTO_CHANNEL=YOUR_PRIVATE_CHANNEL_ID_OR_USERNAME
-TELEDRIVE_STORAGE_MTPROTO_ACCOUNT=mtproto-user
+```yaml
+# config/config.yaml — storage.apis is the authoritative credential source.
+storage:
+  channel: "YOUR_PRIVATE_CHANNEL_ID_OR_USERNAME"
+  strategy: round_robin       # round_robin (default) | failover
+  apis:
+    - api_id: 111111
+      api_hash: "YOUR_TELEGRAM_API_HASH_1"
+      session_file: "/config/mtproto-user.session"
+      account: mtproto-user        # optional label
+    - api_id: 222222
+      api_hash: "YOUR_TELEGRAM_API_HASH_2"
+      session_file: "/config/mtproto-user-2.session"
+      account: mtproto-user-2      # optional label
 ```
 
-`docker-compose.yml` reads the session only from
-`./config/mtproto-user.session` mounted at
-`/config/mtproto-user.session`. Ensure its owner/group and mode permit the
-configured non-root `PUID:PGID` to read it. **Never** copy the StringSession
-into `.env`. Set a unique 16+-character Web password and generate an
-independently backed-up S3 master key as documented in [README](../README.md#4-s3-compatible-api).
+Every set must resolve the **same** dedicated `storage.channel`.
+`storage.strategy` selects `round_robin` (default) or `failover`: round_robin
+distributes sends across the sets; failover keeps one set until a definite
+flood-wait rejection, then switches to the next with a fresh send intent.
+Ambiguous send outcomes never trigger cross-set retries. Account labels
+default to `mtproto-user`, `mtproto-user-2`, … when omitted.
+`TELEDRIVE_STORAGE_MTPROTO_CHANNEL` / `_STRATEGY` env vars override nothing:
+the config section wins when present.
+
+A comma-separated env fallback (`TELEDRIVE_STORAGE_MTPROTO_API_ID` /
+`_API_HASH` / `_SESSION_FILE` lists of equal length) applies only when
+`config.yaml` has no `storage.apis:` section.
+
+`docker-compose.yml` mounts `./config` at `/config`; the session paths above
+must live under that mount. Ensure owner/group and mode permit the configured
+non-root `PUID:PGID` to read them. **Never** copy the StringSession into
+`.env`. Set a unique 16+-character Web password and generate an independently
+backed-up S3 master key as documented in [README](../README.md#4-s3-compatible-api).
 
 ```bash
 docker compose config --quiet
@@ -143,7 +164,7 @@ catalog); see [Backup and Restore](BACKUP_RESTORE.md).
 
 The exact-source 9-workflow baseline
 [`a430212`](https://github.com/babico/TeleDrive/commit/a4302122ff80d0f5d05bab8a362e1983a5910235)
-passed Security, REST/S3, Databases, Desktop, Docker fault injection, live
+passed Security, REST/S3, Databases, Docker fault injection, live
 USER MTProto, live Bot **historical-compatibility** E2E, live Multiworker
 PostgreSQL and release gate. Check [Actions](https://github.com/babico/TeleDrive/actions)
 for any newer commit; PR tests alone do not certify production recovery.

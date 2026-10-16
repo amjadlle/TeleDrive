@@ -18,9 +18,9 @@
 ## 1. Owner directives
 
 - [x] **Desktop app cancelled completely** (merged PR #16): removed `app/`, `installer/`, desktop requirements/example config, build scripts, desktop modules/tests and the desktop CI workflow. Shared config/state helpers kept.
-- [x] **Single requirements + single config** (merged PR #16): one `requirements.txt`, one `examples/config.yaml`.
+- [x] **Single requirements + single config** (merged PR #16): one `requirements.txt`; the service generates `config/config.yaml` with defaults (no example files needed).
 - [x] **Website not maintained here** (merged PR #18): `website/` and every reference removed.
-- [x] **Multiple api_id/api_hash pairs** (merged PR #17): comma-separated credential sets with `round_robin`/`failover` strategies; adversarial tests.
+- [x] **Multiple api_id/api_hash pairs** (config-driven): `storage:` section in `config/config.yaml` holds the dedicated channel, `round_robin`/`failover` strategy and an `apis:` list of `{api_id, api_hash, session_file, account}` sets; root `config.example.yaml` is the tidy template; env comma-lists remain a legacy fallback; adversarial tests.
 - [x] **Regroup `scripts/` and `tests/`** (PR #19): tests split into `s3/ storage/ web/ e2e/ meta/`, scripts into `ops/ dev/`; every import, CI path and doc link updated. Release packaging now builds the single-container Docker image.
 
 ## 2. Verified milestones

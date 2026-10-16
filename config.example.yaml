@@ -1,0 +1,72 @@
+# TeleDrive configuration example (copy to config/config.yaml and edit).
+#
+# The unified WebUI/REST/S3/local-job service reads this file. The service
+# creates config/config.yaml with safe defaults on first start when the file
+# is missing; use this example as the tidy starting point instead.
+#
+# Secrets belong ONLY in this file, the private .env and the session files.
+# Never commit real api_hash values, session paths or channel IDs.
+
+# ---------------------------------------------------------------------------
+# Unified storage: Telethon USER MTProto (the only live transport).
+# Bot API uploads are retired; Saved Messages are not supported.
+# ---------------------------------------------------------------------------
+storage:
+  # Dedicated private broadcast channel the authorized user can post to.
+  # Numeric private channel IDs must be visible in the user's dialogs.
+  channel: "YOUR_PRIVATE_CHANNEL_ID_OR_USERNAME"
+
+  # Credential rotation strategy across the apis: list below.
+  #   round_robin (default): distribute sends across the sets in turn.
+  #   failover: keep one set until a definite flood-wait rejection,
+  #             then switch to the next with a fresh send intent.
+  strategy: round_robin
+
+  # One or more Telegram API credential sets. Every set must resolve the
+  # SAME dedicated channel above. account labels are optional and default
+  # to mtproto-user, mtproto-user-2, ...
+  apis:
+    - api_id: 111111
+      api_hash: "YOUR_TELEGRAM_API_HASH_1"
+      session_file: "/config/mtproto-user.session"
+      account: mtproto-user
+
+    - api_id: 222222
+      api_hash: "YOUR_TELEGRAM_API_HASH_2"
+      session_file: "/config/mtproto-user-2.session"
+      account: mtproto-user-2
+
+# ---------------------------------------------------------------------------
+# Legacy uploader configuration (used by the durable-job legacy bridge and
+# the optional lease-fenced source ingestion; the direct-send scanner is
+# never started by the unified service).
+# ---------------------------------------------------------------------------
+telegram:
+  strategy: single            # single | round_robin | failover | parallel
+  api_id: 0
+  api_hash: ""
+  target: "me"
+  accounts: []
+
+upload:
+  source_dir: "/uploads"
+  allowed_extensions: []
+  max_file_size_mb: 0
+  sleep_min_seconds: 60
+  sleep_max_seconds: 90
+  max_files_per_run: 12
+  max_files_per_day: 100
+
+state:
+  database_url: "sqlite:////data/state.db"
+  # Or any synchronous SQLAlchemy URL whose driver/dialect is installed:
+  # database_url: "postgresql+psycopg://user:pass@db/teledrive"
+  # database_url: "mysql+pymysql://user:pass@db/teledrive"
+
+logging:
+  log_path: "/data/uploader.log"
+  level: "INFO"
+
+app:
+  auto_run: false
+  run_interval_minutes: 60

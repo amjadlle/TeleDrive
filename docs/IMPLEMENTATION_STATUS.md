@@ -39,7 +39,7 @@ A production installation, original legacy files, signed operator approval, an h
 
 ### A single service deployment
 
-The default [`docker-compose.yml`](../docker-compose.yml) creates **one `teledrive` container** and one Python process with two local listeners. There is no desktop application, no Bot API transport and no separate S3 container. One or more Telegram API credential sets (`TELEDRIVE_STORAGE_MTPROTO_API_ID`/`_API_HASH`/`_SESSION_FILE` lists) may share the same dedicated channel under `round_robin` (default) or `failover` flood-rejection strategy.
+The default [`docker-compose.yml`](../docker-compose.yml) creates **one `teledrive` container** and one Python process with two local listeners. There is no desktop application, no Bot API transport and no separate S3 container. One or more Telegram API credential sets are configured as an **`apis:` list** in `config/config.yaml` (`{api_id, api_hash, session_file, account}` entries sharing the same dedicated channel) with `round_robin` (default) or `failover` flood-rejection rotation; env comma-lists remain a legacy fallback.
 
 | Interface | Local endpoint | Auth model | Storage |
 | --- | --- | --- | --- |
