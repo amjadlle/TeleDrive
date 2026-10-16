@@ -144,18 +144,30 @@ def load_config(path: str) -> AppConfig:
                 enabled=bool(item.get("enabled", True)),
             ))
     else:
-        accounts.append(TelegramAccountConfig(
-            name=str(tg.get("name", "default")).strip() or "default",
-            api_id=default_api_id,
-            api_hash=default_api_hash,
-            phone=tg.get("phone"),
-            target=default_target,
-            session_path=config_path(tg.get("session_path", "data/telethon_user")),
-            enabled=True,
-        ))
+        # Legacy behavior only when a telegram: section exists without an
+        # explicit accounts key: one default account. An explicit empty
+        # accounts list (or no telegram section at all) means no legacy
+        # accounts — the unified service uses storage.apis instead.
+        if "accounts" not in tg and tg:
+            accounts.append(TelegramAccountConfig(
+                name=str(tg.get("name", "default")).strip() or "default",
+                api_id=default_api_id,
+                api_hash=default_api_hash,
+                phone=tg.get("phone"),
+                target=default_target,
+                session_path=config_path(
+                    tg.get("session_path", "data/telethon_user")),
+                enabled=True,
+            ))
 
     enabled_accounts = [a for a in accounts if a.enabled]
-    first = enabled_accounts[0] if enabled_accounts else accounts[0]
+    first = enabled_accounts[0] if enabled_accounts else (
+        accounts[0] if accounts else TelegramAccountConfig(
+            name="default", api_id=default_api_id, api_hash=default_api_hash,
+            phone=None, target=default_target,
+            session_path=config_path("data/telethon_user"), enabled=True,
+        )
+    )
     return AppConfig(
         api_id=first.api_id,
         api_hash=first.api_hash,
