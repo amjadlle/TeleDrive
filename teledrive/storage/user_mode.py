@@ -90,7 +90,7 @@ def _config_storage_section() -> dict | None:
     """Read the `storage:` section from the deployment config (config.yaml)."""
     import yaml
 
-    config_path = os.environ.get("TELEDRIVE_CONFIG", "").strip()
+    config_path = os.environ.get("TELEDRIVE_CONFIG", "config/config.yaml").strip()
     if not config_path or not os.path.isfile(config_path):
         return None
     try:
