@@ -97,11 +97,13 @@ def load_settings(cfg: Any, config_path: str) -> ServiceSettings:
 
     paths = _section(cfg, "paths")
     extra_packages = state.get("db_extra_packages", ())
-    if isinstance(extra_packages, str):
+    if not extra_packages:
+        packages = ()
+    elif isinstance(extra_packages, str):
         packages = tuple(
             part.strip() for part in extra_packages.split(",") if part.strip()
         )
-    elif isinstance(extra_packages, list):
+    elif isinstance(extra_packages, (list, tuple)):
         packages = tuple(str(part).strip() for part in extra_packages
                          if str(part).strip())
     else:
