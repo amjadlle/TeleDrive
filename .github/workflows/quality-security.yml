@@ -63,9 +63,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p /tmp/ci-config
+          cat > /tmp/ci-config/config.yaml <<'EOF'
+          web:
+            user: ci
+            password: ci-only-not-a-real-secret
+            allowed_hosts: "localhost,127.0.0.1,[::1]"
+          storage:
+            channel: ""
+            apis: []
+          state:
+            database_url: "sqlite:////data/state.db"
+          EOF
           cid="$(docker run -d --rm \
-            -e TELEDRIVE_WEB_USER=ci \
-            -e TELEDRIVE_WEB_PASSWORD=ci-only-not-a-real-secret \
+            -v /tmp/ci-config:/config \
             -p 127.0.0.1:18080:8080 \
             -p 127.0.0.1:19000:9000 \
             teledrive-security-ci)"
