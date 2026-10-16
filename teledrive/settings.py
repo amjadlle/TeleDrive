@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_BIND_ADDRESS = "0.0.0.0"
+# Owner policy: the service binds every in-container interface;
+# the host-side port mapping stays loopback.  # nosec B104
+DEFAULT_BIND_ADDRESS = "0.0.0.0"  # nosec B104
 
 
 @dataclass

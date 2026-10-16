@@ -85,8 +85,17 @@ from pathlib import Path
 import os,sys
 from urllib.parse import quote
 p=quote(os.environ["TELEDRIVE_FAULT_DB_PASSWORD"],safe="")
+w=os.environ["TELEDRIVE_FAULT_WEB_PASSWORD"]
 with Path(sys.argv[1]).open("x", encoding="utf-8") as out:
-    out.write('telegram:\n  strategy: single\n  api_id: 12345\n'
+    out.write('web:\n  user: "dev-operator"\n'
+              '  password: "%s"\n'
+              '  allowed_hosts: "web-a,web-b,localhost,127.0.0.1,[::1]"\n'
+              '  allow_insecure: false\n'
+              'storage:\n  channel: ""\n  strategy: "round_robin"\n'
+              '  scratch_dir: "/data/tmp"\n  apis: []\n'
+              'jobs:\n  source_root: "/uploads"\n  auto_run: false\n'
+              '  legacy_auto_bucket: ""\n'
+              'telegram:\n  strategy: single\n  api_id: 12345\n'
               '  api_hash: "DISPOSABLE_OFFLINE_NO_SESSION"\n'
               '  target: "me"\n  accounts: []\n'
               'upload:\n  source_dir: "/uploads"\n'
@@ -97,8 +106,9 @@ with Path(sys.argv[1]).open("x", encoding="utf-8") as out:
               '  floodwait_buffer_seconds: 5\n'
               '  caption_template: "{name}"\n  send_mode: "document"\n'
               'state:\n  database_url: "postgresql+psycopg://teledrive:%s@postgres:5432/teledrive_dev"\n'
+              '  allowed_sqlite_roots: "/data"\n'
               'logging:\n  log_path: "/data/uploader.log"\n  level: "WARNING"\n'
-              'app:\n  auto_run: false\n  run_interval_minutes: 60\n' % p)
+              'app:\n  auto_run: false\n  run_interval_minutes: 60\n' % (w, p))
 PY
 echo "DOCKER FAULT: PostgreSQL 17 + iki sıfır TeleDrive Web container kuruluyor."
 "${COMPOSE[@]}" config -q

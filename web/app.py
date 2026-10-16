@@ -80,7 +80,7 @@ def settings_bind_address() -> str:
         return load_settings(uploader.load_config(str(CONFIG_PATH)),
                              str(CONFIG_PATH)).bind_address
     except Exception:
-        return "0.0.0.0"
+        return "0.0.0.0"  # nosec B104 — in-container bind, host mapping loopback
 
 
 def settings_web_port() -> int:
@@ -242,7 +242,7 @@ def default_config() -> dict[str, Any]:
             "password": "",
             "allowed_hosts": "localhost,127.0.0.1,[::1]",
             "allow_insecure": False,
-            "bind_address": "0.0.0.0",
+            "bind_address": "0.0.0.0",  # nosec B104
             "port": 8080,
             "s3_port": 9000,
             "rest_max_upload_bytes": 2147483648,
