@@ -75,7 +75,9 @@ jobs:
           state:
             database_url: "sqlite:////data/state.db"
           EOF
+          chmod 600 /tmp/ci-config/config.yaml
           cid="$(docker run -d --rm \
+            --user "$(id -u):$(id -g)" \
             -v /tmp/ci-config:/config \
             -p 127.0.0.1:18080:8080 \
             -p 127.0.0.1:19000:9000 \

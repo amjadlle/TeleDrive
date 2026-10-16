@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from teledrive import uploader
 from teledrive.db import redact_database_url
@@ -306,7 +305,13 @@ def ensure_config() -> None:
         try:
             fd = os.open(str(CONFIG_PATH), flags)
             try:
-                os.fchmod(fd, 0o600)
+                try:
+                    os.fchmod(fd, 0o600)
+                except PermissionError:
+                    # A mounted config may be owned by another uid; accept it
+                    # only when it is already private.
+                    if os.fstat(fd).st_mode & 0o077:
+                        raise
             finally:
                 os.close(fd)
         except OSError as exc:
@@ -668,7 +673,14 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+@app.middleware("http")
+async def _trusted_host_middleware(request: Request, call_next):
+    # ALLOWED_HOSTS reloads from config.yaml at runtime; resolve it per
+    # request instead of capturing the import-time default.
+    host = (request.headers.get("host") or "").split(":")[0]
+    if host and host not in ALLOWED_HOSTS:
+        raise HTTPException(400, "Invalid host header")
+    return await call_next(request)
 
 
 @app.middleware("http")
