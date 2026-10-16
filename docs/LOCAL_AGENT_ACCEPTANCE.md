@@ -119,7 +119,7 @@ These cannot be completed by a single local agent merely by starting containers:
 | Two-person bundle | Independent owner + operator Ed25519 signatures, matching reviewed SHA; verify with `scripts/ops/verify_production_bundle.py --help` | `BLOCKED_OWNER_ACTION` |
 | GC physical deletion | Independent plaintext-media backup, verified restore, exact target authorization, fenced dry-run, no ambiguous refs, two-person change approval | **DISABLED** |
 
-Do not fabricate a release tag or publish binaries. For a new release candidate require the nine mandatory GitHub Actions workflows **green on its exact commit SHA**, review released binary hashes and supported protocol limits, then request release owner authorization. Development `main` does not retroactively update the v1.0.7 release.
+Do not fabricate a release tag or publish binaries. For a new release candidate require the seven mandatory GitHub Actions workflows **green on its exact commit SHA**, review the Docker image package and supported protocol limits, then request release owner authorization. Development `main` does not retroactively update the v1.0.7 release.
 
 ## 6. Required deliverables and report
 

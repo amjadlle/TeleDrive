@@ -67,13 +67,95 @@ def _split_list(value: str, name: str) -> list[str]:
     return items
 
 
+def _validate_set(label: str, api_id: int, api_hash: str,
+                  session_file: str) -> tuple[str, int, str, str]:
+    if (api_id <= 0
+            or not re.fullmatch(r"[0-9a-fA-F]{32}", api_hash)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", label)
+            or label == "api-bot"):
+        raise RuntimeError("Invalid MTProto credential set")
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(session_file, flags)
+        with os.fdopen(descriptor, "r", encoding="ascii") as handle:
+            value = handle.read(8193).strip()
+    except OSError:
+        raise RuntimeError("Invalid authorized user session file") from None
+    if not value or len(value) > 8192:
+        raise RuntimeError("Invalid authorized user session file")
+    return label, api_id, api_hash, session_file
+
+
+def _config_storage_section() -> dict | None:
+    """Read the `storage:` section from the deployment config (config.yaml)."""
+    import yaml
+
+    config_path = os.environ.get("TELEDRIVE_CONFIG", "").strip()
+    if not config_path or not os.path.isfile(config_path):
+        return None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(config_path, flags)
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            document = yaml.safe_load(handle) or {}
+    except OSError:
+        raise RuntimeError("Invalid deployment configuration file") from None
+    section = document.get("storage")
+    if section is None:
+        return None
+    if not isinstance(section, dict):
+        raise RuntimeError("Invalid storage section in configuration")
+    return section
+
+
+def _config_api_sets(section: dict | None) -> list[tuple[str, int, str, str]] | None:
+    """Read the `apis:` list from the storage section.
+
+    Each entry needs api_id, api_hash and session_file; account labels are
+    optional and default to mtproto-user, mtproto-user-2, ... Returns None
+    when there is no `apis:` section.
+    """
+    entries = section.get("apis") if section else None
+    if not entries:
+        return None
+    if not isinstance(entries, list) or not entries:
+        raise RuntimeError("Invalid apis credential list in configuration")
+    sets = []
+    labels: set[str] = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise RuntimeError("Invalid MTProto credential set")
+        label = str(entry.get("account") or (
+            "mtproto-user" if index == 0 else f"mtproto-user-{index + 1}"
+        )).strip()
+        try:
+            api_id = int(entry.get("api_id"))
+        except (TypeError, ValueError):
+            raise RuntimeError("Invalid MTProto credential set") from None
+        api_hash = str(entry.get("api_hash") or "").strip()
+        session_file = str(entry.get("session_file") or "").strip()
+        if not session_file:
+            raise RuntimeError("Invalid authorized user session file")
+        if label in labels:
+            raise RuntimeError("Invalid MTProto credential set")
+        labels.add(label)
+        sets.append(_validate_set(label, api_id, api_hash, session_file))
+    return sets
+
+
 def _credential_sets() -> list[tuple[str, int, str, str]]:
     """Parse one or more authorized Telegram API credential sets.
 
-    TELEDRIVE_STORAGE_MTPROTO_API_ID / _API_HASH / _SESSION_FILE accept
-    comma-separated lists of equal length. Each set owns its own session.
-    The account labels default to mtproto-user, mtproto-user-2, ...
+    The deployment config (config.yaml) `storage.apis:` list is
+    authoritative. Without it, TELEDRIVE_STORAGE_MTPROTO_API_ID / _API_HASH
+    / _SESSION_FILE accept comma-separated lists of equal length (legacy
+    fallback). Each set owns its own session; account labels default to
+    mtproto-user, mtproto-user-2, ...
     """
+    section = _config_storage_section()
+    configured = _config_api_sets(section)
+    if configured is not None:
+        return configured
     ids = _split_list(os.environ["TELEDRIVE_STORAGE_MTPROTO_API_ID"],
                       "TELEDRIVE_STORAGE_MTPROTO_API_ID")
     hashes = _split_list(os.environ["TELEDRIVE_STORAGE_MTPROTO_API_HASH"],
@@ -95,17 +177,10 @@ def _credential_sets() -> list[tuple[str, int, str, str]]:
             for index in range(len(ids))
         ]
     sets = []
-    for index, (raw_id, raw_hash, raw_session) in enumerate(
-            zip(ids, hashes, sessions)):
+    for raw_id, raw_hash, raw_session, label in zip(
+            ids, hashes, sessions, accounts):
         api_id = int(raw_id)
-        if (api_id <= 0
-                or not re.fullmatch(r"[0-9a-fA-F]{32}", raw_hash)
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", accounts[index])
-                or accounts[index] == "api-bot"
-                or any(accounts[index] == other for j, other in enumerate(accounts)
-                       if j != index)):
-            raise RuntimeError("Invalid MTProto credential set")
-        sets.append((accounts[index], api_id, raw_hash, raw_session))
+        sets.append(_validate_set(label, api_id, raw_hash, raw_session))
     return sets
 
 
@@ -139,13 +214,18 @@ class UserSessionRuntime:
 
         if self._sets:
             raise RuntimeError("User storage clients already started")
-        strategy = os.environ.get(
-            "TELEDRIVE_STORAGE_MTPROTO_STRATEGY", "round_robin",
+        storage_section = _config_storage_section()
+        strategy = str(
+            (storage_section or {}).get("strategy")
+            or os.environ.get("TELEDRIVE_STORAGE_MTPROTO_STRATEGY", "round_robin")
         ).strip().lower()
         if strategy not in ("round_robin", "failover"):
             raise RuntimeError("MTProto strategy must be round_robin or failover")
         self.strategy = strategy
-        target_id = os.environ["TELEDRIVE_STORAGE_MTPROTO_CHANNEL"].strip()
+        target_id = str(
+            (storage_section or {}).get("channel")
+            or os.environ.get("TELEDRIVE_STORAGE_MTPROTO_CHANNEL", "")
+        ).strip()
         if (not target_id or target_id.lower() in ("me", "self", "saved messages")):
             raise RuntimeError("Invalid dedicated channel configuration")
         sets = _credential_sets()
