@@ -192,7 +192,7 @@ def load_config(path: str) -> AppConfig:
             st.get("database_url") or st.get("db_path", "data/state.db"),
             config_dir=config_dir,
         ),
-        log_path=config_path(lg.get("log_path", "data/uploader.log")),
+        log_path=config_path(lg.get("log_path", "/data/uploader.log")),
         log_level=str(lg.get("level", "INFO")),
         web=web_section,
         jobs=jobs_section,
