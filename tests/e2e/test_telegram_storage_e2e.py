@@ -385,11 +385,18 @@ def test_live_user_session_unified_transport_and_history_marker(monkeypatch):
                 channel_id = int(await resolver.get_peer_id(target))
             finally:
                 await resolver.disconnect()
-            monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
-            monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_API_ID", api_id)
-            monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_API_HASH", api_hash)
-            monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_CHANNEL", str(channel_id))
-            monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE", str(session_file))
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                "storage:\n"
+                f'  channel: "{channel_id}"\n'
+                "  strategy: round_robin\n"
+                "  apis:\n"
+                f"  - api_id: {api_id}\n"
+                f'    api_hash: "{api_hash}"\n'
+                f"    session_file: {session_file}\n",
+                encoding="ascii",
+            )
+            monkeypatch.setenv("TELEDRIVE_CONFIG", str(config_path))
             runtime = UserSessionRuntime()
             await runtime.start()
             db = connect_database(str(root / "isolated.db"))
