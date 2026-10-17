@@ -63,7 +63,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/ci-config
+          set -euo pipefail
+          mkdir -p /tmp/ci-config /tmp/ci-data
+          chmod 700 /tmp/ci-config /tmp/ci-data
           cat > /tmp/ci-config/config.yaml <<'EOF'
           web:
             user: ci
@@ -79,6 +81,7 @@ jobs:
           cid="$(docker run -d --rm \
             --user "$(id -u):$(id -g)" \
             -v /tmp/ci-config:/config \
+            -v /tmp/ci-data:/data \
             -p 127.0.0.1:18080:8080 \
             -p 127.0.0.1:19000:9000 \
             teledrive-security-ci)"
