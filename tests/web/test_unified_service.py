@@ -39,11 +39,11 @@ def unified(tmp_path, monkeypatch):
     monkeypatch.setattr(web,"WEB_USER","testadmin")
     monkeypatch.setattr(web,"WEB_PASSWORD","long-secure-test-password")
     web.AUTH_FAILURES.clear()
-    monkeypatch.setenv("TELEDRIVE_STORAGE_SCRATCH_DIR",str(tmp_path/"scratch"))
-    monkeypatch.setenv("TELEDRIVE_REST_MAX_UPLOAD_BYTES",str(4*1024*1024))
+    monkeypatch.setattr(web, "STORAGE_SCRATCH_DIR", str(tmp_path/"scratch"))
+    monkeypatch.setattr(web, "REST_MAX_UPLOAD_BYTES", 4*1024*1024)
     root=tmp_path/"uploads"
     root.mkdir()
-    monkeypatch.setenv("TELEDRIVE_JOB_SOURCE_ROOT",str(root))
+    monkeypatch.setattr(web, "JOB_SOURCE_ROOT", str(root))
     db=connect()
     try:
         creds=S3CredentialStore(db,secret).create("unified",list(DEFAULT_PERMISSIONS))

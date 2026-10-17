@@ -56,6 +56,10 @@ class AppConfig:
     session_path: str
     strategy: str
     accounts: list[TelegramAccountConfig]
+    web: dict
+    jobs: dict
+    storage: dict
+    state: dict
     source_dir: str
     allowed_extensions: list[str]
     max_file_size_mb: int
@@ -107,10 +111,13 @@ def load_config(path: str) -> AppConfig:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
-    tg = raw["telegram"]
-    up = raw["upload"]
-    st = raw["state"]
-    lg = raw["logging"]
+    tg = raw.get("telegram") or {}
+    up = raw.get("upload") or {}
+    st = raw.get("state") or {}
+    lg = raw.get("logging") or {}
+    web_section = raw.get("web") or {}
+    jobs_section = raw.get("jobs") or {}
+    storage_section = raw.get("storage") or {}
 
     strategy = str(tg.get("strategy", "single")).strip().lower()
     default_api_id = int(tg.get("api_id", 0) or 0)
@@ -137,18 +144,30 @@ def load_config(path: str) -> AppConfig:
                 enabled=bool(item.get("enabled", True)),
             ))
     else:
-        accounts.append(TelegramAccountConfig(
-            name=str(tg.get("name", "default")).strip() or "default",
-            api_id=default_api_id,
-            api_hash=default_api_hash,
-            phone=tg.get("phone"),
-            target=default_target,
-            session_path=config_path(tg.get("session_path", "data/telethon_user")),
-            enabled=True,
-        ))
+        # Legacy behavior only when a telegram: section exists without an
+        # explicit accounts key: one default account. An explicit empty
+        # accounts list (or no telegram section at all) means no legacy
+        # accounts — the unified service uses storage.apis instead.
+        if "accounts" not in tg and tg:
+            accounts.append(TelegramAccountConfig(
+                name=str(tg.get("name", "default")).strip() or "default",
+                api_id=default_api_id,
+                api_hash=default_api_hash,
+                phone=tg.get("phone"),
+                target=default_target,
+                session_path=config_path(
+                    tg.get("session_path", "data/telethon_user")),
+                enabled=True,
+            ))
 
     enabled_accounts = [a for a in accounts if a.enabled]
-    first = enabled_accounts[0] if enabled_accounts else accounts[0]
+    first = enabled_accounts[0] if enabled_accounts else (
+        accounts[0] if accounts else TelegramAccountConfig(
+            name="default", api_id=default_api_id, api_hash=default_api_hash,
+            phone=None, target=default_target,
+            session_path=config_path("data/telethon_user"), enabled=True,
+        )
+    )
     return AppConfig(
         api_id=first.api_id,
         api_hash=first.api_hash,
@@ -157,13 +176,13 @@ def load_config(path: str) -> AppConfig:
         session_path=first.session_path,
         strategy=strategy,
         accounts=accounts,
-        source_dir=config_path(up["source_dir"]),
+        source_dir=config_path(up.get("source_dir", "/uploads")),
         allowed_extensions=[str(x).lower() for x in up.get("allowed_extensions", [])],
         max_file_size_mb=int(up.get("max_file_size_mb", 0)),
-        sleep_min_seconds=int(up["sleep_min_seconds"]),
-        sleep_max_seconds=int(up["sleep_max_seconds"]),
-        max_files_per_run=int(up["max_files_per_run"]),
-        max_files_per_day=int(up["max_files_per_day"]),
+        sleep_min_seconds=int(up.get("sleep_min_seconds", 60)),
+        sleep_max_seconds=int(up.get("sleep_max_seconds", 90)),
+        max_files_per_run=int(up.get("max_files_per_run", 12)),
+        max_files_per_day=int(up.get("max_files_per_day", 100)),
         retry_attempts=int(up.get("retry_attempts", 5)),
         backoff_base_seconds=int(up.get("backoff_base_seconds", 10)),
         floodwait_buffer_seconds=int(up.get("floodwait_buffer_seconds", 5)),
@@ -173,8 +192,12 @@ def load_config(path: str) -> AppConfig:
             st.get("database_url") or st.get("db_path", "data/state.db"),
             config_dir=config_dir,
         ),
-        log_path=config_path(lg["log_path"]),
+        log_path=config_path(lg.get("log_path", "/data/uploader.log")),
         log_level=str(lg.get("level", "INFO")),
+        web=web_section,
+        jobs=jobs_section,
+        storage=storage_section,
+        state=st,
     )
 
 

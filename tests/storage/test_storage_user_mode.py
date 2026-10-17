@@ -64,23 +64,24 @@ def configured_runtime():
     return runtime, user
 
 
-def test_telethon_is_default_and_bot_mode_fails_closed(monkeypatch):
-    monkeypatch.delenv("TELEDRIVE_STORAGE_TRANSPORT", raising=False)
+def test_telethon_is_the_only_transport(monkeypatch):
+    """Bot mode no longer exists; no env var selects a transport."""
+    monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "bot")
     assert transport_mode() == "telethon"
-    monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
-    assert transport_mode() == "telethon"
-    for unsupported in ("bot", "auto-fallback", "", "telethon,bot"):
-        monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", unsupported)
-        with pytest.raises(RuntimeError, match="retired"):
-            transport_mode()
 
 
 def test_user_session_requires_file_and_disallows_saved_messages(monkeypatch, tmp_path):
-    monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
-    monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_API_ID", "1234")
-    monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_API_HASH", "a" * 32)
-    monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_CHANNEL", "me")
-    monkeypatch.setenv("TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE", str(tmp_path / "missing"))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "storage:\n"
+        '  channel: "me"\n'
+        "  apis:\n"
+        "  - api_id: 1234\n"
+        f"    api_hash: {'a' * 32}\n"
+        f"    session_file: {tmp_path / 'missing'}\n",
+        encoding="ascii",
+    )
+    monkeypatch.setenv("TELEDRIVE_CONFIG", str(config_path))
     with pytest.raises(RuntimeError, match="dedicated channel"):
         asyncio.run(UserSessionRuntime().start())
 
@@ -198,12 +199,19 @@ def test_live_runtime_uses_honest_client_metadata_and_rejects_bot(monkeypatch, t
     monkeypatch.setattr(telethon.tl.types, "Channel", FixtureChannel)
     for key, value in {
         "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
-        "TELEDRIVE_STORAGE_MTPROTO_API_ID": "1234",
-        "TELEDRIVE_STORAGE_MTPROTO_API_HASH": "a" * 32,
-        "TELEDRIVE_STORAGE_MTPROTO_CHANNEL": "-1001234567890",
-        "TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE": str(fixture_file),
     }.items():
         monkeypatch.setenv(key, value)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "storage:\n"
+        '  channel: "-1001234567890"\n'
+        "  apis:\n"
+        "  - api_id: 1234\n"
+        f"    api_hash: {'a' * 32}\n"
+        f"    session_file: {fixture_file}\n",
+        encoding="ascii",
+    )
+    monkeypatch.setenv("TELEDRIVE_CONFIG", str(config_path))
     async def scenario():
         runtime = UserSessionRuntime()
         await runtime.start()
@@ -286,11 +294,12 @@ def test_authenticated_admin_can_scan_user_channel_history_without_mutation(monk
     )
     assert invalid.status_code == 422
     monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "bot")
-    disabled = client.get(
+    still_enabled = client.get(
         "/api/v1/admin/storage/channel-history",
         auth=("owner", "secure-test-password-1234"),
     )
-    assert disabled.status_code == 503
+    # The transport is config-only: stale env vars never change behavior.
+    assert still_enabled.status_code == 200
     assert list(scannable.posts) == [9]
 
 
@@ -304,15 +313,9 @@ def test_production_storage_uses_only_user_mtproto_even_with_stale_bot_secrets(s
     monkeypatch.setenv("TELEDRIVE_STORAGE_BOT_TOKEN", "unused-old-credential")
     monkeypatch.setenv("TELEDRIVE_STORAGE_BOT_CHAT_ID", "-1001234567890")
     try:
-        monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
         transport = web.storage_transport(conn)
         assert isinstance(transport, UnifiedUserTransport)
         assert not hasattr(transport, "bot_fallback")
-        monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "bot")
-        with pytest.raises(HTTPException) as invalid:
-            web.storage_transport(conn)
-        assert invalid.value.status_code == 503
-        monkeypatch.setenv("TELEDRIVE_STORAGE_TRANSPORT", "telethon")
         runtime.client = None
         with pytest.raises(HTTPException) as unavailable:
             web.storage_transport(conn)

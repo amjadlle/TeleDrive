@@ -727,7 +727,8 @@ def test_docker_fault_config_has_every_required_runtime_upload_field():
     harness = (ROOT / "scripts" / "dev" / "run_docker_fault_injection.sh").read_text(
         encoding="utf-8",
     )
-    required = set(re.findall(r'up\["([^"]+)"\]', source))
+    required = set(re.findall(r'up\.get\("([^"]+)"', source))
+    required |= set(re.findall(r'up\["([^"]+)"\]', source))
     assert required
     missing = sorted(field for field in required if field + ":" not in harness)
     assert not missing, f"Docker fault config missing required upload fields: {missing}"
@@ -834,8 +835,12 @@ def test_explicit_dependencies_and_isolated_docker_build_contexts():
     assert len(service["ports"]) == 2
     assert any(":8080" in entry for entry in service["ports"])
     assert any(":9000" in entry for entry in service["ports"])
-    assert service["environment"]["TELEDRIVE_JOB_SOURCE_ROOT"] == "/uploads"
-    assert service["environment"]["TELEDRIVE_JOB_AUTO_RUN"] == "${TELEDRIVE_JOB_AUTO_RUN:-1}"
+    assert service["environment"] == {
+        "TELEDRIVE_CONFIG": "/config/config.yaml",
+        "TZ": "${TZ:-Europe/Istanbul}",
+    }
+    assert service.get("healthcheck", {}).get("test")
+    assert service.get("logging", {}).get("driver") == "json-file"
     assert "web.unified" in (ROOT / "Dockerfile").read_text("utf-8")
     assert (ROOT / "docs/SECURITY.md").is_file()
     assert not (ROOT / "SECURITY.md").exists()
@@ -951,14 +956,18 @@ def test_single_container_passes_opt_in_legacy_ingest_configuration():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     services = compose["services"]
     assert list(services) == ["teledrive"]
+    # Service settings live in config.yaml only; the Compose environment
+    # carries just the config path and the timezone.
     env = services["teledrive"]["environment"]
+    assert "TELEDRIVE_CONFIG" in env and "TZ" in env
+    assert "TELEDRIVE_JOB_AUTO_RUN" not in env
+    example = (ROOT / "config.example.yaml").read_text()
     for key in (
-        "TELEDRIVE_JOB_AUTO_RUN", "TELEDRIVE_JOB_LEGACY_AUTO_BUCKET",
-        "TELEDRIVE_JOB_LEGACY_AUTO_PREFIX", "TELEDRIVE_JOB_LEGACY_AUTO_LIMIT",
+        "legacy_auto_bucket", "legacy_auto_prefix", "legacy_auto_limit",
+        "auto_run",
     ):
-        assert key in env
-        assert key + "=" in (ROOT / ".env.example").read_text()
-    assert env["TELEDRIVE_JOB_LEGACY_AUTO_BUCKET"].endswith(":-}")
+        assert key in example
+    assert "jobs:" in example
     assert "tests/web/test_unified_service.py" in (
         WORKFLOWS / "integration-storage.yml"
     ).read_text()

@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from teledrive import uploader
 from teledrive.db import redact_database_url
@@ -45,38 +44,106 @@ from teledrive.storage.mtproto_rate_guard import MtprotoRateGuard
 mtproto_storage_runtime = UserSessionRuntime()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = Path(os.environ.get("TELEDRIVE_CONFIG", "/config/config.yaml"))
-AUTH_DIR = Path(os.environ.get("TELEDRIVE_AUTH_DIR", "/data/auth"))
+CONFIG_PATH = Path(os.environ.get("TELEDRIVE_CONFIG", "config/config.yaml"))
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-
-
-def _load_web_password() -> str:
-    secret_file = os.environ.get("TELEDRIVE_WEB_PASSWORD_FILE", "").strip()
-    if secret_file:
-        path = Path(secret_file)
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            fd = os.open(str(path), flags)
-            with os.fdopen(fd, "r", encoding="utf-8") as handle:
-                value = handle.read(4097)
-        except OSError as exc:
-            raise RuntimeError("Unable to safely read TELEDRIVE_WEB_PASSWORD_FILE") from exc
-        if len(value) > 4096:
-            raise RuntimeError("TELEDRIVE_WEB_PASSWORD_FILE is unexpectedly large")
-        return value.rstrip("\r\n")
-    return os.environ.get("TELEDRIVE_WEB_PASSWORD", "")
-
-
-WEB_USER = os.environ.get("TELEDRIVE_WEB_USER", "admin")
-WEB_PASSWORD = _load_web_password()
-ALLOW_INSECURE = os.environ.get("TELEDRIVE_ALLOW_INSECURE", "").strip().lower() in {"1", "true", "yes"}
 REDACTED = "__REDACTED__"
-MAX_REQUEST_BYTES = int(os.environ.get("TELEDRIVE_MAX_REQUEST_BYTES", "1048576"))
-ALLOWED_HOSTS = [
-    item.strip()
-    for item in os.environ.get("TELEDRIVE_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",")
-    if item.strip()
-]
+
+# Service settings come ONLY from config/config.yaml (owner policy); the
+# TELEDRIVE_CONFIG env var just points at the file. Tests override the
+# module attributes below directly.
+WEB_USER = "admin"
+WEB_PASSWORD = ""
+WEB_PASSWORD_FILE = ""
+ALLOW_INSECURE = False
+MAX_REQUEST_BYTES = 1048576
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
+AUTH_DIR = Path("/data/auth")
+STORAGE_SCRATCH_DIR = "/data/tmp"
+REST_MAX_UPLOAD_BYTES = 2 * 1024**3
+JOB_SOURCE_ROOT = "/uploads"
+JOB_AUTO_RUN = True
+JOB_LEGACY_AUTO_BUCKET = ""
+JOB_LEGACY_AUTO_PREFIX = ""
+JOB_LEGACY_AUTO_LIMIT = 100
+ALLOWED_SQLITE_ROOTS = ("/data",)
+AUTH_FAILURE_WINDOW_SECONDS = 300
+AUTH_FAILURE_LIMIT = 5
+SSL_CERTFILE = ""
+SSL_KEYFILE = ""
+DB_EXTRA_PACKAGES: tuple[str, ...] = ()
+
+
+def settings_bind_address() -> str:
+    from teledrive.settings import load_settings
+    try:
+        return load_settings(uploader.load_config(str(CONFIG_PATH)),
+                             str(CONFIG_PATH)).bind_address
+    except Exception:
+        return "0.0.0.0"  # nosec B104 — in-container bind, host mapping loopback
+
+
+def settings_web_port() -> int:
+    from teledrive.settings import load_settings
+    try:
+        return load_settings(uploader.load_config(str(CONFIG_PATH)),
+                             str(CONFIG_PATH)).web_port
+    except Exception:
+        return 8080
+
+
+def settings_s3_port() -> int:
+    from teledrive.settings import load_settings
+    try:
+        return load_settings(uploader.load_config(str(CONFIG_PATH)),
+                             str(CONFIG_PATH)).s3_port
+    except Exception:
+        return 9000
+
+
+def _reload_service_settings() -> None:
+    """Read service settings from the deployment config into module attrs."""
+    global WEB_USER, WEB_PASSWORD, WEB_PASSWORD_FILE, ALLOW_INSECURE
+    global MAX_REQUEST_BYTES, ALLOWED_HOSTS, AUTH_DIR, STORAGE_SCRATCH_DIR
+    global REST_MAX_UPLOAD_BYTES, JOB_SOURCE_ROOT, JOB_AUTO_RUN
+    global JOB_LEGACY_AUTO_BUCKET, JOB_LEGACY_AUTO_PREFIX, JOB_LEGACY_AUTO_LIMIT
+    global ALLOWED_SQLITE_ROOTS, AUTH_FAILURE_WINDOW_SECONDS, AUTH_FAILURE_LIMIT
+    global SSL_CERTFILE, SSL_KEYFILE, DB_EXTRA_PACKAGES
+
+    from teledrive.settings import load_settings
+    cfg = uploader.load_config(str(CONFIG_PATH))
+    settings = load_settings(cfg, str(CONFIG_PATH))
+    WEB_USER = settings.web_user
+    WEB_PASSWORD = settings.web_password
+    WEB_PASSWORD_FILE = settings.web_password_file
+    ALLOW_INSECURE = settings.allow_insecure
+    MAX_REQUEST_BYTES = settings.max_request_bytes
+    ALLOWED_HOSTS = list(settings.allowed_hosts)
+    AUTH_DIR = Path(settings.auth_dir)
+    STORAGE_SCRATCH_DIR = settings.storage_scratch_dir
+    REST_MAX_UPLOAD_BYTES = settings.rest_max_upload_bytes
+    JOB_SOURCE_ROOT = settings.job_source_root
+    JOB_AUTO_RUN = settings.job_auto_run
+    JOB_LEGACY_AUTO_BUCKET = settings.job_legacy_auto_bucket
+    JOB_LEGACY_AUTO_PREFIX = settings.job_legacy_auto_prefix
+    JOB_LEGACY_AUTO_LIMIT = settings.job_legacy_auto_limit
+    ALLOWED_SQLITE_ROOTS = settings.allowed_sqlite_roots
+    AUTH_FAILURE_WINDOW_SECONDS = settings.auth_failure_window_seconds
+    AUTH_FAILURE_LIMIT = settings.auth_failure_limit
+    SSL_CERTFILE = settings.ssl_certfile
+    SSL_KEYFILE = settings.ssl_keyfile
+    DB_EXTRA_PACKAGES = settings.db_extra_packages
+    # Legacy uploader path allowlists read os.environ internally; seed them
+    # from the config so the operator never configures them via env.
+    os.environ["TELEDRIVE_ALLOWED_SOURCE_ROOTS"] = settings.allowed_source_roots
+    os.environ["TELEDRIVE_ALLOWED_SESSION_ROOTS"] = settings.allowed_session_roots
+    os.environ["TELEDRIVE_ALLOWED_LOG_ROOTS"] = settings.allowed_log_roots
+    os.environ["TELEDRIVE_ALLOWED_SQLITE_ROOTS"] = ",".join(
+        settings.allowed_sqlite_roots)
+    os.environ["TELEDRIVE_SPLIT_DIR"] = settings.split_dir
+    os.environ["TELEDRIVE_SPLIT_MIN_FREE_BYTES"] = str(
+        settings.split_min_free_bytes)
+    os.environ["TELEDRIVE_LOCK_DIR"] = settings.lock_dir
+    os.environ["TELEDRIVE_S3_MASTER_KEY_FILE"] = settings.s3_master_key_file
 LOG_BUFFER: deque[str] = deque(maxlen=1500)
 PROMPT_RE = re.compile(r"Please enter the (code|password) for account '([^']+)':", re.I)
 _QUERY_SECRET_RE = re.compile(
@@ -92,8 +159,6 @@ current_started_at: int | None = None
 current_prompt: dict[str, str] | None = None
 scheduler_task: asyncio.Task | None = None
 AUTH_FAILURES: dict[str, deque[float]] = {}
-AUTH_FAILURE_WINDOW_SECONDS = int(os.environ.get("TELEDRIVE_AUTH_FAILURE_WINDOW_SECONDS", "60"))
-AUTH_FAILURE_LIMIT = int(os.environ.get("TELEDRIVE_AUTH_FAILURE_LIMIT", "5"))
 
 
 def _secure_mkdir(path: Path) -> None:
@@ -171,17 +236,32 @@ def require_auth(request: Request, credentials: HTTPBasicCredentials | None = De
 
 def default_config() -> dict[str, Any]:
     return {
-        "telegram": {
-            "strategy": "parallel",
-            "api_id": 0,
-            "api_hash": "",
-            "target": "me",
-            "accounts": [{
-                "name": "primary",
-                "enabled": True,
-                "phone": "",
-                "session_path": "/data/sessions/primary",
-            }],
+        "web": {
+            "user": "admin",
+            "password": "",
+            "allowed_hosts": "localhost,127.0.0.1,[::1]",
+            "allow_insecure": False,
+            "bind_address": "0.0.0.0",  # nosec B104
+            "port": 8080,
+            "s3_port": 9000,
+            "rest_max_upload_bytes": 2147483648,
+            "auth_failure_limit": 5,
+            "auth_failure_window_seconds": 300,
+            "ssl_certfile": "",
+            "ssl_keyfile": "",
+        },
+        "storage": {
+            "channel": "",
+            "strategy": "round_robin",
+            "scratch_dir": "/data/tmp",
+            "apis": [],
+        },
+        "jobs": {
+            "source_root": "/uploads",
+            "auto_run": True,
+            "legacy_auto_bucket": "",
+            "legacy_auto_prefix": "",
+            "legacy_auto_limit": 100,
         },
         "upload": {
             "source_dir": "/uploads",
@@ -218,7 +298,13 @@ def ensure_config() -> None:
         try:
             fd = os.open(str(CONFIG_PATH), flags)
             try:
-                os.fchmod(fd, 0o600)
+                try:
+                    os.fchmod(fd, 0o600)
+                except PermissionError:
+                    # A mounted config may be owned by another uid; accept it
+                    # only when it is already private.
+                    if os.fstat(fd).st_mode & 0o077:
+                        raise
             finally:
                 os.close(fd)
         except OSError as exc:
@@ -295,6 +381,7 @@ def validate_and_write_config(raw: dict[str, Any]) -> None:
         tmp.unlink(missing_ok=True)
         raise RuntimeError("Database connection/initialization failed") from exc
     os.replace(tmp, CONFIG_PATH)
+    _reload_service_settings()
 
 
 def db_connect():
@@ -359,7 +446,7 @@ async def start_uploader(mode: str) -> dict[str, Any]:
     async with process_lock:
         if current_process is not None and current_process.returncode is None:
             raise HTTPException(409, "Uploader is already running")
-        if mode != "scan-only" and os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "").strip():
+        if mode != "scan-only" and JOB_LEGACY_AUTO_BUCKET.strip():
             raise HTTPException(409, "Legacy uploader sends disabled during durable cutover")
         args = [sys.executable, "-m", "teledrive.uploader", "--config", str(CONFIG_PATH), "--auth-dir", str(AUTH_DIR)]
         if mode == "scan-only":
@@ -409,7 +496,7 @@ async def scheduler_loop() -> None:
             interval = max(1, int(app_cfg.get("run_interval_minutes", 60))) * 60
             now = time.time()
             running = current_process is not None and current_process.returncode is None
-            if (enabled and os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "").strip()):
+            if enabled and JOB_LEGACY_AUTO_BUCKET.strip():
                 raise RuntimeError("Disable legacy auto_run before durable cutover")
             if enabled and not running and now - last_launch >= interval:
                 await start_uploader("run-once")
@@ -424,17 +511,17 @@ async def scheduler_loop() -> None:
 
 def _legacy_cutover_configuration() -> tuple[str, str, int] | None:
     """No implicit legacy upload mode migration; explicit environment opt-in."""
-    bucket = os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "").strip()
+    bucket = JOB_LEGACY_AUTO_BUCKET.strip()
     if not bucket:
         return None
-    if os.environ.get("TELEDRIVE_JOB_AUTO_RUN") != "1":
+    if not JOB_AUTO_RUN:
         raise RuntimeError("Legacy cutover requires TELEDRIVE_JOB_AUTO_RUN=1")
     if bool(read_raw_config().get("app", {}).get("auto_run", False)):
         raise RuntimeError("Disable legacy app.auto_run before durable cutover")
-    prefix = os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_PREFIX", "").strip()
+    prefix = JOB_LEGACY_AUTO_PREFIX.strip()
     try:
-        limit = int(os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_LIMIT", "100"))
-    except ValueError as exc:
+        limit = int(JOB_LEGACY_AUTO_LIMIT)
+    except (TypeError, ValueError) as exc:
         raise RuntimeError("Invalid legacy cutover scan limit") from exc
     if not 1 <= limit <= 1000:
         raise RuntimeError("Legacy cutover scan limit must be 1..1000")
@@ -450,14 +537,14 @@ async def upload_job_scheduler_loop() -> None:
     while True:
         conn = None
         try:
-            if os.environ.get("TELEDRIVE_JOB_AUTO_RUN") != "1":
+            if not JOB_AUTO_RUN:
                 await asyncio.sleep(10)
                 continue
             cutover = _legacy_cutover_configuration()
             root = _storage_job_root()
             conn = db_connect()
             queue = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
-            scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+            scratch = Path(STORAGE_SCRATCH_DIR)
             _secure_mkdir(scratch)
             if cutover is not None:
                 from teledrive.storage.legacy_bridge import run_legacy_cutover_cycle
@@ -518,23 +605,24 @@ async def lifecycle_scheduler_loop() -> None:
 async def lifespan(_: FastAPI):
     global scheduler_task, upload_job_scheduler_task, lifecycle_scheduler_task
     os.umask(0o077)
+    ensure_config()
+    _reload_service_settings()
+    transport_mode()  # Enforce Telethon USER mode at startup; Bot mode no longer exists.
     if not WEB_PASSWORD and not ALLOW_INSECURE:
         raise RuntimeError(
-            "TELEDRIVE_WEB_PASSWORD is required. Set TELEDRIVE_ALLOW_INSECURE=1 only for explicitly trusted local deployments."
+            "config.yaml web.password is required (or web.allow_insecure for "
+            "explicitly trusted local deployments only)."
         )
     if WEB_PASSWORD and len(WEB_PASSWORD) < 16:
-        raise RuntimeError("TELEDRIVE_WEB_PASSWORD must be at least 16 characters")
-    ensure_config()
-    transport_mode()  # Enforce Telethon USER mode at startup; Bot mode no longer exists.
-    mtproto_settings = (
-        "TELEDRIVE_STORAGE_MTPROTO_API_ID",
-        "TELEDRIVE_STORAGE_MTPROTO_API_HASH",
-        "TELEDRIVE_STORAGE_MTPROTO_CHANNEL",
-    )
+        raise RuntimeError("config.yaml web.password must be at least 16 characters")
+    if DB_EXTRA_PACKAGES:
+        install_db_extra_packages(DB_EXTRA_PACKAGES, "/data/site-packages")
     # Permit a new unconfigured installation to serve health/configuration;
-    # writes fail closed until the USER session logs in.
-    if any(os.environ.get(field, "").strip() for field in mtproto_settings):
+    # writes fail closed until a USER session connects.
+    try:
         await mtproto_storage_runtime.start()
+    except Exception as exc:
+        LOG_BUFFER.append(_scrub_text(f"[web] user session warning: {exc}"))
     try:
         conn = db_connect()
         conn.close()
@@ -578,7 +666,14 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+@app.middleware("http")
+async def _trusted_host_middleware(request: Request, call_next):
+    # ALLOWED_HOSTS reloads from config.yaml at runtime; resolve it per
+    # request instead of capturing the import-time default.
+    host = (request.headers.get("host") or "").split(":")[0]
+    if host and host not in ALLOWED_HOSTS:
+        raise HTTPException(400, "Invalid host header")
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -1017,7 +1112,7 @@ def get_storage_gc_audit(
 
 def _storage_job_root() -> Path:
     """Durable jobs may read only an operator-configured local source root."""
-    raw = os.environ.get("TELEDRIVE_JOB_SOURCE_ROOT", "").strip()
+    raw = JOB_SOURCE_ROOT.strip()
     if not raw:
         raise HTTPException(503, "Configure TELEDRIVE_JOB_SOURCE_ROOT for local upload jobs")
     try:
@@ -1356,14 +1451,14 @@ async def run_next_storage_upload_job(
     request: Request, _: None = Depends(require_auth),
 ):
     _same_origin(request)
-    if os.environ.get("TELEDRIVE_JOB_LEGACY_AUTO_BUCKET", "").strip():
+    if JOB_LEGACY_AUTO_BUCKET.strip():
         raise HTTPException(409, "Manual job execution is disabled during leased legacy cutover")
     root = _storage_job_root()
     conn = db_connect()
     try:
         manager = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
         transport = storage_transport(conn)
-        scratch = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+        scratch = Path(STORAGE_SCRATCH_DIR)
         _secure_mkdir(scratch)
         try:
             result = await manager.run_next(
@@ -1475,8 +1570,6 @@ async def inspect_user_channel_history(
     The endpoint deliberately only runs with the already-connected USER
     transport; only an authorized user session can enumerate channel history.
     """
-    if os.environ.get("TELEDRIVE_STORAGE_TRANSPORT", "telethon").strip().lower() != "telethon":
-        raise HTTPException(503, "User MTProto history requires telethon storage mode")
     try:
         runtime = mtproto_storage_runtime
         runtime.require()
@@ -1681,10 +1774,10 @@ async def put_object_content(
 ):
     if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
         raise HTTPException(415, "Content-Type must be application/octet-stream")
-    max_size = int(os.environ.get("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+    max_size = REST_MAX_UPLOAD_BYTES
     if max_size < 1:
         raise HTTPException(503, "REST uploads are disabled by policy")
-    stage_root = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+    stage_root = Path(STORAGE_SCRATCH_DIR)
     _secure_mkdir(stage_root)
     conn = db_connect()
     staged = None
@@ -1773,7 +1866,7 @@ async def get_object_content(
             raise HTTPException(404, "Object not found") from exc
         start, end, partial = _byte_range(request.headers.get("range"), item.size)
         transport = storage_transport(conn)
-        root = Path(os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp"))
+        root = Path(STORAGE_SCRATCH_DIR)
         _secure_mkdir(root)
         engine = TelegramObjectStorage(manifests, transport,
                                        chunk_size=RECOMMENDED_CHUNK_SIZE,

@@ -133,16 +133,32 @@ def runtime_env(tmp_path, monkeypatch):
     return apply
 
 
-def _runtime(db, monkeypatch, tmp_path, **env):
+def _config_path(tmp_path, strategy="round_robin"):
+    session_a = _write_session(tmp_path, "a.session")
+    session_b = _write_session(tmp_path, "b.session")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "storage:\n"
+        '  channel: "-10093744"\n'
+        f"  strategy: {strategy}\n"
+        "  apis:\n"
+        "  - api_id: 11111\n"
+        f"    api_hash: {'a' * 32}\n"
+        f"    session_file: {session_a}\n"
+        "    account: user-a\n"
+        "  - api_id: 22222\n"
+        f"    api_hash: {'b' * 32}\n"
+        f"    session_file: {session_b}\n"
+        "    account: user-b\n",
+        encoding="ascii",
+    )
+    return config_path
+
+
+def _runtime(db, monkeypatch, tmp_path, strategy="round_robin", **env):
     state = build_runtime(monkeypatch, tmp_path, {
         "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
-        "TELEDRIVE_STORAGE_MTPROTO_API_ID": "11111,22222",
-        "TELEDRIVE_STORAGE_MTPROTO_API_HASH": "a" * 32 + "," + "b" * 32,
-        "TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE": str(
-            _write_session(tmp_path, "a.session")
-        ) + "," + str(_write_session(tmp_path, "b.session")),
-        "TELEDRIVE_STORAGE_MTPROTO_ACCOUNT": "user-a,user-b",
-        "TELEDRIVE_STORAGE_MTPROTO_CHANNEL": "-10093744",
+        "TELEDRIVE_CONFIG": str(_config_path(tmp_path, strategy=strategy)),
         **env,
     })
     runtime = UserSessionRuntime()
@@ -201,7 +217,7 @@ def test_failover_switches_set_after_definite_flood_rejection(
     db = connect_database(str(tmp_path / "state.db"))
     try:
         runtime, state = _runtime(db, monkeypatch, tmp_path,
-                                  TELEDRIVE_STORAGE_MTPROTO_STRATEGY="failover")
+                                  strategy="failover")
         asyncio.run(runtime.start())
         journal = UserSendJournal(db)
         transport = UnifiedUserTransport(runtime, journal,
@@ -266,22 +282,124 @@ def test_ambiguous_send_outcome_never_triggers_cross_set_retry(
         db.close()
 
 
-@pytest.mark.parametrize("overrides,match", [
-    ({"TELEDRIVE_STORAGE_MTPROTO_API_ID": "11111,22222",
-      "TELEDRIVE_STORAGE_MTPROTO_API_HASH": "a" * 32},
-     "list"),  # one hash for two ids
-    ({"TELEDRIVE_STORAGE_MTPROTO_ACCOUNT": "user-a"},
-     "list"),
-    ({"TELEDRIVE_STORAGE_MTPROTO_STRATEGY": "random"},
+@pytest.mark.parametrize("config_text,match", [
+    # No apis: list at all -> fail closed (there is no env fallback).
+    ("storage:\n  channel: '-10093744'\n", "storage.apis"),
+    # Invalid strategy value.
+    ("storage:\n  channel: '-10093744'\n  strategy: random\n  apis: []\n",
      "strategy"),
 ])
 def test_malformed_credential_lists_fail_closed_before_network(
-        monkeypatch, tmp_path, overrides, match):
+        monkeypatch, tmp_path, config_text, match):
     db = connect_database(str(tmp_path / "state.db"))
     try:
-        runtime, state = _runtime(db, monkeypatch, tmp_path, **overrides)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(config_text, encoding="ascii")
+        build_runtime(monkeypatch, tmp_path, {
+            "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
+            "TELEDRIVE_CONFIG": str(config_path),
+        })
+        runtime = UserSessionRuntime()
         with pytest.raises(RuntimeError, match=match):
             asyncio.run(runtime.start())
+    finally:
+        db.close()
+
+
+def test_config_without_apis_has_no_env_fallback(monkeypatch, tmp_path):
+    """Settings are config-only: stale env credentials are never consulted."""
+    db = connect_database(str(tmp_path / "state.db"))
+    try:
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "storage:\n  channel: '-10093744'\n"
+            "telegram:\n  api_id: 1\n", encoding="ascii")
+        build_runtime(monkeypatch, tmp_path, {
+            "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
+            "TELEDRIVE_CONFIG": str(config_path),
+            "TELEDRIVE_STORAGE_MTPROTO_API_ID": "33333",
+            "TELEDRIVE_STORAGE_MTPROTO_API_HASH": "c" * 32,
+            "TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE": str(
+                _write_session(tmp_path, "env.session")),
+        })
+        runtime = UserSessionRuntime()
+        with pytest.raises(RuntimeError, match="storage.apis"):
+            asyncio.run(runtime.start())
+    finally:
+        db.close()
+
+
+def test_single_strategy_uses_only_the_first_set(monkeypatch, tmp_path):
+    db = connect_database(str(tmp_path / "state.db"))
+    try:
+        session_a = _write_session(tmp_path, "a.session")
+        session_b = _write_session(tmp_path, "b.session")
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "storage:\n"
+            '  channel: "-10093744"\n'
+            "  strategy: single\n"
+            "  apis:\n"
+            "  - api_id: 11111\n"
+            f"    api_hash: {'a' * 32}\n"
+            f"    session_file: {session_a}\n"
+            "    account: user-a\n"
+            "  - api_id: 22222\n"
+            f"    api_hash: {'b' * 32}\n"
+            f"    session_file: {session_b}\n"
+            "    account: user-b\n",
+            encoding="ascii",
+        )
+        state = build_runtime(monkeypatch, tmp_path, {
+            "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
+            "TELEDRIVE_CONFIG": str(config_path),
+        })
+        runtime = UserSessionRuntime()
+        asyncio.run(runtime.start())
+        journal = UserSendJournal(db)
+        transport = UnifiedUserTransport(runtime, journal, min_upload_interval=0)
+        source = tmp_path / "body.bin"
+        source.write_bytes(b"payload-bytes")
+        checksum = hashlib.sha256(b"payload-bytes").hexdigest()
+        first = asyncio.run(transport.upload(
+            source, object_id="obj-1", ordinal=0, checksum=checksum))
+        second = asyncio.run(transport.upload(
+            source, object_id="obj-1", ordinal=1, checksum=checksum))
+        assert first[0] == second[0] == "user-a"
+        assert state.clients["user-b"].sent == 0
+    finally:
+        db.close()
+
+
+def test_parallel_strategy_uploads_chunks_concurrently(monkeypatch, tmp_path):
+    db = connect_database(str(tmp_path / "state.db"))
+    try:
+        session_a = _write_session(tmp_path, "a.session")
+        session_b = _write_session(tmp_path, "b.session")
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "storage:\n"
+            '  channel: "-10093744"\n'
+            "  strategy: parallel\n"
+            "  apis:\n"
+            "  - api_id: 11111\n"
+            f"    api_hash: {'a' * 32}\n"
+            f"    session_file: {session_a}\n"
+            "    account: user-a\n"
+            "  - api_id: 22222\n"
+            f"    api_hash: {'b' * 32}\n"
+            f"    session_file: {session_b}\n"
+            "    account: user-b\n",
+            encoding="ascii",
+        )
+        state = build_runtime(monkeypatch, tmp_path, {
+            "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
+            "TELEDRIVE_CONFIG": str(config_path),
+        })
+        runtime = UserSessionRuntime()
+        asyncio.run(runtime.start())
+        assert UnifiedUserTransport(runtime, UserSendJournal(db)).parallel_degree() == 2
+        assert runtime.strategy == "parallel"
     finally:
         db.close()
 
@@ -434,56 +552,5 @@ def test_malformed_config_apis_fail_closed(monkeypatch, tmp_path,
         runtime = UserSessionRuntime()
         with pytest.raises(RuntimeError, match=match):
             asyncio.run(runtime.start())
-    finally:
-        db.close()
-
-
-def test_config_without_apis_falls_back_to_env_lists(monkeypatch, tmp_path):
-    db = connect_database(str(tmp_path / "state.db"))
-    try:
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text("telegram:\n  api_id: 1\n", encoding="ascii")
-        state = build_runtime(monkeypatch, tmp_path, {
-            "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
-            "TELEDRIVE_STORAGE_MTPROTO_CHANNEL": "-10093744",
-            "TELEDRIVE_CONFIG": str(config_path),
-            "TELEDRIVE_STORAGE_MTPROTO_API_ID": "33333",
-            "TELEDRIVE_STORAGE_MTPROTO_API_HASH": "c" * 32,
-            "TELEDRIVE_STORAGE_MTPROTO_SESSION_FILE": str(
-                _write_session(tmp_path, "env.session")),
-        })
-        runtime = UserSessionRuntime()
-        asyncio.run(runtime.start())
-        assert set(state.connected) == {"mtproto-user"}
-    finally:
-        db.close()
-
-
-def test_storage_section_channel_and_strategy_override_env(monkeypatch, tmp_path):
-    db = connect_database(str(tmp_path / "state.db"))
-    try:
-        session_a = _write_session(tmp_path, "cfg-a.session")
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            "storage:\n"
-            '  channel: "-10093744"\n'
-            "  strategy: failover\n"
-            "  apis:\n"
-            "  - api_id: 11111\n"
-            f"    api_hash: {'e' * 32}\n"
-            f"    session_file: {session_a}\n",
-            encoding="ascii",
-        )
-        state = build_runtime(monkeypatch, tmp_path, {
-            "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
-            # Stale env channel/strategy must be overridden by the config.
-            "TELEDRIVE_STORAGE_MTPROTO_CHANNEL": "-10099999",
-            "TELEDRIVE_STORAGE_MTPROTO_STRATEGY": "round_robin",
-            "TELEDRIVE_CONFIG": str(config_path),
-        })
-        runtime = UserSessionRuntime()
-        asyncio.run(runtime.start())
-        assert runtime.chat_id == -10093744
-        assert runtime.strategy == "failover"
     finally:
         db.close()

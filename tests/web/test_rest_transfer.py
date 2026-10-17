@@ -41,8 +41,8 @@ def service(tmp_path, monkeypatch):
     monkeypatch.setattr(
         webapp, "storage_transport", lambda db: bot,
     )
-    monkeypatch.setenv("TELEDRIVE_STORAGE_SCRATCH_DIR", str(tmp_path / "scratch"))
-    monkeypatch.setenv("TELEDRIVE_REST_MAX_UPLOAD_BYTES", str(4 * 1024**2))
+    monkeypatch.setattr(webapp, "STORAGE_SCRATCH_DIR", str(tmp_path / "scratch"))
+    monkeypatch.setattr(webapp, "REST_MAX_UPLOAD_BYTES", 4 * 1024**2)
     monkeypatch.setattr(webapp, "WEB_USER", "admin-test")
     monkeypatch.setattr(webapp, "WEB_PASSWORD", "some-long-password")
     webapp.AUTH_FAILURES.clear()
