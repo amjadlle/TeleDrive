@@ -329,6 +329,81 @@ def test_config_without_apis_has_no_env_fallback(monkeypatch, tmp_path):
         db.close()
 
 
+def test_single_strategy_uses_only_the_first_set(monkeypatch, tmp_path):
+    db = connect_database(str(tmp_path / "state.db"))
+    try:
+        session_a = _write_session(tmp_path, "a.session")
+        session_b = _write_session(tmp_path, "b.session")
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "storage:\n"
+            '  channel: "-10093744"\n'
+            "  strategy: single\n"
+            "  apis:\n"
+            "  - api_id: 11111\n"
+            f"    api_hash: {'a' * 32}\n"
+            f"    session_file: {session_a}\n"
+            "    account: user-a\n"
+            "  - api_id: 22222\n"
+            f"    api_hash: {'b' * 32}\n"
+            f"    session_file: {session_b}\n"
+            "    account: user-b\n",
+            encoding="ascii",
+        )
+        state = build_runtime(monkeypatch, tmp_path, {
+            "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
+            "TELEDRIVE_CONFIG": str(config_path),
+        })
+        runtime = UserSessionRuntime()
+        asyncio.run(runtime.start())
+        journal = UserSendJournal(db)
+        transport = UnifiedUserTransport(runtime, journal, min_upload_interval=0)
+        source = tmp_path / "body.bin"
+        source.write_bytes(b"payload-bytes")
+        checksum = hashlib.sha256(b"payload-bytes").hexdigest()
+        first = asyncio.run(transport.upload(
+            source, object_id="obj-1", ordinal=0, checksum=checksum))
+        second = asyncio.run(transport.upload(
+            source, object_id="obj-1", ordinal=1, checksum=checksum))
+        assert first[0] == second[0] == "user-a"
+        assert state.clients["user-b"].sent == 0
+    finally:
+        db.close()
+
+
+def test_parallel_strategy_uploads_chunks_concurrently(monkeypatch, tmp_path):
+    db = connect_database(str(tmp_path / "state.db"))
+    try:
+        session_a = _write_session(tmp_path, "a.session")
+        session_b = _write_session(tmp_path, "b.session")
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "storage:\n"
+            '  channel: "-10093744"\n'
+            "  strategy: parallel\n"
+            "  apis:\n"
+            "  - api_id: 11111\n"
+            f"    api_hash: {'a' * 32}\n"
+            f"    session_file: {session_a}\n"
+            "    account: user-a\n"
+            "  - api_id: 22222\n"
+            f"    api_hash: {'b' * 32}\n"
+            f"    session_file: {session_b}\n"
+            "    account: user-b\n",
+            encoding="ascii",
+        )
+        state = build_runtime(monkeypatch, tmp_path, {
+            "TELEDRIVE_STORAGE_TRANSPORT": "telethon",
+            "TELEDRIVE_CONFIG": str(config_path),
+        })
+        runtime = UserSessionRuntime()
+        asyncio.run(runtime.start())
+        assert UnifiedUserTransport(runtime, UserSendJournal(db)).parallel_degree() == 2
+        assert runtime.strategy == "parallel"
+    finally:
+        db.close()
+
+
 def test_bot_identity_in_any_credential_set_is_rejected(
         monkeypatch, tmp_path):
     db = connect_database(str(tmp_path / "state.db"))

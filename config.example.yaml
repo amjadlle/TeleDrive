@@ -86,36 +86,7 @@ state:
 
   allowed_sqlite_roots: "/data"
 
-# ---------------------------------------------------------------------------
-# Legacy uploader sections kept only for the durable-job legacy bridge and
-# the optional lease-fenced source ingestion. The direct-send scanner is
-# never started by the unified service.
-# ---------------------------------------------------------------------------
-upload:
-  source_dir: "/uploads"
-  allowed_extensions: []
-  max_file_size_mb: 0
-  sleep_min_seconds: 60
-  sleep_max_seconds: 90
-  max_files_per_run: 12
-  max_files_per_day: 100
-
-telegram:
-  strategy: single
-  api_id: 0
-  api_hash: ""
-  target: "me"
-  accounts: []
-
-logging:
-  log_path: "/data/uploader.log"
-  level: "INFO"
-
-app:
-  auto_run: false
-  run_interval_minutes: 60
-
-# ---------------------------------------------------------------------------
+# ---
 # Internal path allowlists for the legacy uploader validation.
 # ---------------------------------------------------------------------------
 paths:

@@ -263,13 +263,6 @@ def default_config() -> dict[str, Any]:
             "legacy_auto_prefix": "",
             "legacy_auto_limit": 100,
         },
-        "telegram": {
-            "strategy": "single",
-            "api_id": 0,
-            "api_hash": "",
-            "target": "me",
-            "accounts": [],
-        },
         "upload": {
             "source_dir": "/uploads",
             "allowed_extensions": [],
