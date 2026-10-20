@@ -67,9 +67,6 @@ storage:
 jobs:
   source_root: "/uploads"
   auto_run: true                 # process explicitly queued jobs
-  legacy_auto_bucket: ""         # opt-in bucket for fenced legacy scans
-  legacy_auto_prefix: ""
-  legacy_auto_limit: 100
 
 # ---------------------------------------------------------------------------
 # SQL state: the shared object catalog database.

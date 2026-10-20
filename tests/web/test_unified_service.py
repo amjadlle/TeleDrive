@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import time
 
+import os
 import pytest
 from botocore.auth import S3SigV4Auth
 from botocore.awsrequest import AWSRequest
@@ -36,9 +37,32 @@ def unified(tmp_path, monkeypatch):
         monkeypatch.setattr(module,"db_connect",connect)
         monkeypatch.setattr(module,"storage_transport",transport)
     monkeypatch.setattr(s3,"load_master_key",lambda: secret)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "web:\n  user: testadmin\n  password: long-secure-test-password\n"
+        "  allowed_hosts: localhost,127.0.0.1,[::1]\n"
+        "storage:\n  channel: ''\n  apis: []\n  scratch_dir: " + str(tmp_path/"scratch") + "\n"
+        "state:\n  database_url: sqlite:////" + str(path) + "\n"
+        "jobs:\n  source_root: " + str(tmp_path/"uploads") + "\n  auto_run: false\n",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(web, "CONFIG_PATH", config_path)
     monkeypatch.setattr(web,"WEB_USER","testadmin")
     monkeypatch.setattr(web,"WEB_PASSWORD","long-secure-test-password")
+    # Force the lifespan to read the config file (not the env-default path).
+    os.environ["TELEDRIVE_CONFIG"] = str(config_path)
+    _ = config_path
+    config_path.write_text(
+        "web:\n  user: testadmin\n  password: long-secure-test-password\n"
+        "  allowed_hosts: localhost,127.0.0.1,[::1]\n"
+        "storage:\n  channel: ''\n  apis: []\n  scratch_dir: " + str(tmp_path/"scratch") + "\n"
+        "state:\n  database_url: sqlite:////" + str(path) + "\n"
+        "jobs:\n  source_root: " + str(tmp_path/"uploads") + "\n  auto_run: false\n",
+        encoding="ascii",
+    )
     web.AUTH_FAILURES.clear()
+    web.CONFIG_PATH = config_path
+    monkeypatch.setattr(web, "AUTH_DIR", tmp_path / "auth")
     monkeypatch.setattr(web, "STORAGE_SCRATCH_DIR", str(tmp_path/"scratch"))
     monkeypatch.setattr(web, "REST_MAX_UPLOAD_BYTES", 4*1024*1024)
     root=tmp_path/"uploads"

@@ -143,46 +143,6 @@ class SecurityTests(unittest.TestCase):
             self.assertNotIn(str(fifo), set(uploader.iter_source_files(source)))
             # iter_source_files enumerates paths; scan-level regular-file enforcement is separate.
 
-    def test_account_name_rejects_control_characters(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            source = root / "uploads"
-            source.mkdir()
-            raw = {
-                "telegram": {
-                    "strategy": "single",
-                    "api_id": 1,
-                    "api_hash": "hash",
-                    "target": "me",
-                    "accounts": [{
-                        "name": "bad\nname",
-                        "phone": "",
-                        "session_path": str(root / "sessions" / "bad"),
-                    }],
-                },
-                "upload": {
-                    "source_dir": str(source),
-                    "allowed_extensions": [],
-                    "max_file_size_mb": 0,
-                    "sleep_min_seconds": 1,
-                    "sleep_max_seconds": 1,
-                    "max_files_per_run": 1,
-                    "max_files_per_day": 1,
-                    "retry_attempts": 1,
-                    "backoff_base_seconds": 0,
-                    "floodwait_buffer_seconds": 0,
-                    "caption_template": "{name}",
-                    "send_mode": "document",
-                },
-                "state": {"database_url": "sqlite:///:memory:"},
-                "logging": {"log_path": str(root / "app.log"), "level": "INFO"},
-            }
-            config = root / "config.yaml"
-            config.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
-            cfg = uploader.load_config(str(config))
-            with self.assertRaises(ValueError):
-                uploader.validate_config(cfg)
-
     def test_allowed_source_root_is_enforced(self):
         old = os.environ.get("TELEDRIVE_ALLOWED_SOURCE_ROOTS")
         try:

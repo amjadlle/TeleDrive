@@ -230,18 +230,9 @@ Jobs are persisted in SQL and protect against source mutation, unexpected genera
 
 ## 6. Command-line usage
 
-### Headless folder uploader
+TeleDrive is a single WebUI + REST + S3 service; there is no separate headless uploader CLI. All operation is through the WebUI, REST API, or S3-compatible API.
 
-The original Telethon scanner can run without a GUI:
-
-~~~bash
-# The service generates config/config.yaml with defaults on first start;
-# edit credentials, source root, target and database settings there first.
-python -m teledrive.uploader --config config/config.yaml --scan-only
-python -m teledrive.uploader --config config/config.yaml --run-once
-~~~
-
-WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. The original direct-send legacy scanner uses a distinct upload path from the REST/S3 catalog. For **unified ingestion in the existing single container**, first create a bucket, disable legacy `app.auto_run`, place the configured `upload.source_dir` under the read-only `/uploads` mount, and opt in with `jobs.legacy_auto_bucket: <bucket>` in `config/config.yaml`. Optional `jobs.legacy_auto_prefix` and `jobs.legacy_auto_limit` bound the queue. The scheduler uses the shared SQL catalog, fenced legacy scan, selected durable Telegram transport and existing WebUI/REST/S3 service; it never starts the old Telethon direct-send path. The bucket setting is **empty by default** to prevent unintended source scanning or live-data migration. Never run both upload modes on the same source concurrently.
+WebUI automation is configured through **Settings → Automation**. Do not launch multiple client processes against the same writable Telethon session file. Ingestion of an existing folder is done through the admin `import-legacy` endpoint, which queues files as durable jobs in the shared SQL catalog using the configured Telethon transport; it never starts a separate direct-send path.
 
 ### Telegram account setup
 

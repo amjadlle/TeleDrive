@@ -963,7 +963,6 @@ def test_single_container_passes_opt_in_legacy_ingest_configuration():
     assert "TELEDRIVE_JOB_AUTO_RUN" not in env
     example = (ROOT / "config.example.yaml").read_text()
     for key in (
-        "legacy_auto_bucket", "legacy_auto_prefix", "legacy_auto_limit",
         "auto_run",
     ):
         assert key in example

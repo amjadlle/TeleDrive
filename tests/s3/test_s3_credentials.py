@@ -55,7 +55,9 @@ def test_master_key_file_and_fail_closed(monkeypatch, tmp_path):
     key = Fernet.generate_key()
     keyfile = tmp_path / "master"
     keyfile.write_bytes(key + b"\n")
-    monkeypatch.setenv("TELEDRIVE_S3_MASTER_KEY_FILE", str(keyfile))
+    import web.app as webapp
+    import os
+    os.environ["TELEDRIVE_S3_MASTER_KEY_FILE"] = str(keyfile)
     assert load_master_key() == key
     keyfile.write_text("bad-key")
     with pytest.raises(RuntimeError):
