@@ -151,3 +151,28 @@ class GCReferenceGuard:
             "two_person_deletion_approval_verified": False,
             "deletion_permitted": False,
         }
+
+    def verify_plan(self, plan: dict) -> None:
+        """Reject a stale or tampered dry-run plan.
+
+        A plan is valid only when its fingerprint still matches the current
+        SQL reference graph. Any new reference, writer fence or alias makes
+        the plan stale and blocks deletion. This closes the TOCTOU window
+        between planning and execution.
+        """
+        if not isinstance(plan, dict):
+            raise RuntimeError("GC plan must be a mapping")
+        identifier = plan.get("object_id")
+        if not isinstance(identifier, str) or not identifier:
+            raise RuntimeError("GC plan missing object identity")
+        recorded = plan.get("sql_reference_fingerprint")
+        if not isinstance(recorded, str) or len(recorded) != 64:
+            raise RuntimeError("GC plan missing fingerprint")
+        current = self.evidence(identifier)["sql_reference_fingerprint"]
+        if current != recorded:
+            raise RuntimeError("GC dry-run plan is stale; re-plan before execution")
+        if plan.get("deletion_permitted") is not False:
+            raise RuntimeError("GC plan must not authorize deletion")
+        if plan.get("dry_run") is not True:
+            raise RuntimeError("GC plan must remain a dry run")
+

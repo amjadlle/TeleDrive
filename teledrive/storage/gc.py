@@ -5,6 +5,7 @@ treats all historical manifests as retained until a separate versioning /
 retention policy and verified Telegram ownership scans are implemented.
 """
 from __future__ import annotations
+import time
 
 from dataclasses import dataclass
 from collections import defaultdict
@@ -80,6 +81,85 @@ class StorageGCInventory:
                 "approved_for_deletion": False, "dry_run": True,
             })
         return result
+
+    def plan(self, object_id: str, *, now: int | None = None,
+            backup_set_id: str = "", writer_fence_token: str = "",
+            min_age_seconds: int = 7 * 86400) -> dict:
+        """Build a bounded, integrity-bound dry-run GC plan.
+
+        The plan enumerates every SQL reference for `object_id`, fingerprints
+        the reference graph and records the owner gates that must still pass
+        before any physical deletion. It NEVER authorizes deletion: the
+        deletion gates stay explicit and unmet by default. A plan is stale
+        the moment any reference changes; use verify_plan() before acting.
+        """
+        if not isinstance(object_id, str) or not object_id:
+            raise ValueError("GC plan requires an object id")
+        if min_age_seconds < 86400:
+            raise ValueError("Unsafe GC retention parameters")
+        now = int(time.time()) if now is None else int(now)
+        from .gc_safety import GCReferenceGuard
+        guard = GCReferenceGuard(self.manifests)
+        guard.validate_schema()
+        db = self.db.connection
+        row = db.execute(select(objects.c.id, objects.c.bucket,
+                                objects.c.object_key, objects.c.status,
+                                objects.c.updated_at)
+                         .where(objects.c.id == object_id)).first()
+        if row is None:
+            raise FileNotFoundError("GC candidate missing")
+        ident, bucket, key, status, updated_at = row
+        if status != "failed":
+            raise ValueError("Only failed objects may be planned for cleanup")
+        if int(updated_at) > now - min_age_seconds:
+            raise ValueError("Failure has not aged beyond the safety interval")
+        evidence = guard.evidence(ident)
+        age_seconds = now - int(updated_at)
+        return {
+            "plan_version": 1,
+            "dry_run": True,
+            "object_id": ident,
+            "bucket": bucket,
+            "key": key,
+            "status": status,
+            "updated_at": int(updated_at),
+            "age_seconds": age_seconds,
+            "min_age_seconds": min_age_seconds,
+            "journaled_chunks": int(db.execute(
+                select(func.count()).select_from(chunks).where(
+                    chunks.c.object_id == ident
+                )
+            ).scalar_one()),
+            "sql_reference_fingerprint": evidence["sql_reference_fingerprint"],
+            "reference_blocked": evidence["reference_blocked"],
+            "reference_blockers": evidence["reference_blockers"],
+            "copy_alias_descendants": evidence["copy_alias_descendants"],
+            "writer_fence_present": evidence["writer_fence_present"],
+            "historical_version_retained": evidence["historical_version_retained"],
+            "unresolved_mtproto_intents": evidence["unresolved_mtproto_intents"],
+            "backup_set_id": backup_set_id or None,
+            "writer_fence_token": writer_fence_token or None,
+            "remote_history_scan_required": True,
+            "writer_barrier_verified": False,
+            "independent_payload_backup_verified": False,
+            "restore_drill_verified": False,
+            "two_person_deletion_approval_verified": False,
+            "deletion_permitted": False,
+            "owner_gates": [
+                "independent_payload_backup_verified",
+                "restore_drill_verified",
+                "writer_barrier_verified",
+                "two_person_deletion_approval_verified",
+            ],
+            "approved_for_deletion": False,
+            "physical_deletion_enabled": False,
+            "rollback_strategy": "new_media_upload_and_fresh_sql_identities",
+        }
+
+    def verify_plan(self, plan: dict) -> None:
+        from .gc_safety import GCReferenceGuard
+        guard = GCReferenceGuard(self.manifests)
+        guard.verify_plan(plan)
 
     def inspect(self) -> GCInventory:
         connection = self.db.connection

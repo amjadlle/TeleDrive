@@ -23,6 +23,13 @@ def cat(tmp_path):
         db.close()
 
 
+def _cat(tmp_path):
+    db = connect_database(str(tmp_path / "gc.db"))
+    catalog = BucketCatalog(ManifestStore(db))
+    catalog.create_bucket("gc-audit-test", int(time.time()))
+    return catalog
+
+
 def old_failure(cat, key="failed"):
     old = int(time.time()) - 9 * 86400
     ident = cat.manifests.begin("gc-audit-test", key, 0, old)
@@ -193,3 +200,61 @@ def test_inventory_counts_active_upload_jobs(cat):
     inventory = StorageGCInventory(cat.manifests).inspect()
     assert inventory.active_upload_jobs == 2
     assert inventory.eligible_for_deletion == 0
+
+
+def test_gc_plan_is_dry_run_with_owner_gates(tmp_path):
+    catalog = _cat(tmp_path)
+    ident = old_failure(catalog)
+    plan = StorageGCInventory(catalog.manifests).plan(ident)
+    assert plan["dry_run"] is True
+    assert plan["deletion_permitted"] is False
+    assert plan["approved_for_deletion"] is False
+    assert plan["physical_deletion_enabled"] is False
+    assert plan["remote_history_scan_required"] is True
+    assert plan["rollback_strategy"] == "new_media_upload_and_fresh_sql_identities"
+    assert set(plan["owner_gates"]) == {
+        "independent_payload_backup_verified", "restore_drill_verified",
+        "writer_barrier_verified", "two_person_deletion_approval_verified",
+    }
+    assert len(plan["sql_reference_fingerprint"]) == 64
+    # Re-planning the same candidate yields the same fingerprint.
+    second = StorageGCInventory(catalog.manifests).plan(ident)
+    assert second["sql_reference_fingerprint"] == plan["sql_reference_fingerprint"]
+    StorageGCInventory(catalog.manifests).verify_plan(plan)
+
+
+def test_gc_plan_rejects_stale_after_new_reference(tmp_path):
+    catalog = _cat(tmp_path)
+    ident = old_failure(catalog)
+    plan = StorageGCInventory(catalog.manifests).plan(ident)
+    # A new writer fence appears after planning: the plan is now stale.
+    catalog.manifests.start_writer(ident, "late-writer", int(time.time()))
+    catalog.db.commit()
+    with pytest.raises(RuntimeError, match="stale"):
+        StorageGCInventory(catalog.manifests).verify_plan(plan)
+
+
+def test_gc_plan_rejects_tampered_deletion_permission(tmp_path):
+    catalog = _cat(tmp_path)
+    ident = old_failure(catalog)
+    plan = StorageGCInventory(catalog.manifests).plan(ident)
+    plan["deletion_permitted"] = True
+    with pytest.raises(RuntimeError, match="must not authorize deletion"):
+        StorageGCInventory(catalog.manifests).verify_plan(plan)
+
+
+def test_gc_plan_rejects_unknown_or_unaged_candidate(tmp_path):
+    catalog = _cat(tmp_path)
+    ident = old_failure(catalog)
+    # Young failure: refuses to plan.
+    young = catalog.manifests.begin("gc-audit-test", "young", 0, int(time.time()))
+    catalog.manifests.fail(young, "recent", int(time.time()))
+    with pytest.raises(ValueError, match="aged|safety"):
+        StorageGCInventory(catalog.manifests).plan(young)
+    # Unknown object.
+    with pytest.raises(FileNotFoundError):
+        StorageGCInventory(catalog.manifests).plan("does-not-exist")
+    # Non-failed object.
+    ready = catalog.manifests.begin("gc-audit-test", "ready", 0, int(time.time()))
+    with pytest.raises(ValueError, match="failed"):
+        StorageGCInventory(catalog.manifests).plan(ready)
