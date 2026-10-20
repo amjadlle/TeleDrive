@@ -94,3 +94,14 @@
 - [ ] Keep automatic physical Telegram deletion disabled until its independent safety conditions are verified.
 
 **Reference:** [Project Status and Acceptance](docs/IMPLEMENTATION_STATUS.md) · [CI and Test Guide](docs/CI_WORKFLOWS.md) · [Backup and Restore](docs/BACKUP_RESTORE.md).
+
+## 2. Legacy direct-send uploader removal — complete (merged cf98e1a)
+
+- [x] Legacy Telethon folder scanner/uploader CLI (`teledrive.uploader` main/async_main/parse_args) removed.
+- [x] Legacy direct-send scheduling, account management, `files`/`account_status` DB helpers removed from `uploader.py` (config/state/scan primitives retained).
+- [x] WebUI legacy endpoints removed: `/api/dashboard`, `/api/files`, `/api/process/*`, `/api/auth`, `/api/logs`; `scheduler_loop`, `start_uploader`, `stop_uploader`, `process_snapshot` removed.
+- [x] Legacy auto-bucket scheduler (`jobs.legacy_auto_bucket`) removed; folder ingestion now only via admin `import-legacy` endpoint.
+- [x] `pyproject.toml` CLI entry removed; README §6 updated.
+- [x] `build_caption` retained (used by `validate_config`); tests updated (test_openapi, test_security, test_legacy_bridge, test_legacy_import_admin).
+- [x] Full local suite: 1085 passed / 61 skipped / 0 failed on `cf98e1a`.
+- [x] PR opened: https://github.com/amjadlle/TeleDrive/pull/2 (CI pending maintainer approval of fork workflows).

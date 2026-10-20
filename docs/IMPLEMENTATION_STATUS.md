@@ -193,7 +193,7 @@ Only SQL-only incomplete-multipart lifecycle abort is now supported, applied by 
 - [x] Implement fail-closed recovery guards, owner-proofed isolated one/multi-object rebuild and an offline dual-approval evidence verifier.
 - [x] Verify nine normal workflows on the newer `aa44bd6` development baseline (not the published v1.0.7 SHA). The current matrix has **seven workflows**: Security, REST & S3, Databases, Docker Fault Injection, User MTProto E2E, Multiworker PostgreSQL E2E and the Release Gate. Release packaging now ships the single-container Docker image instead of desktop installers.
 - [ ] Verify **every required workflow on the exact SHA** of any subsequent release candidate.
-- [ ] Obtain owner-supplied physical-host identities, original-media disaster-recovery evidence and legacy cutover/no-legacy attestation.
+- [ ] Obtain owner-supplied physical-host identities and original-media disaster-recovery evidence. (Legacy direct-send uploader code removed in cf98e1a; no-legacy attestation is now code-level, not a runtime gate.)
 - [ ] Implement and independently rehearse the complete physical GC safety/rollback alternative before authorizing deletion.
 - [ ] Complete unknown-history discovery, additional S3 parity tests and long-duration real-environment capacity profiling.
 
