@@ -106,49 +106,6 @@ def test_legacy_bridge_only_queues_with_explicit_worker(bridge):
     assert queue.list_jobs()[0]["state"] == "done"
 
 
-def test_legacy_uploader_cli_bridge_never_connects_to_telegram(bridge, tmp_path):
-    root, db_path, queue, cfg = bridge
-    (root / "from-cli.txt").write_bytes(b"queued-not-sent")
-    config_path = tmp_path / "legacy.yaml"
-    config_path.write_text(yaml.safe_dump({
-        "telegram": {
-            "api_id": 12345, "api_hash": "test-not-secret",
-            "target": "me", "session_path": str(tmp_path / "unused.session"),
-        },
-        "upload": {
-            "source_dir": str(root), "allowed_extensions": [".txt"],
-            "max_file_size_mb": 1, "sleep_min_seconds": 1,
-            "sleep_max_seconds": 2, "max_files_per_run": 5,
-            "max_files_per_day": 20,
-        },
-        "state": {"database_url": str(db_path)},
-        "logging": {"log_path": str(tmp_path / "bridge.log"), "level": "INFO"},
-    }), encoding="utf-8")
-    args = [
-        sys.executable, "-m", "teledrive.uploader",
-        "--config", str(config_path), "--scan-only",
-        "--queue-object-bucket", "bridge-ci",
-        "--queue-object-prefix", "from-legacy",
-    ]
-    result = subprocess.run(args, cwd=Path(__file__).resolve().parents[2],
-                            capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert "queued=1" in (tmp_path / "bridge.log").read_text()
-    assert not (tmp_path / "unused.session").exists()
-    assert {r["object_key"] for r in queue.list_jobs()} == {
-        "from-legacy/from-cli.txt"
-    }
-    second = subprocess.run(args, cwd=Path(__file__).resolve().parents[2],
-                            capture_output=True, text=True, timeout=30)
-    assert second.returncode == 0, second.stderr
-    assert len(queue.list_jobs()) == 1
-    unsafe = subprocess.run(args + ["--run-once"],
-                            cwd=Path(__file__).resolve().parents[2],
-                            capture_output=True, text=True, timeout=30)
-    assert unsafe.returncode != 0
-    assert len(queue.list_jobs()) == 1
-
-
 def _cutover(bridge, lease, *, bucket="bridge-ci", remote=None,
              allowed_root=None):
     root, _, queue, cfg = bridge

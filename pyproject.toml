@@ -13,9 +13,6 @@ dependencies = [
   "SQLAlchemy>=2.0,<3",
 ]
 
-[project.scripts]
-telegram-auto-upload-cli = "teledrive.uploader:main"
-
 [tool.setuptools.packages.find]
 include = ["teledrive*"]
 

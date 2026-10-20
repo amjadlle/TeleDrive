@@ -23,21 +23,16 @@ def test_api_schema_exposes_typed_requests_and_security():
     schema = webapp.app.openapi()
     assert schema["info"]["title"] == "TeleDrive API"
     paths = schema["paths"]
-    for endpoint in ["/api/config", "/api/dashboard", "/api/files",
-                     "/api/process/start", "/api/process/stop", "/api/auth",
-                     "/api/health", "/api/logs"]:
+    for endpoint in ["/api/config", "/api/health"]:
         assert endpoint in paths
     assert "/docs" not in paths
-    schemas = schema["components"]["schemas"]
-    assert "mode" in schemas["StartRequest"]["properties"]
-    assert "kind" in schemas["TelegramAuthRequest"]["properties"]
     assert "HTTPBasic" in schema["components"]["securitySchemes"]
 
 
 def test_docs_routes_return_official_swagger_redoc_html():
     assert "Swagger" in webapp.swagger_docs(None).body.decode()
     assert "ReDoc" in webapp.redoc_docs(None).body.decode()
-    assert "api/auth" in webapp.openapi_schema(None).body.decode()
+    assert "TeleDrive API" in webapp.openapi_schema(None).body.decode()
 
 
 def test_documentation_requires_http_basic(monkeypatch):

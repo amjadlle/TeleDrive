@@ -8,6 +8,7 @@ the same file, so UI changes persist to disk.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +33,6 @@ class ServiceSettings:
     storage_scratch_dir: str = "/data/tmp"
     job_source_root: str = "/uploads"
     job_auto_run: bool = True
-    job_legacy_auto_bucket: str = ""
-    job_legacy_auto_prefix: str = ""
-    job_legacy_auto_limit: int = 100
     allowed_sqlite_roots: tuple[str, ...] = ("/data",)
     auth_failure_limit: int = 5
     auth_failure_window_seconds: int = 300
@@ -110,53 +108,73 @@ def load_settings(cfg: Any, config_path: str) -> ServiceSettings:
         raise ValueError("Invalid db_extra_packages configuration")
 
     return ServiceSettings(
-        web_user=str(web.get("user") or "admin"),
-        web_password=str(web.get("password") or ""),
-        web_password_file=str(web.get("password_file") or ""),
-        allowed_hosts=_hosts(web.get("allowed_hosts"),
+        web_user=str(_cfg_or_env("user", "TELEDRIVE_WEB_USER", "admin")),
+        web_password=str(_cfg_or_env("password", "TELEDRIVE_WEB_PASSWORD", "")),
+        web_password_file=str(_cfg_or_env("password_file", "TELEDRIVE_WEB_PASSWORD_FILE", "")),
+        allowed_hosts=_hosts(_cfg_or_env("allowed_hosts", "TELEDRIVE_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]"),
                              ("localhost", "127.0.0.1", "[::1]")),
-        allow_insecure=bool(web.get("allow_insecure", False)),
-        web_port=_int(web.get("port"), 8080, "web port", minimum=1),
-        s3_port=_int(web.get("s3_port"), 9000, "s3 port", minimum=1),
-        bind_address=str(web.get("bind_address") or DEFAULT_BIND_ADDRESS),
+        allow_insecure=bool(
+            _cfg_or_env("allow_insecure", "TELEDRIVE_ALLOW_INSECURE", False)
+            in (True, "1", "true", "yes", "True")
+        ),
+        web_port=_int(_cfg_or_env("port", "TELEDRIVE_WEB_PORT", 8080), 8080,
+                      "web port", minimum=1),
+        s3_port=_int(_cfg_or_env("s3_port", "TELEDRIVE_S3_PORT", 9000), 9000,
+                     "s3 port", minimum=1),
+        bind_address=str(_cfg_or_env("bind_address", "TELEDRIVE_BIND_ADDRESS",
+                                     DEFAULT_BIND_ADDRESS)),
         rest_max_upload_bytes=_int(
-            web.get("rest_max_upload_bytes"), 2 * 1024**3,
-            "rest_max_upload_bytes", minimum=1),
+            _cfg_or_env("rest_max_upload_bytes", "TELEDRIVE_REST_MAX_UPLOAD_BYTES", 2 * 1024**3),
+            2 * 1024**3, "rest_max_upload_bytes", minimum=1),
         max_request_bytes=_int(
-            web.get("max_request_bytes"), 32 * 1024**2,
-            "max_request_bytes", minimum=1),
+            _cfg_or_env("max_request_bytes", "TELEDRIVE_MAX_REQUEST_BYTES", 32 * 1024**2),
+            32 * 1024**2, "max_request_bytes", minimum=1),
         storage_scratch_dir=str(
-            storage.get("scratch_dir") or "/data/tmp"),
-        job_source_root=str(jobs.get("source_root") or "/uploads"),
-        job_auto_run=bool(jobs.get("auto_run", True)),
-        job_legacy_auto_bucket=str(jobs.get("legacy_auto_bucket") or ""),
-        job_legacy_auto_prefix=str(jobs.get("legacy_auto_prefix") or ""),
-        job_legacy_auto_limit=_int(jobs.get("legacy_auto_limit"), 100,
-                                   "legacy_auto_limit", minimum=1),
+            storage.get("scratch_dir")
+            or os.environ.get("TELEDRIVE_STORAGE_SCRATCH_DIR", "/data/tmp")),
+        job_source_root=str(
+            jobs.get("source_root")
+            or os.environ.get("TELEDRIVE_JOB_SOURCE_ROOT", "/uploads")),
+        job_auto_run=bool(jobs.get("auto_run",
+                          os.environ.get("TELEDRIVE_JOB_AUTO_RUN", "1") == "1")),
         allowed_sqlite_roots=_hosts(
-            state.get("allowed_sqlite_roots"), ("/data",)),
-        auth_failure_limit=_int(web.get("auth_failure_limit"), 5,
-                                "auth_failure_limit", minimum=1),
+            state.get("allowed_sqlite_roots")
+            or os.environ.get("TELEDRIVE_ALLOWED_SQLITE_ROOTS", "/data"),
+            ("/data",)),
+        auth_failure_limit=_int(
+            _cfg_or_env("auth_failure_limit", "TELEDRIVE_AUTH_FAILURE_LIMIT", 5),
+            5, "auth_failure_limit", minimum=1),
         auth_failure_window_seconds=_int(
-            web.get("auth_failure_window_seconds"), 300,
-            "auth_failure_window_seconds", minimum=1),
-        ssl_certfile=str(web.get("ssl_certfile") or ""),
-        ssl_keyfile=str(web.get("ssl_keyfile") or ""),
+            _cfg_or_env("auth_failure_window_seconds",
+                        "TELEDRIVE_AUTH_FAILURE_WINDOW_SECONDS", 300),
+            300, "auth_failure_window_seconds", minimum=1),
+        ssl_certfile=str(_cfg_or_env("ssl_certfile", "TELEDRIVE_SSL_CERTFILE", "")),
+        ssl_keyfile=str(_cfg_or_env("ssl_keyfile", "TELEDRIVE_SSL_KEYFILE", "")),
         db_extra_packages=packages,
-        auth_dir=str(web.get("auth_dir") or "/data/auth"),
+        auth_dir=str(_cfg_or_env("auth_dir", "TELEDRIVE_AUTH_DIR", "/data/auth")),
         config_path=config_path,
         s3_master_key_file=str(
-            storage.get("s3_master_key_file") or "/config/s3-master.key"),
+            storage.get("s3_master_key_file")
+            or os.environ.get("TELEDRIVE_S3_MASTER_KEY_FILE", "/config/s3-master.key")),
         allowed_source_roots=str(
-            paths.get("source_roots") or "/uploads"),
+            paths.get("source_roots")
+            or os.environ.get("TELEDRIVE_ALLOWED_SOURCE_ROOTS", "/uploads")),
         allowed_session_roots=str(
-            paths.get("session_roots") or "/data/sessions"),
-        allowed_log_roots=str(paths.get("log_roots") or "/data"),
-        split_dir=str(paths.get("split_dir") or "/data/tmp"),
+            paths.get("session_roots")
+            or os.environ.get("TELEDRIVE_ALLOWED_SESSION_ROOTS", "/data/sessions")),
+        allowed_log_roots=str(
+            paths.get("log_roots")
+            or os.environ.get("TELEDRIVE_ALLOWED_LOG_ROOTS", "/data")),
+        split_dir=str(
+            paths.get("split_dir")
+            or os.environ.get("TELEDRIVE_SPLIT_DIR", "/data/tmp")),
         split_min_free_bytes=_int(
-            paths.get("split_min_free_bytes"), 512 * 1024 * 1024,
-            "split_min_free_bytes", minimum=1),
-        lock_dir=str(paths.get("lock_dir") or "/data/tmp"),
+            paths.get("split_min_free_bytes")
+            or os.environ.get("TELEDRIVE_SPLIT_MIN_FREE_BYTES", 512 * 1024 * 1024),
+            512 * 1024 * 1024, "split_min_free_bytes", minimum=1),
+        lock_dir=str(
+            paths.get("lock_dir")
+            or os.environ.get("TELEDRIVE_LOCK_DIR", "/data/tmp")),
     )
 
 

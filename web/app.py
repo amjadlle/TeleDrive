@@ -62,9 +62,6 @@ STORAGE_SCRATCH_DIR = "/data/tmp"
 REST_MAX_UPLOAD_BYTES = 2 * 1024**3
 JOB_SOURCE_ROOT = "/uploads"
 JOB_AUTO_RUN = True
-JOB_LEGACY_AUTO_BUCKET = ""
-JOB_LEGACY_AUTO_PREFIX = ""
-JOB_LEGACY_AUTO_LIMIT = 100
 ALLOWED_SQLITE_ROOTS = ("/data",)
 AUTH_FAILURE_WINDOW_SECONDS = 300
 AUTH_FAILURE_LIMIT = 5
@@ -105,7 +102,6 @@ def _reload_service_settings() -> None:
     global WEB_USER, WEB_PASSWORD, WEB_PASSWORD_FILE, ALLOW_INSECURE
     global MAX_REQUEST_BYTES, ALLOWED_HOSTS, AUTH_DIR, STORAGE_SCRATCH_DIR
     global REST_MAX_UPLOAD_BYTES, JOB_SOURCE_ROOT, JOB_AUTO_RUN
-    global JOB_LEGACY_AUTO_BUCKET, JOB_LEGACY_AUTO_PREFIX, JOB_LEGACY_AUTO_LIMIT
     global ALLOWED_SQLITE_ROOTS, AUTH_FAILURE_WINDOW_SECONDS, AUTH_FAILURE_LIMIT
     global SSL_CERTFILE, SSL_KEYFILE, DB_EXTRA_PACKAGES
 
@@ -123,9 +119,6 @@ def _reload_service_settings() -> None:
     REST_MAX_UPLOAD_BYTES = settings.rest_max_upload_bytes
     JOB_SOURCE_ROOT = settings.job_source_root
     JOB_AUTO_RUN = settings.job_auto_run
-    JOB_LEGACY_AUTO_BUCKET = settings.job_legacy_auto_bucket
-    JOB_LEGACY_AUTO_PREFIX = settings.job_legacy_auto_prefix
-    JOB_LEGACY_AUTO_LIMIT = settings.job_legacy_auto_limit
     ALLOWED_SQLITE_ROOTS = settings.allowed_sqlite_roots
     AUTH_FAILURE_WINDOW_SECONDS = settings.auth_failure_window_seconds
     AUTH_FAILURE_LIMIT = settings.auth_failure_limit
@@ -152,12 +145,6 @@ _QUERY_SECRET_RE = re.compile(
 
 security = HTTPBasic(auto_error=False)
 bearer_auth = HTTPBearer(auto_error=False)
-process_lock = asyncio.Lock()
-current_process: asyncio.subprocess.Process | None = None
-current_mode: str | None = None
-current_started_at: int | None = None
-current_prompt: dict[str, str] | None = None
-scheduler_task: asyncio.Task | None = None
 AUTH_FAILURES: dict[str, deque[float]] = {}
 
 
@@ -259,9 +246,6 @@ def default_config() -> dict[str, Any]:
         "jobs": {
             "source_root": "/uploads",
             "auto_run": True,
-            "legacy_auto_bucket": "",
-            "legacy_auto_prefix": "",
-            "legacy_auto_limit": 100,
         },
         "upload": {
             "source_dir": "/uploads",
@@ -390,144 +374,6 @@ def db_connect():
     return uploader.connect_db(cfg.db_path)
 
 
-def _cleanup_auth_files() -> None:
-    if not AUTH_DIR.exists():
-        return
-    for pattern in ("*_code.txt", "*_password.txt", "*.tmp"):
-        for path in AUTH_DIR.glob(pattern):
-            try:
-                if path.is_file() or path.is_symlink():
-                    path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
-def process_snapshot() -> dict[str, Any]:
-    proc = current_process
-    return {
-        "running": proc is not None and proc.returncode is None,
-        "pid": proc.pid if proc is not None and proc.returncode is None else None,
-        "mode": current_mode,
-        "started_at": current_started_at,
-        "auth_prompt": current_prompt,
-    }
-
-
-async def _capture_process(proc: asyncio.subprocess.Process) -> None:
-    global current_process, current_mode, current_started_at, current_prompt
-    assert proc.stdout is not None
-    try:
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            message = line.decode("utf-8", errors="replace").rstrip()
-            if message:
-                LOG_BUFFER.append(_scrub_text(message))
-                match = PROMPT_RE.search(message)
-                if match:
-                    current_prompt = {"kind": match.group(1).lower(), "account": match.group(2)}
-        await proc.wait()
-        LOG_BUFFER.append(f"[web] uploader exited with code {proc.returncode}")
-    finally:
-        async with process_lock:
-            if current_process is proc:
-                current_process = None
-                current_mode = None
-                current_started_at = None
-                current_prompt = None
-                _cleanup_auth_files()
-
-
-async def start_uploader(mode: str) -> dict[str, Any]:
-    global current_process, current_mode, current_started_at, current_prompt
-    if mode not in {"run-once", "scan-only", "connect"}:
-        raise HTTPException(400, "mode must be run-once, scan-only, or connect")
-    async with process_lock:
-        if current_process is not None and current_process.returncode is None:
-            raise HTTPException(409, "Uploader is already running")
-        if mode != "scan-only" and JOB_LEGACY_AUTO_BUCKET.strip():
-            raise HTTPException(409, "Legacy uploader sends disabled during durable cutover")
-        args = [sys.executable, "-m", "teledrive.uploader", "--config", str(CONFIG_PATH), "--auth-dir", str(AUTH_DIR)]
-        if mode == "scan-only":
-            args.append("--scan-only")
-        elif mode == "connect":
-            args.extend(["--run-once", "--no-scan"])
-        else:
-            args.append("--run-once")
-        _cleanup_auth_files()
-        current_prompt = None
-        current_mode = mode
-        current_started_at = int(time.time())
-        LOG_BUFFER.append("[web] $ " + " ".join(args))
-        child_env = os.environ.copy()
-        for secret_name in ("TELEDRIVE_WEB_PASSWORD", "TELEDRIVE_WEB_PASSWORD_FILE"):
-            child_env.pop(secret_name, None)
-        current_process = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=str(BASE_DIR),
-            env=child_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        asyncio.create_task(_capture_process(current_process))
-        return process_snapshot()
-
-
-async def stop_uploader() -> dict[str, Any]:
-    proc = current_process
-    if proc is None or proc.returncode is not None:
-        return process_snapshot()
-    proc.terminate()
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=5)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-    return process_snapshot()
-
-
-async def scheduler_loop() -> None:
-    last_launch = 0.0
-    while True:
-        try:
-            app_cfg = read_raw_config().get("app", {})
-            enabled = bool(app_cfg.get("auto_run", False))
-            interval = max(1, int(app_cfg.get("run_interval_minutes", 60))) * 60
-            now = time.time()
-            running = current_process is not None and current_process.returncode is None
-            if enabled and JOB_LEGACY_AUTO_BUCKET.strip():
-                raise RuntimeError("Disable legacy auto_run before durable cutover")
-            if enabled and not running and now - last_launch >= interval:
-                await start_uploader("run-once")
-                last_launch = now
-            await asyncio.sleep(5)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            LOG_BUFFER.append(_scrub_text(f"[web] scheduler error: {exc}"))
-            await asyncio.sleep(10)
-
-
-def _legacy_cutover_configuration() -> tuple[str, str, int] | None:
-    """No implicit legacy upload mode migration; explicit environment opt-in."""
-    bucket = JOB_LEGACY_AUTO_BUCKET.strip()
-    if not bucket:
-        return None
-    if not JOB_AUTO_RUN:
-        raise RuntimeError("Legacy cutover requires TELEDRIVE_JOB_AUTO_RUN=1")
-    if bool(read_raw_config().get("app", {}).get("auto_run", False)):
-        raise RuntimeError("Disable legacy app.auto_run before durable cutover")
-    prefix = JOB_LEGACY_AUTO_PREFIX.strip()
-    try:
-        limit = int(JOB_LEGACY_AUTO_LIMIT)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("Invalid legacy cutover scan limit") from exc
-    if not 1 <= limit <= 1000:
-        raise RuntimeError("Legacy cutover scan limit must be 1..1000")
-    return bucket, prefix, limit
-
-
 async def upload_job_scheduler_loop() -> None:
     """Opt-in durable job worker; SQL leases prevent duplicate claims.
 
@@ -540,34 +386,15 @@ async def upload_job_scheduler_loop() -> None:
             if not JOB_AUTO_RUN:
                 await asyncio.sleep(10)
                 continue
-            cutover = _legacy_cutover_configuration()
             root = _storage_job_root()
             conn = db_connect()
             queue = StorageUploadJobs(BucketCatalog(ManifestStore(conn)))
             scratch = Path(STORAGE_SCRATCH_DIR)
             _secure_mkdir(scratch)
-            if cutover is not None:
-                from teledrive.storage.legacy_bridge import run_legacy_cutover_cycle
-                cfg = effective_config()
-                lease = db_connect()
-                try:
-                    # The cycle manages an independently renewable lease while
-                    # Telegram chunks are being sent by the durable queue.
-                    _, result = await run_legacy_cutover_cycle(
-                        cfg, queue, storage_transport(conn), lease_db=lease,
-                        bucket=cutover[0], prefix=cutover[1], max_files=cutover[2],
-                        allowed_root=root, scratch_directory=scratch,
-                        lease_name=uploader.LEASE_NAME,
-                        lease_ttl=uploader.LEASE_TTL_SECONDS,
-                        chunk_size=RECOMMENDED_CHUNK_SIZE,
-                    )
-                finally:
-                    lease.close()
-            else:
-                result = await queue.run_next(
-                    storage_transport(conn), allowed_root=root,
-                    scratch_directory=scratch, chunk_size=RECOMMENDED_CHUNK_SIZE,
-                )
+            result = await queue.run_next(
+                storage_transport(conn), allowed_root=root,
+                scratch_directory=scratch, chunk_size=RECOMMENDED_CHUNK_SIZE,
+            )
             await asyncio.sleep(2 if result else 10)
         except asyncio.CancelledError:
             raise
@@ -603,7 +430,7 @@ async def lifecycle_scheduler_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global scheduler_task, upload_job_scheduler_task, lifecycle_scheduler_task
+    global upload_job_scheduler_task, lifecycle_scheduler_task
     os.umask(0o077)
     ensure_config()
     _reload_service_settings()
@@ -628,19 +455,15 @@ async def lifespan(_: FastAPI):
         conn.close()
     except Exception as exc:
         LOG_BUFFER.append(_scrub_text(f"[web] startup database warning: {exc}"))
-    scheduler_task = asyncio.create_task(scheduler_loop())
     upload_job_scheduler_task = asyncio.create_task(upload_job_scheduler_loop())
     lifecycle_scheduler_task = asyncio.create_task(lifecycle_scheduler_loop())
     yield
-    if scheduler_task:
-        scheduler_task.cancel()
     if upload_job_scheduler_task:
         upload_job_scheduler_task.cancel()
         await asyncio.gather(upload_job_scheduler_task, return_exceptions=True)
     if lifecycle_scheduler_task:
         lifecycle_scheduler_task.cancel()
         await asyncio.gather(lifecycle_scheduler_task, return_exceptions=True)
-    await stop_uploader()
     await mtproto_storage_runtime.stop()
 
 
@@ -877,8 +700,6 @@ def get_config(_: None = Depends(require_auth)):
 @app.put("/api/config", tags=["Configuration"], response_model=OKResponse, summary="Validate and save configuration")
 def put_config(request: Request, payload: dict[str, Any] = Body(...), _: None = Depends(require_auth)):
     _same_origin(request)
-    if current_process is not None and current_process.returncode is None:
-        raise HTTPException(409, "Stop the uploader before changing configuration")
     try:
         validate_and_write_config(payload)
     except ValueError as exc:
@@ -886,114 +707,6 @@ def put_config(request: Request, payload: dict[str, Any] = Body(...), _: None = 
     except Exception as exc:
         raise HTTPException(400, "Configuration/database validation failed") from exc
     return {"ok": True}
-
-
-@app.get("/api/dashboard", tags=["System"], summary="Read queue metrics and Telegram account status")
-def dashboard(_: None = Depends(require_auth)):
-    cfg = effective_config()
-    conn = db_connect()
-    try:
-        counts = conn.dashboard_counts()
-        uploaded_today = uploader.uploaded_today(conn)
-        statuses = conn.all_account_states()
-        account_counts = conn.uploaded_counts_by_account()
-    finally:
-        conn.close()
-
-    accounts = []
-    for account in cfg.accounts:
-        state = statuses.get(account.name, {})
-        accounts.append({
-            "name": account.name,
-            "enabled": account.enabled,
-            "phone": account.phone or "",
-            "target": account.target,
-            "session_path": account.session_path,
-            "state": state.get("state", "unknown"),
-            "last_error": state.get("last_error"),
-            "cooldown_until": state.get("cooldown_until"),
-            "last_success_ts": state.get("last_success_ts"),
-            "last_update_ts": state.get("last_update_ts"),
-            "uploaded_count": account_counts.get(account.name, 0),
-        })
-
-    return {
-        "strategy": cfg.strategy,
-        "database_url": redact_database_url(cfg.db_path),
-        "queue": {
-            "pending": counts.get("pending", 0),
-            "failed": counts.get("failed", 0),
-            "uploaded": counts.get("uploaded", 0),
-            "uploaded_today": uploaded_today,
-        },
-        "accounts": accounts,
-        "process": process_snapshot(),
-    }
-
-
-@app.get("/api/files", tags=["Uploads"], summary="List queued or uploaded files")
-def files_endpoint(
-    kind: str = Query("queue", pattern="^(queue|history)$"),
-    limit: int = Query(100, ge=1, le=1000),
-    _: None = Depends(require_auth),
-):
-    conn = db_connect()
-    try:
-        return conn.list_files(kind, limit)
-    finally:
-        conn.close()
-
-
-@app.post("/api/process/start", tags=["Uploads"], summary="Start uploader process")
-async def process_start(request: Request, payload: StartRequest = Body(default=StartRequest()), _: None = Depends(require_auth)):
-    _same_origin(request)
-    return await start_uploader(payload.mode)
-
-
-@app.post("/api/process/stop", tags=["Uploads"], summary="Stop uploader process")
-async def process_stop(request: Request, _: None = Depends(require_auth)):
-    _same_origin(request)
-    return await stop_uploader()
-
-
-@app.post("/api/auth", tags=["Authentication"], response_model=OKResponse, summary="Respond to a pending Telegram login prompt")
-def submit_auth(request: Request, payload: TelegramAuthRequest, _: None = Depends(require_auth)):
-    global current_prompt
-    _same_origin(request)
-    account = payload.account.strip()
-    kind = payload.kind
-    value = payload.value.strip()
-    if not account or kind not in {"code", "password"} or not value:
-        raise HTTPException(400, "account, kind(code/password), and value are required")
-    if len(value) > 1024:
-        raise HTTPException(400, "Auth value is too long")
-    if not current_prompt or current_prompt.get("account") != account or current_prompt.get("kind") != kind:
-        raise HTTPException(409, "No matching Telegram authentication prompt is active")
-    _secure_mkdir(AUTH_DIR)
-    token = uploader._safe_account_token(account)
-    path = AUTH_DIR / f"{token}_{kind}.txt"
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    _secure_write(tmp, value)
-    os.replace(tmp, path)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
-    current_prompt = None
-    return {"ok": True}
-
-
-@app.get("/api/logs", tags=["System"], summary="Read recent redacted activity logs")
-def logs(limit: int = Query(300, ge=1, le=1500), _: None = Depends(require_auth)):
-    cfg = effective_config()
-    combined = list(LOG_BUFFER)[-limit:]
-    log_path = Path(cfg.log_path)
-    if log_path.exists():
-        try:
-            combined = ([_scrub_text(line) for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]] + combined)[-limit:]
-        except OSError:
-            pass
-    return {"lines": combined, "process": process_snapshot()}
 
 
 @app.get("/api/v1/admin/keys", tags=["API keys"], summary="List API key metadata; never returns secrets")
@@ -1451,8 +1164,6 @@ async def run_next_storage_upload_job(
     request: Request, _: None = Depends(require_auth),
 ):
     _same_origin(request)
-    if JOB_LEGACY_AUTO_BUCKET.strip():
-        raise HTTPException(409, "Manual job execution is disabled during leased legacy cutover")
     root = _storage_job_root()
     conn = db_connect()
     try:
